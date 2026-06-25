@@ -51,7 +51,7 @@ jobs:
             echo
             echo "This PR added one or more new packages. npm trusted publishing (OIDC) can't be configured for a package that doesn't exist yet, so a maintainer must do a **one-time** bootstrap per new package. After that, releases publish automatically via OIDC (\`publish.yml\`)."
             echo
-            echo "Before running the commands below: a current npm (\`npm install -g npm@latest\`), 2FA enabled, logged in (\`npm login\`), with publish access to the \`@jspsych-multiplayer\` scope."
+            echo "Before running the commands below: **npm \`>=11.15.0\`** (\`npm install -g npm@latest\`) — required for \`npm trust\`; older versions fail the trust step with \`HTTP 400\`. Also 2FA enabled, logged in (\`npm login\`), with publish access to the \`@jspsych-multiplayer\` scope."
             echo
             for f in "${added[@]}"; do
               name="$(node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).name)' "$f")"
@@ -62,11 +62,11 @@ jobs:
               echo '```bash'
               echo "npm ci && npm run build"
               echo "npm publish -w $name --access public"
-              echo "npm trust github $name --repo $REPO --file publish.yml"
+              echo "npm trust github $name --repo $REPO --file publish.yml --allow-publish"
               echo '```'
               echo
             done
-            echo "Depending on your npm version, the \`npm trust\` command may also accept a permission flag such as \`--allow-publish\`. Once bootstrapped, bump the version and merge to \`main\` — \`publish.yml\` publishes future versions tokenlessly via OIDC, with provenance."
+            echo "Once bootstrapped, bump the version and merge to \`main\` — \`publish.yml\` publishes future versions tokenlessly via OIDC, with provenance."
           } > "$RUNNER_TEMP/reminder.md"
 
           gh pr comment "$PR_NUMBER" --repo "$REPO" --body-file "$RUNNER_TEMP/reminder.md"
