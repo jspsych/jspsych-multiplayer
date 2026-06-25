@@ -11,9 +11,12 @@ on:
 permissions:
   contents: read
 
+# This workflow only opens/updates the "Version Packages" pull request. Publishing to npm is
+# handled separately by publish.yml, which uses npm trusted publishing (OIDC) and therefore needs
+# a dedicated job with `id-token: write` and no long-lived NPM_TOKEN.
 jobs:
   release:
-    name: Release
+    name: Create Release Pull Request
     permissions:
       contents: write
       pull-requests: write
@@ -34,15 +37,10 @@ jobs:
         env:
           NODE_OPTIONS: "--max-old-space-size=4096" # Increase heap size for jest
 
-      - name: Create Release Pull Request or Publish Packages
+      - name: Create Release Pull Request
         uses: changesets/action@41adcfa1f4c9a2f03ee74a426a8878a2b8cf7b85 # master
         with:
           version: npm run changeset:version
-          publish: npm run changeset:publish
           commit: "chore(release): version packages"
         env:
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Update README list of plugins and adapters
-        run: npm run update-readme
