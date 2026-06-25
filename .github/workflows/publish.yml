@@ -1,0 +1,53 @@
+name: publish
+
+env:
+  HUSKY: 0
+
+# Publishes any package whose version is not yet on the registry, using npm trusted publishing
+# (OIDC) — no NPM_TOKEN. `changeset publish` is idempotent: on pushes that don't bump a version it
+# simply finds nothing to publish and exits cleanly. Runs after the "Version Packages" PR
+# (opened by release.yml) is merged to main; can also be triggered manually.
+#
+# Per-package setup required on npmjs.com BEFORE the first OIDC publish of each package:
+#   1. The package must already exist on the registry (npm cannot configure a trusted publisher
+#      for a package that doesn't exist yet — do one initial authenticated `npm publish`).
+#   2. On the package's npm page: Settings -> Trusted Publisher -> GitHub Actions, with
+#      repository "jspsych/jspsych-multiplayer" and workflow ".github/workflows/publish.yml".
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Publish to npm (OIDC trusted publishing)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # required for npm trusted publishing (OIDC token exchange)
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 #v4
+
+      - name: Setup Node.js 20.x
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 #v4
+        with:
+          node-version: 20.x
+
+      # Node 20 bundles npm 10; trusted publishing requires npm >= 11.5.1.
+      - name: Upgrade npm to a version that supports trusted publishing
+        run: npm install -g npm@latest
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build packages
+        run: npm run build
+
+      - name: Publish to npm
+        run: npx changeset publish
+        env:
+          NPM_CONFIG_PROVENANCE: true
