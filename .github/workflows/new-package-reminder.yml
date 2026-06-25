@@ -1,0 +1,74 @@
+name: new-package publishing reminder
+
+# When a PR that adds a brand-new package is merged, post a comment reminding maintainers of the
+# one-time trusted-publishing bootstrap that must be done for that package (npm cannot configure a
+# trusted publisher for a package that does not exist yet, and the first publish needs a human with
+# 2FA — a GitHub Action can't do it). Subsequent releases of the package then publish automatically
+# via OIDC (publish.yml).
+#
+# Uses `pull_request_target` so the comment works for PRs from forks (which would otherwise get a
+# read-only token). This is safe here: the job never checks out or executes the PR's code — it only
+# reads the merged package.json files (plain JSON) from `main` and posts a comment.
+
+on:
+  pull_request_target:
+    types: [closed]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  remind:
+    name: Remind maintainers to bootstrap trusted publishing
+    if: github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'main'
+    runs-on: ubuntu-latest
+    steps:
+      # Checks out the base branch (main) at its merged state — trusted code only.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Comment with bootstrap steps for any newly added packages
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          # package.json files that this PR newly ADDED == a new package directory.
+          mapfile -t added < <(
+            gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" \
+              --jq '.[] | select(.status == "added") | .filename | select(test("^packages/[^/]+/package.json$"))'
+          )
+
+          if [ "${#added[@]}" -eq 0 ]; then
+            echo "No new packages added in this PR; nothing to do."
+            exit 0
+          fi
+
+          {
+            echo "## 📦 New package — trusted-publishing bootstrap needed"
+            echo
+            echo "This PR added one or more new packages. Because npm trusted publishing (OIDC) cannot be configured for a package that does not exist yet, a maintainer must do a **one-time** bootstrap for each new package before automated releases work. Every release after that publishes automatically via OIDC (\`publish.yml\`)."
+            echo
+            echo "Requirements: npm \`>=11.15.0\`, 2FA enabled, and publish access to the \`@jspsych-multiplayer\` scope."
+            echo
+            for f in "${added[@]}"; do
+              name="$(node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).name)' "$f")"
+              echo "### \`$name\`"
+              echo
+              echo '```bash'
+              echo "# from a fresh checkout of main, once:"
+              echo "npm ci && npm run build"
+              echo "npm publish -w $name          # creates the package on the registry (needs npm login + 2FA)"
+              echo "npm trust github $name \\"
+              echo "  --repo $REPO \\"
+              echo "  --file publish.yml \\"
+              echo "  --allow-publish"
+              echo '```'
+              echo
+            done
+            echo "After that, the normal release flow (the \"Version Packages\" PR → merge to \`main\`) publishes future versions of these packages tokenlessly via OIDC, with provenance."
+          } > "$RUNNER_TEMP/reminder.md"
+
+          gh pr comment "$PR_NUMBER" --repo "$REPO" --body-file "$RUNNER_TEMP/reminder.md"
