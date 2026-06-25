@@ -49,26 +49,24 @@ jobs:
           {
             echo "## 📦 New package — trusted-publishing bootstrap needed"
             echo
-            echo "This PR added one or more new packages. Because npm trusted publishing (OIDC) cannot be configured for a package that does not exist yet, a maintainer must do a **one-time** bootstrap for each new package before automated releases work. Every release after that publishes automatically via OIDC (\`publish.yml\`)."
+            echo "This PR added one or more new packages. npm trusted publishing (OIDC) can't be configured for a package that doesn't exist yet, so a maintainer must do a **one-time** bootstrap per new package. After that, releases publish automatically via OIDC (\`publish.yml\`)."
             echo
-            echo "Requirements: npm \`>=11.15.0\`, 2FA enabled, and publish access to the \`@jspsych-multiplayer\` scope."
+            echo "Before running the commands below: a current npm (\`npm install -g npm@latest\`), 2FA enabled, logged in (\`npm login\`), with publish access to the \`@jspsych-multiplayer\` scope."
             echo
             for f in "${added[@]}"; do
               name="$(node -e 'process.stdout.write(JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).name)' "$f")"
               echo "### \`$name\`"
               echo
+              echo "From a fresh checkout of \`main\`:"
+              echo
               echo '```bash'
-              echo "# from a fresh checkout of main, once:"
               echo "npm ci && npm run build"
-              echo "npm publish -w $name          # creates the package on the registry (needs npm login + 2FA)"
-              echo "npm trust github $name \\"
-              echo "  --repo $REPO \\"
-              echo "  --file publish.yml \\"
-              echo "  --allow-publish"
+              echo "npm publish -w $name --access public"
+              echo "npm trust github $name --repo $REPO --file publish.yml"
               echo '```'
               echo
             done
-            echo "After that, the normal release flow (the \"Version Packages\" PR → merge to \`main\`) publishes future versions of these packages tokenlessly via OIDC, with provenance."
+            echo "Depending on your npm version, the \`npm trust\` command may also accept a permission flag such as \`--allow-publish\`. Once bootstrapped, bump the version and merge to \`main\` — \`publish.yml\` publishes future versions tokenlessly via OIDC, with provenance."
           } > "$RUNNER_TEMP/reminder.md"
 
           gh pr comment "$PR_NUMBER" --repo "$REPO" --body-file "$RUNNER_TEMP/reminder.md"
