@@ -47,7 +47,10 @@ jobs:
       - name: Build packages
         run: npm run build
 
+      # Publishes only packages already on the registry whose local version is newer; brand-new
+      # packages are skipped (they need a one-time human bootstrap — see new-package-reminder.yml)
+      # so this job stays green during onboarding instead of failing with ENEEDAUTH.
       - name: Publish to npm
-        run: npx changeset publish
+        run: node scripts/publish-trusted.mjs
         env:
           NPM_CONFIG_PROVENANCE: true
