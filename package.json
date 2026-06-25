@@ -1,0 +1,50 @@
+{
+  "name": "@jspsych/jspsych-multiplayer",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "test": "node scripts/ci-run.mjs test",
+    "test:watch": "npm test -- --watch",
+    "build": "node scripts/ci-run.mjs build",
+    "update-unpkg-links": "gulp updateUnpkgLinks",
+    "update-readme": "gulp updateReadme",
+    "prepare": "husky install",
+    "changeset": "changeset",
+    "changeset:version": "changeset version && npm install && npm run update-unpkg-links && npm run update-readme",
+    "changeset:publish": "npm run build && changeset publish"
+  },
+  "dependencies": {
+    "gulp": "^5.0.0",
+    "gulp-replace": "^1.1.4"
+  },
+  "devDependencies": {
+    "@changesets/changelog-github": "^0.4.0",
+    "@changesets/cli": "^2.16.0",
+    "@jspsych/config": "^3.3.3",
+    "husky": "^7.0.1",
+    "import-sort-style-module": "^6.0.0",
+    "lint-staged": "^11.1.2",
+    "prettier": "^2.3.2",
+    "prettier-plugin-import-sort": "^0.0.7"
+  },
+  "prettier": {
+    "printWidth": 100
+  },
+  "importSort": {
+    ".ts, .js, .mjs, .cjs": {
+      "style": "module",
+      "parser": "typescript"
+    }
+  },
+  "lint-staged": {
+    "*.{ts,js,mjs,cjs}": "prettier --write"
+  },
+  "jest": {
+    "projects": [
+      "<rootDir>/packages/*/jest.config.cjs"
+    ]
+  }
+}
