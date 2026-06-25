@@ -1,6 +1,6 @@
 {
   "name": "@jspsych-multiplayer/adapter-oidc-test",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Throwaway package used to validate npm trusted publishing (OIDC). Safe to deprecate/unpublish.",
   "type": "module",
   "main": "dist/index.cjs",
