@@ -9,10 +9,11 @@ It builds on the jsPsych multiplayer API (`@jspsych/jspsych` group sessions). Ro
 short barrier trial: it waits until the group is ready, computes the map, exposes your role to
 downstream trials, and saves the assignment to the data record.
 
-> **Status.** The pure assignment core and the role accessors documented below are implemented and
-> tested. The trial wrapper that drives them off a live group session depends on the multiplayer API
-> ([jsPsych#3694](https://github.com/jspsych/jsPsych/pull/3694)) and lands once that merges. The
-> parameter and data tables below are the committed design for that wrapper.
+> **Status.** The pure assignment core, the role accessors, and the trial wrapper documented below are
+> all implemented and tested. The wrapper is written against a local interface mirroring the jsPsych
+> multiplayer API ([jsPsych#3694](https://github.com/jspsych/jsPsych/pull/3694)); to actually run a
+> trial you still need that API present at runtime (it lands in jsPsych core) plus a network adapter
+> (e.g. JATOS group sessions). The parameter and data tables below describe the shipped wrapper.
 
 ## Loading
 
