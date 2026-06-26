@@ -1,7 +1,7 @@
 {
   "name": "@jspsych-multiplayer/plugin-multiplayer-role",
   "version": "0.0.1",
-  "description": "placeholder description",
+  "description": "jsPsych plugin: assign multiplayer group roles by deterministic consensus",
   "type": "module",
   "main": "dist/index.cjs",
   "exports": {
@@ -31,7 +31,7 @@
     "jsPsych"
   ],
   "author": {
-    "name": "H",
+    "name": "Hannah Tsukamoto",
     "url": "https://github.com/htsukamoto5"
   },
   "license": "MIT",

@@ -11,7 +11,7 @@ contact:  # Contact person for this plugin
   email: ""         # TODO: add contact email before release
   orcid: "https://orcid.org/0009-0008-9840-8413"
 title: "jsPsychMultiplayerRole"
-version: 0.0.0
+version: 0.0.1
 doi: 10.5281/zenodo.1234    # Replace with DOI
 date-released: 2000-01-01
 url: ""                     # Replace with URL to this plugin

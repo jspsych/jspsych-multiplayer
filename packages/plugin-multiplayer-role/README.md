@@ -30,7 +30,8 @@ npm install @jspsych-multiplayer/plugin-multiplayer-role
 
 ```js
 import MultiplayerRole from "@jspsych-multiplayer/plugin-multiplayer-role";
-import { getMyRole, getRoleMap, participantsByRole } from "@jspsych-multiplayer/plugin-multiplayer-role";
+// The pure core and the role accessors are static members of the plugin class:
+//   MultiplayerRole.assignRoles, MultiplayerRole.getMyRole, MultiplayerRole.getRoleMap, …
 ```
 
 ## Compatibility
@@ -109,25 +110,27 @@ balance odd `n` (the standard Williams caveat), but the frequency guarantee stil
 The plugin writes the assignment to a module-level store so later trials can branch on it without
 digging through the data record:
 
+The accessors are static members of the plugin class:
+
 ```js
-import { getMyRole, getRoleMap, participantsByRole } from "@jspsych-multiplayer/plugin-multiplayer-role";
+import MultiplayerRole from "@jspsych-multiplayer/plugin-multiplayer-role";
 
 // Conditional timeline: only the proposer makes the offer.
 const proposerOffer = {
   timeline: [offerTrial],
-  conditional_function: () => getMyRole() === "proposer",
+  conditional_function: () => MultiplayerRole.getMyRole() === "proposer",
 };
 
 // Need the *identity* of the player in another role (e.g. to read their pushed decision):
-const { responder: [responderId] } = participantsByRole();
+const { responder: [responderId] } = MultiplayerRole.participantsByRole();
 const theirDecision = api.get(responderId)?.rounds[round].decision;
 
 // The full agreed map, if you need it:
-const map = getRoleMap(); // { p1: { role: "proposer" }, p2: { role: "responder" } }
+const map = MultiplayerRole.getRoleMap(); // { p1: { role: "proposer" }, p2: { role: "responder" } }
 ```
 
-`getMyRole()` / `getRoleMap()` reflect the most recent assignment, so under `rotate` or per-round
-`random` they return the **current** round's role.
+`MultiplayerRole.getMyRole()` / `.getRoleMap()` reflect the most recent assignment, so under `rotate`
+or per-round `random` they return the **current** round's role.
 
 ## Membership consensus caveat
 
