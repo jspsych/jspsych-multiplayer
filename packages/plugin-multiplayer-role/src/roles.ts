@@ -63,6 +63,26 @@ export function hashSeed(str: string): number {
   return h >>> 0;
 }
 
+/**
+ * Rotation offset for `rotate` with `balanced: true`, following a Williams-design Latin square.
+ *
+ * Plain `rotate` shifts the base order by `round`, so consecutive rounds always shift by 1 and every
+ * participant walks the roles in the same ±1 cyclic order. The balanced variant instead shifts by the
+ * round'th term of a balanced (Williams) sequence — 0, n-1, 1, n-2, 2, … — which makes the whole
+ * group's role-to-role transitions carryover-balanced: over n rounds each role is immediately
+ * preceded by every other role equally often. That balance is exact when n is even; a single square
+ * cannot fully balance odd n (the classic Williams caveat). The per-round frequency guarantee — each
+ * participant holds each role exactly once per n rounds — holds for all n, same as plain rotate.
+ *
+ * Pure in (n, round) so every client computes the same offset (the consensus property).
+ */
+export function balancedRotationShift(n: number, round: number): number {
+  if (n <= 0) return 0;
+  const k = ((round % n) + n) % n;
+  // k-th term of the balanced starting sequence 0, n-1, 1, n-2, 2, …
+  return k % 2 === 0 ? k >> 1 : n - 1 - (k >> 1);
+}
+
 /** Seeded PRNG (mulberry32). Same seed -> same sequence on every client. */
 export function mulberry32(a: number): () => number {
   return () => {
@@ -95,11 +115,11 @@ function orderParticipants(snapshot: Snapshot, opts: AssignOptions, ctx: Ctx): s
       );
     case "rotate": {
       const base = [...ids];
-      if (opts.balanced) {
-        // Latin-square rotation is not implemented yet — fail loud rather than silently mis-balance.
-        throw new Error("assignRoles: balanced rotation is not implemented yet.");
-      }
-      const k = base.length === 0 ? 0 : ((ctx.round % base.length) + base.length) % base.length;
+      const n = base.length;
+      if (n === 0) return base;
+      // Plain rotate shifts by the round; `balanced` shifts by the Williams-sequence term instead,
+      // which counterbalances role-to-role carryover across the group (see balancedRotationShift).
+      const k = opts.balanced ? balancedRotationShift(n, ctx.round) : ((ctx.round % n) + n) % n;
       return base.slice(k).concat(base.slice(0, k));
     }
     case "random": {

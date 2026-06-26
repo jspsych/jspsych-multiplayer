@@ -282,7 +282,7 @@ function orderParticipants(snapshot: Snapshot, opts: AssignOptions, ctx: Ctx): s
     case "rotate": {
       const base = [...ids];
       const k = (opts.round ?? 0) % base.length;
-      return base.slice(k).concat(base.slice(0, k));   // `balanced` -> Latin-square variant (TBD)
+      return base.slice(k).concat(base.slice(0, k));   // `balanced` -> shift by Williams sequence (IMPLEMENTED, see roles.ts balancedRotationShift)
     }
     case "random": {
       const seed = opts.seed ?? `${ids.join("|")}#${opts.round ?? 0}`;  // shared seed, per-round

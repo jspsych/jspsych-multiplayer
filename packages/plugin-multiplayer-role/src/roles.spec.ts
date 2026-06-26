@@ -1,4 +1,4 @@
-import { RoleMap, Snapshot, assignRoles, expandSlots } from "./roles";
+import { RoleMap, Snapshot, assignRoles, balancedRotationShift, expandSlots } from "./roles";
 
 /** Reorder an object's keys to simulate a different client's snapshot key order. */
 const reorder = (s: Snapshot): Snapshot =>
@@ -90,10 +90,94 @@ describe("assignRoles — rotate", () => {
     expect(roleOf(r1, "b")).toBe("lead");
   });
 
-  it("throws for the not-yet-implemented balanced variant", () => {
-    expect(() =>
-      assignRoles(ids, { roles: ["lead", "x", "y"], strategy: "rotate", balanced: true })
-    ).toThrow(/balanced/i);
+  it("is consensus-consistent across clients and across rounds", () => {
+    for (let round = 0; round < 5; round++) {
+      const a = assignRoles(ids, { roles: ["lead", "x", "y"], strategy: "rotate", round });
+      const b = assignRoles(reorder(ids), {
+        roles: ["lead", "x", "y"],
+        strategy: "rotate",
+        round,
+      });
+      expect(a).toEqual(b);
+    }
+  });
+});
+
+describe("assignRoles — rotate (balanced / Latin-square)", () => {
+  const four: Snapshot = { a: {}, b: {}, c: {}, d: {} };
+  const roles = ["lead", "w", "x", "y"];
+
+  const leaderAt = (round: number) => {
+    const m = assignRoles(four, { roles, strategy: "rotate", balanced: true, round });
+    return Object.keys(m).find((id) => roleOf(m, id) === "lead");
+  };
+
+  it("uses the Williams starting sequence 0, n-1, 1, n-2, … as the per-round shift", () => {
+    expect([0, 1, 2, 3].map((r) => balancedRotationShift(4, r))).toEqual([0, 3, 1, 2]);
+  });
+
+  it("differs from plain rotate (it is not the trivial +round shift)", () => {
+    const plain = assignRoles(four, { roles, strategy: "rotate", round: 1 });
+    const balanced = assignRoles(four, { roles, strategy: "rotate", balanced: true, round: 1 });
+    expect(balanced).not.toEqual(plain);
+  });
+
+  it("still gives every participant the lead role exactly once over n rounds", () => {
+    const leaders = [0, 1, 2, 3].map(leaderAt);
+    expect([...leaders].sort()).toEqual(["a", "b", "c", "d"]);
+  });
+
+  it("is consensus-consistent across clients (invariant to key order)", () => {
+    for (let round = 0; round < 6; round++) {
+      const a = assignRoles(four, { roles, strategy: "rotate", balanced: true, round });
+      const b = assignRoles(reorder(four), { roles, strategy: "rotate", balanced: true, round });
+      expect(a).toEqual(b);
+    }
+  });
+
+  it("balances first-order carryover for even n (each role preceded by each other equally often)", () => {
+    const n = 4;
+    // For each participant, collect the ordered (prevRole -> role) transitions across n rounds.
+    const transitions: Record<string, number> = {};
+    for (const id of Object.keys(four)) {
+      for (let round = 1; round < n; round++) {
+        const prev = roleOf(
+          assignRoles(four, { roles, strategy: "rotate", balanced: true, round: round - 1 }),
+          id
+        );
+        const cur = roleOf(
+          assignRoles(four, { roles, strategy: "rotate", balanced: true, round }),
+          id
+        );
+        transitions[`${prev}->${cur}`] = (transitions[`${prev}->${cur}`] ?? 0) + 1;
+      }
+    }
+    // All 12 distinct ordered pairs of the 4 roles appear, each exactly once.
+    const counts = Object.values(transitions);
+    expect(Object.keys(transitions)).toHaveLength(n * (n - 1));
+    expect(counts.every((c) => c === 1)).toBe(true);
+  });
+
+  it("handles edge sizes (n = 1, n = 2) without error", () => {
+    const one: Snapshot = { solo: {} };
+    expect(
+      roleOf(assignRoles(one, { roles: ["only"], strategy: "rotate", balanced: true }), "solo")
+    ).toBe("only");
+    const two: Snapshot = { a: {}, b: {} };
+    const r0 = assignRoles(two, {
+      roles: ["p", "q"],
+      strategy: "rotate",
+      balanced: true,
+      round: 0,
+    });
+    const r1 = assignRoles(two, {
+      roles: ["p", "q"],
+      strategy: "rotate",
+      balanced: true,
+      round: 1,
+    });
+    expect(roleOf(r0, "a")).toBe("p");
+    expect(roleOf(r1, "a")).toBe("q");
   });
 });
 
