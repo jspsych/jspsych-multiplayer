@@ -92,6 +92,50 @@ describe("multiplayer-sync plugin", () => {
     expect(typeof finished[0].wait_time).toBe("number");
   });
 
+  it("fires the on_load callback once the waiting screen is rendered", async () => {
+    const api = new MockApi("p1");
+    const { jsPsych } = makeJsPsych(api);
+    const plugin = new MultiplayerSyncPlugin(jsPsych as never);
+    const on_load = jest.fn();
+
+    await plugin.trial(
+      display(),
+      {
+        push_data: { ready: true },
+        wait_for: () => true,
+        message: "<p>Waiting…</p>",
+        timeout: null,
+        minimum_wait: 0,
+      } as never,
+      on_load
+    );
+
+    expect(on_load).toHaveBeenCalledTimes(1);
+  });
+
+  it("propagates a push failure instead of masking it as a timeout", async () => {
+    const api = new MockApi("p1");
+    jest.spyOn(api, "push").mockRejectedValue(new Error("connection lost"));
+    const on_timeout = jest.fn();
+    const { jsPsych, finished } = makeJsPsych(api);
+    const plugin = new MultiplayerSyncPlugin(jsPsych as never);
+
+    await expect(
+      plugin.trial(display(), {
+        push_data: { ready: true },
+        wait_for: () => true,
+        message: "<p>Waiting…</p>",
+        timeout: null,
+        on_timeout,
+        minimum_wait: 0,
+      } as never)
+    ).rejects.toThrow(/connection lost/);
+
+    // A push (infrastructure) failure must NOT be relabeled as a timeout.
+    expect(on_timeout).not.toHaveBeenCalled();
+    expect(finished).toHaveLength(0);
+  });
+
   it("renders the waiting message and holds until a second participant satisfies the condition", async () => {
     const api = new MockApi("p1");
     const { jsPsych, finished } = makeJsPsych(api);
@@ -177,5 +221,27 @@ describe("multiplayer-sync plugin", () => {
 
     expect(performance.now() - t0).toBeGreaterThanOrEqual(50); // held ~minimum_wait
     expect(finished[0].timed_out).toBe(false);
+  });
+
+  it("does not extend a wait that is already longer than minimum_wait", async () => {
+    const api = new MockApi("p1");
+    const { jsPsych, finished } = makeJsPsych(api);
+    const plugin = new MultiplayerSyncPlugin(jsPsych as never);
+
+    const done = plugin.trial(display(), {
+      push_data: { role: "a" },
+      wait_for: (g: GroupSessionData) => Object.keys(g).length >= 2,
+      message: "<p>Waiting…</p>",
+      timeout: null,
+      minimum_wait: 30,
+    } as never);
+
+    // The condition isn't met until ~80ms in — already longer than minimum_wait (30ms).
+    setTimeout(() => api.seed("p2", { role: "b" }), 80);
+    await done;
+
+    // wait_time reflects the natural ~80ms wait, NOT 80 + minimum_wait (slack for timer jitter).
+    expect(finished[0].wait_time).toBeGreaterThanOrEqual(70);
+    expect(finished[0].wait_time).toBeLessThan(80 + 30);
   });
 });

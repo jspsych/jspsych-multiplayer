@@ -32,7 +32,8 @@ const info = <const>{
     },
     /**
      * Maximum time to wait, in milliseconds, before giving up. When the timeout elapses the trial
-     * ends with `timed_out: true` and `on_timeout` is called. Null waits indefinitely.
+     * ends with `timed_out: true` and `on_timeout` is called. Null (or a non-positive value) waits
+     * indefinitely.
      */
     timeout: {
       type: ParameterType.INT,
@@ -97,11 +98,22 @@ class MultiplayerSyncPlugin implements JsPsychPlugin<Info> {
 
   constructor(private jsPsych: JsPsych) {}
 
-  async trial(display_element: HTMLElement, trial: TrialType<Info>) {
+  async trial(display_element: HTMLElement, trial: TrialType<Info>, on_load?: () => void) {
     // The multiplayer API is flattened onto pluginAPI by jsPsych core (jsPsych#3694). The published
     // `jspsych` types don't carry it yet, so reach it through the local interface with one cast.
     const api = this.jsPsych.pluginAPI as unknown as MultiplayerApiLike;
+
+    if (typeof trial.wait_for !== "function") {
+      throw new Error(
+        "multiplayer-sync: the `wait_for` parameter is required and must be a function " +
+          "(a predicate over the group session)."
+      );
+    }
+
     display_element.innerHTML = `<div class="jspsych-multiplayer-sync">${trial.message}</div>`;
+    // jsPsych only auto-fires on_load for trials whose `trial()` returns synchronously; this one
+    // returns a Promise, so we must invoke the callback ourselves once the screen is rendered.
+    on_load?.();
 
     const start = performance.now();
 
@@ -113,15 +125,18 @@ class MultiplayerSyncPlugin implements JsPsychPlugin<Info> {
       });
     };
 
-    try {
-      if (trial.push_data != null) {
-        await api.push(trial.push_data as Record<string, unknown>);
-      }
+    // Push BEFORE the wait try/catch: a push failure is an infrastructure error, not a timeout, and
+    // must surface loudly (rejecting the trial) rather than being relabeled as `timed_out: true`.
+    if (trial.push_data != null) {
+      await api.push(trial.push_data as Record<string, unknown>);
+    }
 
-      const group = await api.wait(
-        trial.wait_for as (data: GroupSessionData) => boolean,
-        trial.timeout ?? undefined
-      );
+    // Only a positive timeout bounds the wait; null/0/negative means wait indefinitely.
+    const timeout =
+      typeof trial.timeout === "number" && trial.timeout > 0 ? trial.timeout : undefined;
+
+    try {
+      const group = await api.wait(trial.wait_for as (data: GroupSessionData) => boolean, timeout);
 
       const elapsed = performance.now() - start;
       if (elapsed < trial.minimum_wait) {
@@ -130,8 +145,7 @@ class MultiplayerSyncPlugin implements JsPsychPlugin<Info> {
 
       finish(group, false);
     } catch (e) {
-      // The only rejection api.wait() produces is a timeout; surface it rather than the raw push
-      // error and let the experimenter react via on_timeout.
+      // api.wait() rejects only on timeout; surface it via on_timeout and end the trial.
       if (typeof trial.on_timeout === "function") {
         trial.on_timeout(e);
       }
