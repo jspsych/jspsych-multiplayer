@@ -27,7 +27,7 @@ Once connected, multiplayer plugins and the raw `jsPsych.pluginAPI` (`push`, `wa
 ## How it works
 
 - **Participant namespace.** Each participant's pushed data is stored under `groupSession[workerId]` (the JATOS worker id, stringified as `participantId`), so writes from different participants never collide.
-- **Write concurrency.** The JATOS group session uses optimistic concurrency, so simultaneous writes can hit version conflicts. `push()` retries up to 8 times with exponential backoff + jitter, then throws if it still can't commit.
+- **Write concurrency.** The JATOS group session uses optimistic concurrency, so simultaneous writes can hit version conflicts. `push()` makes up to 8 attempts (1 initial + 7 retries) with exponential backoff + jitter, then throws — preserving the underlying error as `cause` — if it still can't commit. Each attempt re-sends the same `participantId → data` write, so retrying can never lose or double-apply another participant's update.
 - **Updates.** `jatos`'s `onGroupSession` accepts only one callback, so the adapter registers a single dispatcher and fans out to all `subscribe()` listeners. Subscriptions are **future-only** — they fire on the next update and do not replay the current snapshot on registration. (Whether the core API should replay current state on subscribe is an open contract question for jsPsych core, independent of this adapter.)
 
 ## Notes

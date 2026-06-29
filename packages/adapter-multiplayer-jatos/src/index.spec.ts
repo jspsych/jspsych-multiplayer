@@ -31,8 +31,7 @@ function makeMockJatos(workerId: string | number = "w1") {
       }),
       getAll: jest.fn(() => ({ ...store })),
     },
-    sendGroupMsg: jest.fn(),
-    onError: jest.fn(),
+    leaveGroup: jest.fn((onSuccess?: () => void) => onSuccess?.()),
   };
 
   return {
@@ -142,6 +141,22 @@ describe("subscribe", () => {
     expect(received).toHaveLength(1);
   });
 
+  test("a throwing subscriber does not stop the fan-out to the others", async () => {
+    const adapter = await connectedAdapter();
+    const errSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+    const received: GroupSessionData[] = [];
+    adapter.subscribe(() => {
+      throw new Error("subscriber blew up");
+    });
+    adapter.subscribe((data) => received.push(data));
+
+    mock.store.w1 = { hi: 1 };
+    expect(() => mock.fireGroupSession()).not.toThrow();
+    expect(received).toEqual([{ w1: { hi: 1 } }]);
+
+    errSpy.mockRestore();
+  });
+
   test("unsubscribe stops further updates without affecting other subscribers", async () => {
     const adapter = await connectedAdapter();
     const kept: GroupSessionData[] = [];
@@ -165,34 +180,50 @@ describe("push", () => {
     expect(mock.jatos.groupSession.set).toHaveBeenCalledWith("w1", { score: 5 });
   });
 
+  test("throws if push() is called before connect()", async () => {
+    const adapter = new JatosAdapter();
+    await expect(adapter.push({ x: 1 })).rejects.toThrow(/before connect/);
+    expect(mock.jatos.groupSession.set).not.toHaveBeenCalled();
+  });
+
   test("retries on a version conflict and eventually succeeds", async () => {
     jest.useFakeTimers();
+    const adapter = await connectedAdapter();
     let calls = 0;
     mock.jatos.groupSession.set.mockImplementation(async () => {
       calls += 1;
       if (calls < 3) throw new Error("version conflict");
     });
 
-    const adapter = new JatosAdapter();
     const promise = adapter.push({ x: 1 });
     await jest.runAllTimersAsync();
 
     await expect(promise).resolves.toBeUndefined();
     expect(calls).toBe(3);
+    // Every attempt must re-send the SAME (participantId -> data) write, so a retry
+    // can't lose or mutate the value — the property that makes retrying safe.
+    expect(mock.jatos.groupSession.set.mock.calls).toEqual([
+      ["w1", { x: 1 }],
+      ["w1", { x: 1 }],
+      ["w1", { x: 1 }],
+    ]);
   });
 
-  test("throws after exhausting all retry attempts", async () => {
+  test("throws after exhausting all retry attempts, preserving the cause", async () => {
     jest.useFakeTimers();
-    mock.jatos.groupSession.set.mockRejectedValue(new Error("version conflict"));
+    const adapter = await connectedAdapter();
+    const underlying = new Error("version conflict");
+    mock.jatos.groupSession.set.mockRejectedValue(underlying);
 
-    const adapter = new JatosAdapter();
     const promise = adapter.push({ x: 1 });
     // Attach the rejection expectation before advancing timers so the eventual
     // rejection is never momentarily unhandled.
-    const assertion = expect(promise).rejects.toThrow(/version conflict/);
+    const assertion = promise.catch((e: unknown) => e);
     await jest.runAllTimersAsync();
-    await assertion;
+    const err = (await assertion) as Error & { cause?: unknown };
 
+    expect(err.message).toMatch(/after 8 attempts/);
+    expect(err.cause).toBe(underlying);
     expect(mock.jatos.groupSession.set).toHaveBeenCalledTimes(8);
   });
 });
@@ -207,5 +238,17 @@ describe("disconnect", () => {
     mock.fireGroupSession();
 
     expect(received).toHaveLength(0);
+  });
+
+  test("leaves the JATOS group to close the channel", async () => {
+    const adapter = await connectedAdapter();
+    await adapter.disconnect();
+    expect(mock.jatos.leaveGroup).toHaveBeenCalledTimes(1);
+  });
+
+  test("resolves even when jatos.js does not expose leaveGroup", async () => {
+    const adapter = await connectedAdapter();
+    (mock.jatos as { leaveGroup?: unknown }).leaveGroup = undefined;
+    await expect(adapter.disconnect()).resolves.toBeUndefined();
   });
 });
