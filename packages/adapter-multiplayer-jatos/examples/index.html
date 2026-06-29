@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>jsPsychAdapterMultiplayerJatos Example</title>
+    <script src="https://unpkg.com/jspsych"></script>
+    <script src="https://unpkg.com/@jspsych/plugin-html-keyboard-response"></script>
+    <!-- jatos.js is injected by JATOS at runtime; it is not available outside a JATOS study. -->
+    <!-- Once this adapter package is published, load it from a CDN instead:
+         <script src="https://unpkg.com/@jspsych-multiplayer/adapter-multiplayer-jatos"></script> -->
+    <script src="../dist/index.browser.min.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/jspsych/css/jspsych.css" />
+  </head>
+
+  <body></body>
+  <script>
+    // ---------------------------------------------------------------------------------------------
+    // ILLUSTRATIVE example — it shows the intended API, it is NOT a self-contained demo.
+    //
+    // This adapter is the network backend that the multiplayer plugins talk through. To run it you
+    // need:
+    //   1. to be running INSIDE JATOS as a group study (so the `jatos` global from jatos.js exists),
+    //      and
+    //   2. the jsPsych multiplayer API (jsPsych#3694), which is not yet in a released jsPsych.
+    // It therefore cannot run from a single browser tab today. The full runnable, end-to-end demo
+    // is the turn-based ultimatum-game example (forthcoming).
+    // ---------------------------------------------------------------------------------------------
+
+    const jsPsych = initJsPsych({
+      // Hand the collected data back to JATOS when the experiment ends.
+      on_finish: () => jatos.endStudy(jsPsych.data.get().json()),
+    });
+
+    const timeline = [
+      {
+        type: jsPsychHtmlKeyboardResponse,
+        stimulus: "<p>Connected to the JATOS group session. Press any key.</p>",
+      },
+      // ...your multiplayer plugins (e.g. multiplayer-sync, multiplayer-role) go here. They run
+      // unchanged once an adapter is connected.
+    ];
+
+    // Connect the adapter (backed by the JATOS group session) before running the timeline. The IIFE
+    // build exposes the adapter class as the global `jsPsychAdapterMultiplayerJatos`.
+    jatos.onLoad(async () => {
+      await jsPsych.pluginAPI.connect(new jsPsychAdapterMultiplayerJatos());
+      await jsPsych.run(timeline);
+    });
+  </script>
+</html>
