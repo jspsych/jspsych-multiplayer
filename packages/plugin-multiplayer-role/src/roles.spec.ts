@@ -51,6 +51,32 @@ describe("assignRoles — determinism / consensus", () => {
     expect(roleOf(m, "pA")).toBe("first");
     expect(roleOf(m, "pB")).toBe("second");
   });
+
+  it("tie-breaks by UTF-16 code unit, not locale collation (cross-client determinism)", () => {
+    // Mixed-case ids where locale collation ('a' before 'B') and code-unit order ('B'=66 before
+    // 'a'=97) DISAGREE. The plugin must use code-unit order so two clients in different locales (or
+    // with different ICU versions) never order tied ids differently and compute divergent maps.
+    const tied: Snapshot = { a: { joinedAt: 5 }, B: { joinedAt: 5 } };
+
+    const byJoin = assignRoles(tied, { roles: ["first", "second"], strategy: "join_order" });
+    expect(roleOf(byJoin, "B")).toBe("first"); // 'B' (66) sorts before 'a' (97) by code unit
+    expect(roleOf(byJoin, "a")).toBe("second");
+
+    // rankBy ties fall through to the same id tie-break.
+    const byRank = assignRoles(tied, { roles: ["first", "second"], rankBy: () => 0 });
+    expect(roleOf(byRank, "B")).toBe("first");
+    expect(roleOf(byRank, "a")).toBe("second");
+  });
+});
+
+describe("assignRoles — input validation", () => {
+  it("throws a clear error when roles is missing", () => {
+    expect(() => assignRoles({ p1: {} }, {} as never)).toThrow(/`roles` option is required/);
+  });
+
+  it("throws a clear error when roles is an empty array", () => {
+    expect(() => assignRoles({ p1: {} }, { roles: [] })).toThrow(/`roles` option is required/);
+  });
 });
 
 describe("assignRoles — random", () => {
@@ -214,6 +240,23 @@ describe("assignRoles — roleFrom", () => {
     expect(() =>
       assignRoles(snapshot, { roles: ["treatment", "control"], roleFrom: () => "typo" })
     ).toThrow(/not a declared role/);
+  });
+
+  it("takes precedence over rankBy and a string strategy when several are supplied", () => {
+    // role_from > rank_by > strategy preset. If precedence were wrong, rankBy (by score, highest
+    // first) would make p2 the proposer; role_from must win and honor each participant's carried role.
+    const snap: Snapshot = {
+      p1: { role: "responder", score: 1 },
+      p2: { role: "proposer", score: 99 },
+    };
+    const m = assignRoles(snap, {
+      roles: ["proposer", "responder"],
+      strategy: "join_order",
+      rankBy: (e) => e.score,
+      roleFrom: (e) => e.role,
+    });
+    expect(roleOf(m, "p1")).toBe("responder");
+    expect(roleOf(m, "p2")).toBe("proposer");
   });
 });
 

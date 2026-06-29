@@ -46,7 +46,7 @@ const info = <const>{
     role_from: { type: ParameterType.FUNCTION, default: null },
     /** `(snapshot) => boolean`. Override the readiness gate; REQUIRED when `strategy` is a custom function. */
     ready: { type: ParameterType.FUNCTION, default: null },
-    /** Role for participants beyond the declared slots. Only meaningful when `group_size` is `null`. */
+    /** Role for participants beyond the declared slots. Applies whenever the participant count exceeds the declared slots (capped or not); without it, overflow throws. */
     overflow_role: { type: ParameterType.STRING, default: null },
     /** Round-scoped data this client contributes (e.g. the score `rank_by` ranks on). Namespaced under the round. */
     push_data: { type: ParameterType.OBJECT, default: {} },
@@ -140,6 +140,19 @@ class MultiplayerRolePlugin implements JsPsychPlugin<Info> {
       );
     }
 
+    // Without an exact `group_size` (and without a custom `ready`), the readiness gate quantifies only
+    // over participants PRESENT in the snapshot, so it can resolve the instant THIS client has pushed —
+    // assigning over a partial group. Warn unless an upstream barrier is trusted to have admitted and
+    // pushed every peer first.
+    if (trial.group_size == null && trial.ready == null) {
+      console.warn(
+        "plugin-multiplayer-role: no `group_size` and no custom `ready` — readiness can resolve as " +
+          "soon as this client has pushed, assigning over a partial group. Set `group_size` (the exact " +
+          "count) or supply a `ready` predicate unless an upstream barrier guarantees all peers have " +
+          "already pushed into this session."
+      );
+    }
+
     // ROUND-SCOPED push: read this client's own prior entry first, then merge. `joinedAt` is written
     // ONCE (first-seen, never re-stamped) so the join-order base stays stable across rounds; per-round
     // data is namespaced under `rounds[round]` so a later round never clobbers `joinedAt` or an earlier
@@ -209,7 +222,13 @@ class MultiplayerRolePlugin implements JsPsychPlugin<Info> {
   /** Readiness never reached within `timeout` (or a backend/push error). Fail loud, don't hang. */
   private handleTimeout(trial: TrialType<Info>) {
     setMyAssignment(undefined); // clear any stale assignment so getMyRole() reads as undefined
-    if (trial.on_timeout) trial.on_timeout(this.jsPsych);
+    try {
+      if (trial.on_timeout) trial.on_timeout(this.jsPsych);
+    } catch (err) {
+      // A throwing hook must NOT skip finishTrial below — that would reintroduce the exact hang the
+      // timeout exists to prevent. Swallow it (after logging) so the trial still ends.
+      console.error("plugin-multiplayer-role: on_timeout hook threw", err);
+    }
     // ALWAYS end the trial ourselves, even if on_timeout ran — a hook that forgets to end the trial
     // would reintroduce the exact hang the timeout exists to prevent.
     this.jsPsych.finishTrial({ role: null, role_map: null, assigned_self: false, timed_out: true });

@@ -53,7 +53,7 @@ adapter (e.g. JATOS group sessions).
 | `rank_by`       | fn              | `null`                      | `(entry, id, ctx) => number`. Order participants by a numeric key (highest first), e.g. a task score.                                                                             |
 | `role_from`     | fn              | `null`                      | `(entry, id, ctx) => string`. The role **is** a value each participant already carries; must return a declared role. Does not enforce per-role counts.                            |
 | `ready`         | fn              | `null`                      | `(snapshot) => boolean`. Override the readiness gate; **required** when `strategy` is a custom function.                                                                          |
-| `overflow_role` | string          | `null`                      | Role for participants beyond the declared slots. Only meaningful when `group_size` is `null`; unreachable under exact-count gating. If unset, overflow throws.                    |
+| `overflow_role` | string          | `null`                      | Role for participants beyond the declared slots — applies whenever the participant count exceeds the number of declared slots, whether or not `group_size` is set. If unset, overflow throws.                    |
 | `push_data`     | object          | `{}`                        | Round-scoped data this client contributes to the snapshot (e.g. the score `rank_by` ranks on). Namespaced under the round so it never clobbers earlier rounds.                    |
 | `save_group`    | bool            | `false`                     | Include the full group snapshot in the trial data. Off by default to avoid data bloat.                                                                                            |
 | `timeout`       | int             | `30000`                     | Milliseconds to wait for readiness before giving up. `null` waits forever (discouraged).                                                                                          |
@@ -97,8 +97,9 @@ that's what makes all clients agree.
 
 ### Rotation (`rotate`)
 
-Plain `rotate` shifts the base order by `round` (`(baseIndex + round) % n`). Over `n` rounds each
-participant holds each role once — correct counterbalancing of _how often_ you hold each role.
+Plain `rotate` cyclically rotates the participant order by `round`, so the participant at base index
+`i` receives role slot `(i - round) mod n`. Over `n` rounds each participant holds each role once —
+correct counterbalancing of _how often_ you hold each role.
 
 `balanced: true` shifts instead by the round'th term of a balanced (Williams) sequence
 `0, n-1, 1, n-2, 2, …`. This keeps the per-round frequency guarantee **and** additionally balances
@@ -140,6 +141,13 @@ This plugin guarantees that, given the _same_ snapshot, every client computes th
 contract belongs upstream — a waiting-room / sync barrier that admits exactly the intended group before
 the role trial runs. `group_size` turns an overshoot into a loud stall-then-timeout rather than a silent
 assignment over a partial group, but it does not create membership agreement on its own.
+
+In practice, **set `group_size` (or supply a custom `ready` that enforces a count)** unless you are
+certain every peer has already pushed into _this_ trial's session. Without either, the readiness gate
+quantifies only over participants present so far, so it can resolve the instant this client pushes —
+assigning over a partial group. Note that an upstream barrier admitting N participants does not by
+itself guarantee those N have pushed into this trial's session; the plugin emits a console warning when
+`group_size` and `ready` are both omitted.
 
 ## Author / Citation
 

@@ -6,7 +6,7 @@
  * agreed set of N" contract (a waiting-room barrier). Given that contract, this adds field-readiness:
  * don't assign until every present participant carries the data the chosen strategy will read.
  */
-import { AssignOptions, Ctx, Snapshot } from "./roles";
+import { AssignOptions, Ctx, Snapshot, byId } from "./roles";
 
 export interface ReadinessOptions {
   /** If set, require exactly this many participants (exact-count, not >=, per plan §7). */
@@ -42,7 +42,7 @@ export function makeReadiness(opts: ReadinessOptions): (s: Snapshot) => boolean 
     opts.groupSize == null || Object.keys(s).length === opts.groupSize;
 
   const ctx = (s: Snapshot): Ctx => ({
-    ids: Object.keys(s).sort(),
+    ids: Object.keys(s).sort(byId), // code-unit order, matching assignRoles (locale-independent)
     round: opts.round ?? 0,
     seed: opts.seed ?? "",
   });

@@ -22,6 +22,12 @@ export type RoleMap = Record<string, RoleAssignment>;
 export interface Ctx {
   ids: string[];
   round: number;
+  /**
+   * The explicit `seed` option, or `""` if none was given. NOTE: this is NOT the default seed the
+   * built-in `random` strategy derives (`${sortedIds}#${round}`) — that is computed internally and
+   * never surfaced here. A custom strategy that wants per-round randomness should derive its own seed
+   * (e.g. from `ids`/`round`) rather than relying on `ctx.seed` being populated.
+   */
   seed: string;
 }
 
@@ -94,15 +100,24 @@ export function mulberry32(a: number): () => number {
   };
 }
 
+/**
+ * Compare ids by UTF-16 code unit, the SAME order as `Array.prototype.sort()` with no comparator.
+ * Used as the universal tie-break so ordering never depends on the runtime's locale/collation
+ * (`String.prototype.localeCompare` is locale- and ICU-version-dependent, which would let two clients
+ * order tied ids differently and compute divergent role maps — breaking the consensus guarantee).
+ */
+export function byId(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
 /** Deterministic, consensus-consistent ordering of participants for a string-preset strategy. */
 function orderParticipants(snapshot: Snapshot, opts: AssignOptions, ctx: Ctx): string[] {
   // CRITICAL: always start from a stable, identical base on every client.
-  const ids = Object.keys(snapshot).sort();
+  const ids = Object.keys(snapshot).sort(byId);
 
   if (opts.rankBy) {
     return [...ids].sort(
-      (a, b) =>
-        opts.rankBy!(snapshot[b], b, ctx) - opts.rankBy!(snapshot[a], a, ctx) || a.localeCompare(b)
+      (a, b) => opts.rankBy!(snapshot[b], b, ctx) - opts.rankBy!(snapshot[a], a, ctx) || byId(a, b)
     );
   }
 
@@ -111,7 +126,7 @@ function orderParticipants(snapshot: Snapshot, opts: AssignOptions, ctx: Ctx): s
       // Reflects pushed `joinedAt` (subject to per-client clocks) but is consensus-consistent because
       // every client reads the same pushed values. Falls back to id order if joinedAt is absent.
       return [...ids].sort(
-        (a, b) => (snapshot[a]?.joinedAt ?? 0) - (snapshot[b]?.joinedAt ?? 0) || a.localeCompare(b)
+        (a, b) => (snapshot[a]?.joinedAt ?? 0) - (snapshot[b]?.joinedAt ?? 0) || byId(a, b)
       );
     case "rotate": {
       const base = [...ids];
@@ -142,7 +157,13 @@ function orderParticipants(snapshot: Snapshot, opts: AssignOptions, ctx: Ctx): s
  * client (this is the property the whole plugin exists to guarantee).
  */
 export function assignRoles(snapshot: Snapshot, opts: AssignOptions): RoleMap {
-  const ids = Object.keys(snapshot).sort();
+  if (opts.roles == null || (Array.isArray(opts.roles) && opts.roles.length === 0)) {
+    throw new Error(
+      "assignRoles: the `roles` option is required — pass an array like " +
+        '["proposer","responder"] or a count map like { leader: 1, follower: 3 }.'
+    );
+  }
+  const ids = Object.keys(snapshot).sort(byId);
   const ctx: Ctx = { ids, round: opts.round ?? 0, seed: opts.seed ?? "" };
 
   // Full custom strategy: caller owns everything (and the consensus burden).

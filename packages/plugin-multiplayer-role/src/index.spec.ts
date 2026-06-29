@@ -326,6 +326,61 @@ describe("plugin-multiplayer-role — trial wrapper", () => {
     expect(finished[0].timed_out).toBe(false);
   });
 
+  it("warns and can resolve over a partial group when group_size and ready are both omitted", async () => {
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+    const api = new MockApi("p1"); // only this client present, no group_size cap
+    const { jsPsych, finished } = makeJsPsych(api);
+    const plugin = new MultiplayerRolePlugin(jsPsych as never);
+
+    plugin.trial(display(), {
+      roles: ["a", "b"],
+      strategy: "join_order",
+      round: 0,
+      push_data: {},
+      timeout: 30000,
+    } as never);
+    await flush();
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toMatch(/group_size/);
+    // The hazard the warning describes: readiness resolved over just p1, a partial group.
+    expect(finished).toHaveLength(1);
+    expect(finished[0].role).toBe("a");
+    expect(Object.keys(finished[0].role_map)).toEqual(["p1"]);
+    warn.mockRestore();
+  });
+
+  it("a throwing on_timeout hook still ends the trial (no hang)", async () => {
+    jest.useFakeTimers();
+    const errSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+    const api = new MockApi("p1"); // alone, group_size 2 never satisfied
+    const { jsPsych, finished } = makeJsPsych(api);
+    const plugin = new MultiplayerRolePlugin(jsPsych as never);
+
+    plugin.trial(display(), {
+      roles: ["a", "b"],
+      strategy: "join_order",
+      group_size: 2,
+      round: 0,
+      push_data: {},
+      timeout: 30000,
+      on_timeout: () => {
+        throw new Error("hook boom");
+      },
+    } as never);
+
+    await Promise.resolve();
+    jest.advanceTimersByTime(30000);
+    jest.useRealTimers();
+    await flush();
+
+    // The hook threw, but finishTrial must still run so the trial doesn't hang.
+    expect(finished).toHaveLength(1);
+    expect(finished[0].timed_out).toBe(true);
+    expect(errSpy).toHaveBeenCalled();
+    errSpy.mockRestore();
+  });
+
   it("timeout: rejects -> handleTimeout finishes role:null/timed_out:true, runs the hook, clears the store", async () => {
     jest.useFakeTimers();
     const api = new MockApi("p1"); // alone, group_size 2 never satisfied
