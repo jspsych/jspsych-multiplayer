@@ -66,7 +66,7 @@ adapter (e.g. JATOS group sessions).
 | --------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `role`          | string | This participant's assigned role (`null` on timeout).                                                                                                                     |
 | `role_map`      | object | The full `participantId -> { role }` map every client agreed on.                                                                                                          |
-| `assigned_self` | bool   | Whether this participant appears in the map. Distinguishes "assignment happened but I'm a spectator/overflow" (`false`) from a timeout (where `role_map` is also `null`). |
+| `assigned_self` | bool   | Whether this participant appears in the agreed map. `false` only when an assignment ran but a **custom strategy** left this participant out (a spectator) — overflow participants are in the map (with `overflow_role`), so they read `true`. Distinguishes that spectator case from a timeout (where `role_map` is also `null`). |
 | `timed_out`     | bool   | `true` if readiness was not reached before `timeout`.                                                                                                                     |
 | `group`         | object | The full snapshot assigned over — only present when `save_group: true`.                                                                                                   |
 

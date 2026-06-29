@@ -32,7 +32,7 @@ In addition to the [default data collected by all plugins](https://www.jspsych.o
 | --------------- | ------- | ---------------------------------------------------------------------------------------------------------- |
 | `role`          | string  | This participant's assigned role (`null` on timeout).                                                      |
 | `role_map`      | object  | The full `participantId -> { role }` map every client agreed on (`null` on timeout).                       |
-| `assigned_self` | boolean | Whether this participant appears in the map — distinguishes a spectator/overflow (`false`) from a timeout. |
+| `assigned_self` | boolean | Whether this participant appears in the agreed map. `false` only when a custom strategy left them out (a spectator); overflow participants are in the map (with `overflow_role`), so they read `true`. Distinguishes the spectator case from a timeout. |
 | `timed_out`     | boolean | `true` if readiness was not reached before `timeout`.                                                      |
 | `group`         | object  | The full snapshot assigned over — only present when `save_group: true`.                                    |
 

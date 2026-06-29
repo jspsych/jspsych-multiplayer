@@ -233,7 +233,7 @@ describe("plugin-multiplayer-role — trial wrapper", () => {
     expect(r0.p2.role).toBe(r1.p1.role);
   });
 
-  it("assigned_self false: a spectator/overflow gets timed_out false but no self role", async () => {
+  it("overflow: an extra participant is placed in the map with overflow_role (assigned_self true)", async () => {
     const api = new MockApi("p3");
     api.seed("p1", { joinedAt: 1 });
     api.seed("p2", { joinedAt: 2 });
@@ -254,6 +254,54 @@ describe("plugin-multiplayer-role — trial wrapper", () => {
     expect(finished[0].timed_out).toBe(false);
     expect(finished[0].role).toBe("spectator");
     expect(finished[0].assigned_self).toBe(true); // p3 IS in the map, as overflow
+  });
+
+  it("assigned_self false: a custom strategy that omits me yields role null but not a timeout", async () => {
+    const api = new MockApi("p1");
+    api.seed("p2", {});
+    const { jsPsych, finished } = makeJsPsych(api);
+    const plugin = new MultiplayerRolePlugin(jsPsych as never);
+
+    plugin.trial(display(), {
+      roles: ["x"],
+      // Custom strategy hands p2 a role and leaves p1 (me) out — a deliberate spectator.
+      strategy: (snapshot: Record<string, unknown>) => ({ p2: { role: "x" } }),
+      ready: (snapshot: Record<string, unknown>) => Object.keys(snapshot).length === 2,
+      round: 0,
+      push_data: {},
+      timeout: 30000,
+    } as never);
+    await flush();
+
+    expect(finished[0].timed_out).toBe(false); // an assignment DID run
+    expect(finished[0].role).toBeNull(); // but I'm not in it
+    expect(finished[0].assigned_self).toBe(false);
+    expect(finished[0].role_map.p2.role).toBe("x"); // the map exists (unlike a timeout)
+  });
+
+  it("config error (overflow, no overflow_role) propagates — NOT relabelled as a timeout", async () => {
+    const api = new MockApi("p1");
+    api.seed("p1", { joinedAt: 1 });
+    api.seed("p2", { joinedAt: 2 });
+    const { jsPsych, finished } = makeJsPsych(api);
+    const onTimeout = jest.fn();
+    const plugin = new MultiplayerRolePlugin(jsPsych as never);
+
+    // Two ready participants but only one slot and no overflow_role -> assignRoles throws AFTER
+    // readiness passed. That is a config bug, so it must surface, not masquerade as a timeout.
+    const result = plugin.trial(display(), {
+      roles: ["only_one"],
+      strategy: "join_order",
+      group_size: 2,
+      round: 0,
+      push_data: {},
+      timeout: 30000,
+      on_timeout: onTimeout,
+    } as never) as Promise<void>;
+
+    await expect(result).rejects.toThrow(/role slots/i);
+    expect(onTimeout).not.toHaveBeenCalled(); // not the timeout path
+    expect(finished).toHaveLength(0); // trial did not finish as timed_out
   });
 
   it("group_size exact-count gating: stalls at N-1, resolves when the Nth arrives", async () => {

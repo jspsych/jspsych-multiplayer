@@ -117,7 +117,7 @@ class MultiplayerRolePlugin implements JsPsychPlugin<Info> {
 
   constructor(private jsPsych: JsPsych) {}
 
-  trial(display_element: HTMLElement, trial: TrialType<Info>) {
+  trial(display_element: HTMLElement, trial: TrialType<Info>, on_load?: () => void) {
     // The multiplayer API is flattened onto pluginAPI by jsPsych core (jsPsych#3694). The published
     // `jspsych` types don't carry it yet, so reach it through the local interface with one cast.
     const api = this.jsPsych.pluginAPI as unknown as MultiplayerApiLike;
@@ -154,6 +154,9 @@ class MultiplayerRolePlugin implements JsPsychPlugin<Info> {
     };
 
     display_element.innerHTML = trial.message;
+    // We render synchronously above, so the trial DOM is ready now. jsPsych only auto-fires on_load
+    // for non-promise trials; because we return a promise below, we must signal load ourselves.
+    on_load?.();
 
     const isReady = makeReadiness({
       groupSize: trial.group_size,
@@ -165,12 +168,16 @@ class MultiplayerRolePlugin implements JsPsychPlugin<Info> {
       seed: trial.seed ?? undefined,
     });
 
-    // communicate() pushes our payload, then waits — one promise, so the single `.catch` covers both a
-    // push/backend failure and a readiness timeout (both "fail loud"). Assign over the RESOLVED
-    // snapshot, never a fresh getAll(), which would reopen the time-of-check/time-of-use gap.
-    api
-      .communicate(payload, isReady, trial.timeout ?? undefined)
-      .then((group) => {
+    // communicate() pushes our payload, then waits for readiness. The two-argument `.then` is
+    // deliberate: the rejection handler catches ONLY communicate's rejection (a real timeout or
+    // backend/push failure) and routes it to the soft, fail-loud timeout path. A throw from
+    // assignRoles is a different animal — readiness has already certified the group complete, so a
+    // throw there means the assignment CONFIG is wrong (overflow with no overflow_role, role_from
+    // returning an undeclared role, a custom strategy that throws). Those must NOT be relabelled as a
+    // timeout; they propagate out of the returned promise so jsPsych halts the trial loudly. We assign
+    // over the RESOLVED snapshot, never a fresh getAll(), which would reopen the time-of-check gap.
+    return api.communicate(payload, isReady, trial.timeout ?? undefined).then(
+      (group) => {
         const roleMap = assignRoles(group, {
           roles: trial.roles as AssignOptions["roles"],
           strategy: trial.strategy,
@@ -186,14 +193,17 @@ class MultiplayerRolePlugin implements JsPsychPlugin<Info> {
         this.jsPsych.finishTrial({
           role: mine?.role ?? null,
           role_map: roleMap,
-          // assigned_self distinguishes "assignment happened but I'm a spectator/overflow" (false)
-          // from a timeout (where role_map is null too).
+          // assigned_self is false only when an assignment ran but this participant is absent from the
+          // agreed map — i.e. a custom strategy treated them as a spectator. (Overflow participants ARE
+          // in the map, with overflow_role, so they read true.) It distinguishes that from a timeout,
+          // where role_map is null too.
           assigned_self: mine != null,
           timed_out: false,
           ...(trial.save_group ? { group } : {}),
         });
-      })
-      .catch(() => this.handleTimeout(trial));
+      },
+      () => this.handleTimeout(trial) // ONLY communicate rejection (timeout / backend / push failure)
+    );
   }
 
   /** Readiness never reached within `timeout` (or a backend/push error). Fail loud, don't hang. */
