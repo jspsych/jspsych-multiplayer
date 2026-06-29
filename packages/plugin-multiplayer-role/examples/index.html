@@ -3,20 +3,65 @@
   <head>
     <title>jsPsychMultiplayerRole Example</title>
     <script src="https://unpkg.com/jspsych"></script>
-    <!-- Once this plugin package is published, you can load it from a CDN instead:
-<script src="https://unpkg.com/@jspsych-multiplayer/plugin-multiplayer-role"></script> -->
+    <script src="https://unpkg.com/@jspsych/plugin-html-keyboard-response"></script>
+    <!-- Once this plugin package is published, load it from a CDN instead:
+         <script src="https://unpkg.com/@jspsych-multiplayer/plugin-multiplayer-role"></script> -->
     <script src="../dist/index.browser.min.js"></script>
     <link rel="stylesheet" href="https://unpkg.com/jspsych/css/jspsych.css" />
   </head>
 
   <body></body>
   <script>
+    // ---------------------------------------------------------------------------------------------
+    // ILLUSTRATIVE example — it shows the intended API, it is NOT a self-contained demo.
+    //
+    // Role assignment runs over a SHARED multiplayer group session, so to actually run it you need:
+    //   1. the jsPsych multiplayer API (jsPsych#3694), which is not yet in a released jsPsych, and
+    //   2. a connected network adapter plus several real participants in the same group.
+    // It therefore cannot run from a single browser tab today. The full runnable, end-to-end demo
+    // is the turn-based ultimatum-game example built on this plugin (forthcoming).
+    // ---------------------------------------------------------------------------------------------
+
     const jsPsych = initJsPsych();
 
-    const trial = {
-      type: jsPsychMultiplayerRole
+    // 1. Connect a multiplayer adapter before running, e.g. the JATOS adapter:
+    //      import JatosAdapter from "@jspsych-multiplayer/adapter-multiplayer-jatos";
+    //      await jsPsych.pluginAPI.connect(new JatosAdapter());
+
+    // 2. Assign each participant in the group a role by deterministic consensus — every client
+    //    independently computes the SAME role map, with no coordinator.
+    const assignRoles = {
+      type: jsPsychMultiplayerRole,
+      roles: ["proposer", "responder"], // a two-player, ultimatum-style game
+      strategy: "join_order", // the first participant to arrive becomes the proposer
+      group_size: 2, // wait for EXACTLY two participants before assigning
+      message: "<p>Assigning roles…</p>",
     };
 
-    jsPsych.run([trial])
+    // 3. Branch the timeline on the role this client was given. getMyRole() reads the assignment the
+    //    trial above stored, so downstream trials need not dig through the data record. You can also
+    //    look up who holds another role with participantsByRole().
+    const proposerTurn = {
+      timeline: [
+        {
+          type: jsPsychHtmlKeyboardResponse,
+          stimulus: "<p>You are the <b>proposer</b>. Press any key to make your offer.</p>",
+        },
+      ],
+      conditional_function: () => jsPsychMultiplayerRole.getMyRole() === "proposer",
+    };
+
+    const responderTurn = {
+      timeline: [
+        {
+          type: jsPsychHtmlKeyboardResponse,
+          stimulus: "<p>You are the <b>responder</b>. Press any key to view the offer.</p>",
+        },
+      ],
+      conditional_function: () => jsPsychMultiplayerRole.getMyRole() === "responder",
+    };
+
+    // With an adapter connected this would be: await jsPsych.run([...]);
+    jsPsych.run([assignRoles, proposerTurn, responderTurn]);
   </script>
 </html>
