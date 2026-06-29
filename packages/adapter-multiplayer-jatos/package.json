@@ -40,10 +40,11 @@
     "url": "https://github.com/jspsych/jspsych-multiplayer/issues"
   },
   "homepage": "https://github.com/jspsych/jspsych-multiplayer/blob/main/packages/adapter-multiplayer-jatos/README.md",
-  "dependencies": {
-    "jspsych": "^8.0.0"
+  "peerDependencies": {
+    "jspsych": ">=8.0.0"
   },
   "devDependencies": {
+    "jspsych": "^8.0.0",
     "@jspsych/config": "^3.2.2",
     "@jspsych/test-utils": "^1.0.0"
   }
