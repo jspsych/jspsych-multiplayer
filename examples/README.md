@@ -27,10 +27,18 @@ joins later.
 ### Population model
 
 The lobby admits when **at least two** players are present, and the role trial assigns the first two
-as the active pair while any later arrival becomes a `spectator` routed to a "game is full" screen.
-This keeps the demo graceful for the extra/abandoned participants that open recruitment inevitably
-produces, rather than stalling them. (A stricter "exactly two" capped variant is possible with the
-role plugin's `group_size: 2` instead of `overflow_role`; see `plugin-multiplayer-role`'s own example.)
+as the active pair while any later **extra arrival** becomes a `spectator` routed to a "game is full"
+screen — so over-enrollment is handled gracefully rather than left waiting. (A stricter "exactly two"
+capped variant is possible with the role plugin's `group_size: 2` instead of `overflow_role`; see
+`plugin-multiplayer-role`'s own example.)
+
+The other failure open recruitment produces is an active player **leaving mid-game**. Each barrier that
+waits on the other player (`proposerWaitTrial`, `responderWaitTrial`) sets a `timeout`; if it elapses,
+`on_timeout` flags the partner as gone and the timeline shows a brief "the other player left" screen
+instead of hanging forever. The wait barriers that depend only on a player's _own_ data (the lobby, and
+the responder confirming its own decision) intentionally have no timeout — indefinite waiting is correct
+there (you genuinely want to wait for a partner to arrive). `PARTNER_TIMEOUT_MS` at the top of the file
+sets the value; tune it to your population.
 
 ### Running it
 

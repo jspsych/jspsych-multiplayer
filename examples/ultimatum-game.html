@@ -57,11 +57,20 @@
       await jsPsych.pluginAPI.connect(new jsPsychAdapterMultiplayerJatos());
 
       const POT = 10;
+
+      // How long a mid-game barrier waits for the other player before concluding they have left.
+      // This is the sync plugin's `timeout` parameter (milliseconds) — edit it freely to suit your
+      // population. Keep it comfortably longer than a real participant needs to read and respond, so a
+      // slow-but-present player is never mistaken for an absent one (a responder pondering an offer can
+      // easily exceed the role plugin's 30 s default, so we use 60 s here).
+      const PARTNER_TIMEOUT_MS = 60000;
+
       let myRole; // "proposer" | "responder" | "spectator"
       let proposerId;
       let responderId;
       let proposerOffer; // integer 0–10
       let responderDecision; // "accept" | "reject"
+      let partnerLeft = false; // set if a mid-game barrier times out waiting for the other player
 
       // ── Lobby ────────────────────────────────────────────────────────────────────────────────
       // Push a ready signal and hold until at least two players are present. This is the membership
@@ -126,15 +135,25 @@
       };
 
       // ── Proposer: send the offer, then wait for the responder's decision ───────────────────────
+      // `timeout` + `on_timeout` are how the sync plugin handles an abandoned partner: if the
+      // responder never decides, the barrier ends, we note it, and the timeline routes to a "left"
+      // screen instead of hanging forever. The handling stays declarative — one flag, no bespoke
+      // coordination — so the experiment still carries essentially no synchronization code of its own.
       const proposerWaitTrial = {
         type: jsPsychMultiplayerSync,
         push_data: () => ({ offer: proposerOffer }),
         wait_for: (group) => group[responderId]?.decision !== undefined,
+        timeout: PARTNER_TIMEOUT_MS,
+        on_timeout: () => {
+          partnerLeft = true;
+        },
         message: () => `
           <p>You offered the Responder <strong>$${proposerOffer}</strong> and kept $${POT - proposerOffer}.</p>
           <p>Waiting for the Responder…</p>
         `,
         on_finish: (data) => {
+          // On timeout the barrier ends without the condition met, so guard the read.
+          if (data.timed_out) return;
           responderDecision = data.group[responderId].decision;
         },
       };
@@ -148,8 +167,13 @@
       const responderWaitTrial = {
         type: jsPsychMultiplayerSync,
         wait_for: (group) => group[proposerId]?.offer !== undefined,
+        timeout: PARTNER_TIMEOUT_MS,
+        on_timeout: () => {
+          partnerLeft = true;
+        },
         message: "<p>Waiting for the Proposer's offer…</p>",
         on_finish: (data) => {
+          if (data.timed_out) return;
           proposerOffer = data.group[proposerId].offer;
         },
       };
@@ -178,7 +202,14 @@
       };
 
       const responderTimeline = {
-        timeline: [responderWaitTrial, responderDecisionTrial, responderSendDecisionTrial],
+        timeline: [
+          responderWaitTrial,
+          {
+            // Only decide if the proposer actually made an offer — skipped if they abandoned.
+            timeline: [responderDecisionTrial, responderSendDecisionTrial],
+            conditional_function: () => !partnerLeft,
+          },
+        ],
         conditional_function: () => myRole === "responder",
       };
 
@@ -206,10 +237,33 @@
         prompt: "<p>Press space to finish.</p>",
       };
 
-      // The game itself runs only for the two active players; spectators saw the full screen above.
+      // Shown instead of the outcome when a mid-game barrier timed out — i.e. the other player left.
+      const partnerLeftScreen = {
+        timeline: [
+          {
+            type: jsPsychHtmlKeyboardResponse,
+            stimulus:
+              "<p>The other player left the game, so this round could not be completed.</p>" +
+              "<p>Thank you for playing.</p>",
+            choices: " ",
+            prompt: "<p>Press space to finish.</p>",
+          },
+        ],
+        conditional_function: () => partnerLeft,
+      };
+
+      // The outcome runs only if both players saw the round through.
+      const outcome = {
+        timeline: [outcomeTrial],
+        conditional_function: () => !partnerLeft,
+      };
+
+      // The game runs only for the two active players (proposer/responder); spectators saw the
+      // "game full" screen above, and a client whose role assignment timed out (role null) is not an
+      // active player either, so it falls through here rather than landing on a roleless outcome.
       const gameTimeline = {
-        timeline: [proposerTimeline, responderTimeline, outcomeTrial],
-        conditional_function: () => myRole !== "spectator",
+        timeline: [proposerTimeline, responderTimeline, partnerLeftScreen, outcome],
+        conditional_function: () => myRole === "proposer" || myRole === "responder",
       };
 
       await jsPsych.run([lobby, assignRoles, gameFull, gameTimeline]);
