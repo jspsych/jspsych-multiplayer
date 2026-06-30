@@ -40,6 +40,7 @@ function makeMockJatos(workerId: string | number = "w1") {
     fireOpen: () => callbacks.onOpen?.(),
     fireGroupSession: () => callbacks.onGroupSession?.(),
     fireError: (msg?: string) => callbacks.onError?.(msg),
+    fireClose: () => callbacks.onClose?.(),
   };
 }
 
@@ -90,6 +91,19 @@ describe("connect", () => {
     const promise = adapter.connect();
     mock.fireError("boom");
     await expect(promise).rejects.toThrow(/boom/);
+  });
+
+  test("rejects with a diagnostic if neither onOpen nor onError ever fires", async () => {
+    jest.useFakeTimers();
+    const adapter = new JatosAdapter();
+    const promise = adapter.connect();
+    const assertion = promise.catch((e: unknown) => e);
+
+    // JATOS never calls back; the bounded wait should reject instead of hanging forever.
+    await jest.runAllTimersAsync();
+    const err = (await assertion) as Error;
+
+    expect(err.message).toMatch(/timed out/);
   });
 });
 
@@ -225,6 +239,48 @@ describe("push", () => {
     expect(err.message).toMatch(/after 8 attempts/);
     expect(err.cause).toBe(underlying);
     expect(mock.jatos.groupSession.set).toHaveBeenCalledTimes(8);
+  });
+});
+
+describe("channel lifecycle", () => {
+  test("push() bails immediately, without retrying, after the channel closes", async () => {
+    const adapter = await connectedAdapter();
+    mock.fireClose();
+
+    await expect(adapter.push({ x: 1 })).rejects.toThrow(/channel closed/);
+    // No set() attempt and no 6s of backoff: the closed channel is caught up front.
+    expect(mock.jatos.groupSession.set).not.toHaveBeenCalled();
+  });
+
+  test("a close landing mid-retry stops the remaining attempts", async () => {
+    jest.useFakeTimers();
+    const adapter = await connectedAdapter();
+    let calls = 0;
+    mock.jatos.groupSession.set.mockImplementation(async () => {
+      calls += 1;
+      if (calls === 2) mock.fireClose(); // channel dies during the second attempt's backoff
+      throw new Error("version conflict");
+    });
+
+    const promise = adapter.push({ x: 1 });
+    const assertion = promise.catch((e: unknown) => e);
+    await jest.runAllTimersAsync();
+    const err = (await assertion) as Error & { cause?: unknown };
+
+    // Two attempts ran; the post-backoff re-check then bailed instead of finishing all 8.
+    expect(calls).toBe(2);
+    expect(err.message).toMatch(/channel is closed/);
+    expect(err.cause).toBeInstanceOf(Error); // the version-conflict error from the last attempt
+  });
+
+  test("an error delivered after the channel opened marks it closed", async () => {
+    const adapter = await connectedAdapter();
+    // A late onError can't reject the already-resolved connect promise, but it must still
+    // bring down the channel so push() reports it accurately rather than retrying blindly.
+    mock.fireError("socket dropped");
+
+    await expect(adapter.push({ x: 1 })).rejects.toThrow(/channel closed/);
+    expect(mock.jatos.groupSession.set).not.toHaveBeenCalled();
   });
 });
 

@@ -50,6 +50,13 @@ export default class JatosAdapter implements MultiplayerAdapter {
   private connected = false;
 
   /**
+   * Set when a channel that was previously open goes down (onClose, or an onError delivered
+   * after onOpen). Distinguishes "the channel dropped" from "never connected" so push()
+   * reports the accurate cause instead of the generic "call connect() first".
+   */
+  private channelClosed = false;
+
+  /**
    * Local fan-out list. jatos.onGroupSession accepts only a single callback,
    * so the adapter registers one dispatcher and routes it to all subscribers.
    */
@@ -66,10 +73,33 @@ export default class JatosAdapter implements MultiplayerAdapter {
     this.participantId = String(jatos.workerId);
   }
 
+  /** Maximum time to wait for the group channel to open before giving up, in ms. */
+  private static readonly CONNECT_TIMEOUT_MS = 20_000;
+
   connect(): Promise<void> {
     return new Promise((resolve, reject) => {
+      // onOpen reports the channel opening (not the group filling), so it should arrive
+      // promptly. If JATOS delivers neither onOpen nor onError — a dropped handshake or
+      // unreachable server mid-connect — the promise would otherwise hang forever and the
+      // experiment would stall with no diagnostic. Bound the wait and fail loudly instead.
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        reject(
+          new Error(
+            `JatosAdapter: timed out after ${JatosAdapter.CONNECT_TIMEOUT_MS} ms waiting for the ` +
+              "group channel to open. JATOS reported neither success nor failure — the server may " +
+              "be unreachable or the handshake was dropped."
+          )
+        );
+      }, JatosAdapter.CONNECT_TIMEOUT_MS);
+
       jatos.joinGroup({
         onOpen: () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
           this.connected = true;
           resolve();
         },
@@ -86,7 +116,24 @@ export default class JatosAdapter implements MultiplayerAdapter {
           }
         },
         onError: (errMsg) => {
+          // An error delivered before onOpen rejects the connect promise. One delivered
+          // after (the channel was up, then failed) can't reject an already-settled promise,
+          // so mark the channel down — otherwise push() would keep retrying a dead channel.
+          if (settled) {
+            this.connected = false;
+            this.channelClosed = true;
+            return;
+          }
+          settled = true;
+          clearTimeout(timer);
           reject(new Error(`JatosAdapter: failed to join group — ${errMsg ?? "unknown error"}`));
+        },
+        onClose: () => {
+          // The channel closed mid-session. Flip the flags so push()'s guard is accurate and
+          // its retry loop bails instead of spinning against a dead channel. Subscribers are
+          // left intact — a close isn't necessarily permanent, and disconnect() owns teardown.
+          this.connected = false;
+          this.channelClosed = true;
         },
       });
     });
@@ -94,7 +141,11 @@ export default class JatosAdapter implements MultiplayerAdapter {
 
   async push(data: Record<string, unknown>): Promise<void> {
     if (!this.connected) {
-      throw new Error("JatosAdapter: push() called before connect(); call connect() first.");
+      throw new Error(
+        this.channelClosed
+          ? "JatosAdapter: push() called after the group channel closed."
+          : "JatosAdapter: push() called before connect(); call connect() first."
+      );
     }
     // JATOS group session uses optimistic concurrency: concurrent writes from
     // multiple participants cause version conflicts. Retry with exponential
@@ -104,16 +155,28 @@ export default class JatosAdapter implements MultiplayerAdapter {
     const maxAttempts = 8;
     let lastError: unknown;
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      // If the channel closed (onClose/late onError flipped this), retrying is pointless —
+      // every attempt would fail and we'd burn the full backoff budget before giving up.
+      // Bail immediately with an accurate message. Re-checked each iteration so a close that
+      // lands during a backoff sleep is caught before the next attempt, not after all 8.
+      if (!this.connected) {
+        const wrapped = new Error("JatosAdapter: push failed because the group channel is closed.");
+        if (lastError !== undefined) {
+          (wrapped as Error & { cause?: unknown }).cause = lastError;
+        }
+        throw wrapped;
+      }
       try {
         await jatos.groupSession.set(this.participantId, data);
         return;
       } catch (err) {
         lastError = err;
         if (attempt === maxAttempts - 1) {
-          // Preserve the underlying error so a non-conflict failure (channel down,
-          // payload too large) isn't hidden behind the generic message.
+          // Preserve the underlying error so the real cause (a persistent version conflict,
+          // payload too large, etc.) isn't hidden behind the generic message. JATOS errors
+          // are untyped strings, so we can't assert which it was — hence "may include".
           const wrapped = new Error(
-            "JatosAdapter: push failed after 8 attempts (likely repeated group session version conflicts)"
+            "JatosAdapter: push failed after 8 attempts (may include repeated group session version conflicts)"
           );
           (wrapped as Error & { cause?: unknown }).cause = lastError;
           throw wrapped;
