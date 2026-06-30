@@ -40,6 +40,16 @@ the responder confirming its own decision) intentionally have no timeout — ind
 there (you genuinely want to wait for a partner to arrive). `PARTNER_TIMEOUT_MS` at the top of the file
 sets the value; tune it to your population.
 
+One property to be aware of: each client's barrier times out independently, with no "we both agree you're
+gone" handshake, so a _false_ timeout produces **divergent** end-states rather than a clean shared exit.
+If the responder is still present but takes longer than `PARTNER_TIMEOUT_MS` to decide, the proposer
+times out and sees "the other player left" while the responder goes on to complete the round and sees a
+normal outcome — the two walk away with contradictory views. The simple guard, if your decisions can run
+long, is to keep `PARTNER_TIMEOUT_MS` comfortably generous and/or cap the responder's decision screen with
+a `trial_duration` below `PARTNER_TIMEOUT_MS`, so a slow-but-present player is forced to a (timed-out)
+choice before they can ever be read as absent. This demo leaves that off by default — it imposes an
+auto-advance and a forced decision, which is a behavioral choice better made deliberately than baked in.
+
 ### Running it
 
 This example is **illustrative** — it cannot run from a single browser tab today. It requires:
