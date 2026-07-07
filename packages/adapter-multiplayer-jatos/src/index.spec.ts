@@ -16,15 +16,21 @@ import JatosAdapter from ".";
 
 /** Build a controllable mock of the jatos global plus helpers to drive its callbacks. */
 function makeMockJatos(
-  // Pass null to simulate a jatos.js build where groupMemberId is not populated.
-  groupMemberId: string | number | null = "w1",
+  // Pass null to simulate a context where studyResultId is not populated.
+  studyResultId: string | number | null = "w1",
   workerId: string | number = "worker-99"
 ) {
   const store: Record<string, unknown> = {};
   let callbacks: Record<string, ((arg?: unknown) => void) | undefined> = {};
 
   const jatos = {
-    groupMemberId: groupMemberId ?? undefined,
+    // Mirrors real jatos.js semantics: groupMemberId is null until the first group
+    // message arrives AFTER joinGroup (updateGroupVars then assigns it from
+    // studyResultId). It is NEVER populated at construction time, so the adapter
+    // must not read it in its constructor — keeping it null here makes any such
+    // regression fail the participantId tests instead of silently passing.
+    groupMemberId: null,
+    studyResultId: studyResultId ?? undefined,
     workerId,
     joinGroup: jest.fn((cbs: Record<string, (arg?: unknown) => void>) => {
       callbacks = cbs;
@@ -76,14 +82,16 @@ describe("construction", () => {
     expect(() => new JatosAdapter()).toThrow(/jatos global is not defined/);
   });
 
-  test("derives participantId from the group member id as a string", () => {
-    // groupMemberId, not workerId: it is unique per group membership, whereas the
-    // same workerId can recur when a worker runs the study more than once.
+  test("derives participantId from the study result id as a string", () => {
+    // studyResultId, not workerId: it is unique per study run (and is what jatos.js
+    // later exposes as groupMemberId), whereas the same workerId can recur when a
+    // worker runs the study more than once. groupMemberId itself is still null at
+    // construction time — the mock pins it to null to enforce that.
     (globalThis as Record<string, unknown>).jatos = makeMockJatos(12345, 777).jatos;
     expect(new JatosAdapter().participantId).toBe("12345");
   });
 
-  test("falls back to the worker id when groupMemberId is absent", () => {
+  test("falls back to the worker id when studyResultId is absent", () => {
     (globalThis as Record<string, unknown>).jatos = makeMockJatos(null, 777).jatos;
     expect(new JatosAdapter().participantId).toBe("777");
   });

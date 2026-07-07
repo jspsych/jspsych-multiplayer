@@ -6,11 +6,13 @@ import { GroupSessionData, MultiplayerAdapter, Unsubscribe } from "./multiplayer
  */
 declare const jatos: {
   /**
-   * Group member ID assigned by JATOS — unique per group membership, used as the
-   * per-participant namespace key. Populated once the worker is part of a group.
+   * Study result ID assigned by JATOS — unique per study run and available as soon
+   * as jatos.js initializes. jatos.js defines the group member id as this very value
+   * (it assigns `jatos.groupMemberId = jatos.studyResultId` when group messages
+   * arrive), so this is the canonical per-membership key, readable before joining.
    */
-  groupMemberId?: string | number;
-  /** Worker ID assigned by JATOS — fallback namespace key when groupMemberId is absent. */
+  studyResultId?: string | number | null;
+  /** Worker ID assigned by JATOS — fallback namespace key when studyResultId is absent. */
   workerId: string | number;
   /** Join a group study and open the WebSocket channel. */
   joinGroup(callbacks: {
@@ -43,8 +45,8 @@ declare const jatos: {
  *   await jsPsych.pluginAPI.connect(new JatosAdapter());
  *   await jsPsych.run(timeline);
  *
- * Each participant's pushed data is stored under groupSession[groupMemberId],
- * so keys never collide across participants.
+ * Each participant's pushed data is stored under groupSession[studyResultId]
+ * (JATOS's group member id), so keys never collide across participants.
  *
  * @author Hannah Tsukamoto
  */
@@ -85,11 +87,14 @@ export default class JatosAdapter implements MultiplayerAdapter {
           "This adapter only works when the experiment is running inside JATOS."
       );
     }
-    // Prefer groupMemberId: it is unique per group membership, whereas workerId can
-    // repeat when the same worker runs the study more than once — two runs keyed by
-    // workerId would collide in the group session. Fall back to workerId for older
-    // jatos.js builds (or contexts) where groupMemberId is not populated.
-    this.participantId = String(jatos.groupMemberId ?? jatos.workerId);
+    // Key by studyResultId: it is unique per study run, whereas workerId can repeat
+    // when the same worker runs the study more than once — two runs keyed by workerId
+    // would collide in the group session. jatos.groupMemberId is the canonical name
+    // for this id but CANNOT be read here: jatos.js leaves it null until the first
+    // group message arrives after joinGroup(), long after this constructor runs —
+    // and then merely assigns it from studyResultId. So studyResultId IS the group
+    // member id, just available up front. Fall back to workerId if it is absent.
+    this.participantId = String(jatos.studyResultId ?? jatos.workerId);
     this.connectTimeoutMs = options.connectTimeoutMs ?? 20_000;
   }
 
