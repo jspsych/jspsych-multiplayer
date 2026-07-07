@@ -1,3 +1,6 @@
+import { startTimeline } from "@jspsych/test-utils";
+import { initJsPsych } from "jspsych";
+
 import { GroupSessionData, MultiplayerApiLike } from "./multiplayer-api";
 import MultiplayerSyncPlugin from ".";
 
@@ -10,9 +13,10 @@ import MultiplayerSyncPlugin from ".";
 // `timeout` ms elapse, it rejects. Tests use real timers with short timeouts, so no fake-timer
 // plumbing is needed.
 //
-// The published `jspsych` in this repo has no multiplayer API, so the fork's real-adapter +
-// startTimeline tests can't run here; this mock + direct trial() call exercises the same logic
-// without a live group session.
+// The published `jspsych` in this repo has no multiplayer API, so the fork's real-adapter tests
+// can't run here; this mock + direct trial() calls exercise the same logic without a live group
+// session, and one startTimeline smoke test runs the plugin through the real jsPsych pipeline with
+// the mock grafted onto `pluginAPI`.
 // ---------------------------------------------------------------------------------------------------
 class MockApi implements MultiplayerApiLike {
   session: GroupSessionData = {};
@@ -89,6 +93,7 @@ describe("multiplayer-sync plugin", () => {
     expect(finished).toHaveLength(1);
     expect(finished[0].group).toEqual({ p1: { ready: true } });
     expect(finished[0].timed_out).toBe(false);
+    expect(finished[0].wait_error).toBeNull();
     expect(typeof finished[0].wait_time).toBe("number");
   });
 
@@ -202,7 +207,48 @@ describe("multiplayer-sync plugin", () => {
 
     expect(on_timeout).toHaveBeenCalledTimes(1);
     expect(finished[0].timed_out).toBe(true);
+    expect(finished[0].wait_error).toMatch(/timed out/); // rejection message preserved in the data
     expect(finished[0].group).toEqual(api.getAll()); // snapshot from getAll() on timeout
+  });
+
+  it("records a non-timeout wait() rejection message in wait_error so failures are diagnosable", async () => {
+    // As of jsPsych#3694's current draft, wait() rejects only on timeout, so the plugin labels any
+    // rejection `timed_out: true` — but the original message must survive into the trial data.
+    const api = new MockApi("p1");
+    jest.spyOn(api, "wait").mockRejectedValue(new Error("adapter disconnected"));
+    const on_timeout = jest.fn();
+    const { jsPsych, finished } = makeJsPsych(api);
+    const plugin = new MultiplayerSyncPlugin(jsPsych as never);
+
+    await plugin.trial(display(), {
+      push_data: null,
+      wait_for: () => false,
+      message: "<p>Waiting…</p>",
+      timeout: 40,
+      on_timeout,
+      minimum_wait: 0,
+    } as never);
+
+    expect(finished[0].timed_out).toBe(true);
+    expect(finished[0].wait_error).toBe("adapter disconnected");
+  });
+
+  it("holds the message for minimum_wait even when the timeout elapses first", async () => {
+    const api = new MockApi("p1");
+    const { jsPsych, finished } = makeJsPsych(api);
+    const plugin = new MultiplayerSyncPlugin(jsPsych as never);
+
+    const t0 = performance.now();
+    await plugin.trial(display(), {
+      push_data: null,
+      wait_for: () => false, // never satisfied
+      message: "<p>Waiting…</p>",
+      timeout: 20, // shorter than minimum_wait
+      minimum_wait: 60,
+    } as never);
+
+    expect(performance.now() - t0).toBeGreaterThanOrEqual(50); // held ~minimum_wait, not just 20ms
+    expect(finished[0].timed_out).toBe(true);
   });
 
   it("keeps the message on screen for at least minimum_wait when the condition is already met", async () => {
@@ -243,5 +289,36 @@ describe("multiplayer-sync plugin", () => {
     // wait_time reflects the natural ~80ms wait, NOT 80 + minimum_wait (slack for timer jitter).
     expect(finished[0].wait_time).toBeGreaterThanOrEqual(70);
     expect(finished[0].wait_time).toBeLessThan(80 + 30);
+  });
+
+  it("runs through the real jsPsych parameter pipeline (startTimeline smoke test)", async () => {
+    const api = new MockApi("p1");
+    const jsPsych = initJsPsych();
+    // Graft the multiplayer seam onto the real pluginAPI — same stubbing strategy as the tests
+    // above, but everything else (parameter defaults, finishTrial, data collection) is real jsPsych.
+    Object.assign(jsPsych.pluginAPI, {
+      push: api.push.bind(api),
+      getAll: api.getAll.bind(api),
+      wait: api.wait.bind(api),
+    });
+
+    const { getData, expectFinished } = await startTimeline(
+      [
+        {
+          type: MultiplayerSyncPlugin,
+          push_data: { ready: true },
+          wait_for: (group: GroupSessionData) => Object.keys(group).length >= 1,
+        },
+      ],
+      jsPsych
+    );
+
+    await expectFinished();
+
+    const data = getData().values()[0];
+    expect(data.group).toEqual({ p1: { ready: true } });
+    expect(data.timed_out).toBe(false);
+    expect(data.wait_error).toBeNull();
+    expect(typeof data.wait_time).toBe("number");
   });
 });

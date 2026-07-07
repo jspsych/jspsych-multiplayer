@@ -70,6 +70,15 @@ const info = <const>{
       type: ParameterType.BOOL,
       default: false,
     },
+    /**
+     * Message from the `wait()` rejection when the trial ended without `wait_for` being met;
+     * null when the condition was satisfied. On a genuine timeout this is the timeout message, so
+     * non-timeout rejections (if the API ever produces them) remain diagnosable in the data.
+     */
+    wait_error: {
+      type: ParameterType.STRING,
+      default: null,
+    },
   },
   // prettier-ignore
   citations: '__CITATIONS__',
@@ -117,12 +126,21 @@ class MultiplayerSyncPlugin implements JsPsychPlugin<Info> {
 
     const start = performance.now();
 
-    const finish = (group: GroupSessionData, timed_out: boolean) => {
+    const finish = (group: GroupSessionData, timed_out: boolean, wait_error: string | null) => {
       this.jsPsych.finishTrial({
         group,
         wait_time: Math.round(performance.now() - start),
         timed_out,
+        wait_error,
       });
+    };
+
+    /** Keep the waiting message on screen until at least `minimum_wait` ms have elapsed. */
+    const holdMinimumWait = async () => {
+      const elapsed = performance.now() - start;
+      if (elapsed < trial.minimum_wait) {
+        await new Promise((resolve) => setTimeout(resolve, trial.minimum_wait - elapsed));
+      }
     };
 
     // Push BEFORE the wait try/catch: a push failure is an infrastructure error, not a timeout, and
@@ -138,18 +156,20 @@ class MultiplayerSyncPlugin implements JsPsychPlugin<Info> {
     try {
       const group = await api.wait(trial.wait_for as (data: GroupSessionData) => boolean, timeout);
 
-      const elapsed = performance.now() - start;
-      if (elapsed < trial.minimum_wait) {
-        await new Promise((resolve) => setTimeout(resolve, trial.minimum_wait - elapsed));
-      }
+      await holdMinimumWait();
 
-      finish(group, false);
+      finish(group, false, null);
     } catch (e) {
-      // api.wait() rejects only on timeout; surface it via on_timeout and end the trial.
+      // As of jsPsych#3694's current draft, api.wait() rejects only on timeout, so every rejection
+      // is labeled `timed_out: true` and routed to on_timeout. The rejection's message is stored in
+      // `wait_error` so a non-timeout failure would still be diagnosable from the data.
+      // TODO: revisit this seam when #3694 finalizes whether wait() can reject for other reasons.
       if (typeof trial.on_timeout === "function") {
         trial.on_timeout(e);
       }
-      finish(api.getAll(), true);
+      // Honour minimum_wait here too, so a short timeout can't flash the waiting message.
+      await holdMinimumWait();
+      finish(api.getAll(), true, e instanceof Error ? e.message : String(e));
     }
   }
 }

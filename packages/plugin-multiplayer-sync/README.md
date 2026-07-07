@@ -25,7 +25,7 @@ await jsPsych.run(timeline);
 | `message`      | HTML string \| function | `"<p>Waiting for other players…</p>"` | Shown while waiting.                                                                                                                                                              |
 | `timeout`      | integer                 | `null`                                | Max time to wait, in ms. On elapse the trial ends with `timed_out: true` and `on_timeout` is called. `null` waits indefinitely.                                                    |
 | `on_timeout`   | function                | `null`                                | Called if `timeout` elapses before `wait_for` is satisfied.                                                                                                                       |
-| `minimum_wait` | integer                 | `0`                                   | Minimum time, in ms, to keep the message on screen so it doesn't flash by when the condition is already met.                                                                       |
+| `minimum_wait` | integer                 | `0`                                   | Minimum time, in ms, to keep the message on screen so it doesn't flash by — applies whether the trial ends because the condition is met or because the timeout elapses.            |
 
 ## Data Generated
 
@@ -34,6 +34,26 @@ await jsPsych.run(timeline);
 | `group`     | object  | The full group session snapshot at the moment the condition was met (or the timeout fired). Read peers / assign roles from here in `on_finish`. |
 | `wait_time` | integer | Time spent waiting, in ms, from trial start until the trial ended.                                                                             |
 | `timed_out` | boolean | True if the trial ended because `timeout` elapsed rather than because `wait_for` was met.                                                       |
+| `wait_error` | string \| null | Message from the `wait()` rejection when the trial ended without `wait_for` being met (on a genuine timeout, the timeout message); `null` when the condition was satisfied. |
+
+## Writing robust `wait_for` predicates
+
+`push` uses **overwrite-per-participant** semantics: each participant has a single entry in the group session, and every push replaces it. A fast peer that clears a barrier and pushes again in a later trial can therefore overwrite the very entry your `wait_for` predicate is still checking — and the condition you were waiting for may never (re)appear.
+
+Prefer predicates that are **monotone**: once true, they stay true under any later push. For example:
+
+```js
+// Fragile: p2's next push may not include `status`, so this can flicker back to false
+wait_for: (group) => group["p2"]?.status === "ready",
+
+// Robust: presence in the session is monotone — participants don't disappear
+wait_for: (group) => Object.keys(group).length >= 2,
+
+// Robust: carry a monotone counter/phase forward in every push and compare with >=
+wait_for: (group) => Object.values(group).every((p) => p.trial_index >= 5),
+```
+
+If a barrier must key on transient fields, include them in every subsequent push (so they are never overwritten away), or advance a `phase`/counter field that only increases.
 
 ## Example: a lobby that waits for two players
 
