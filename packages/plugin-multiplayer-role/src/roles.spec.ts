@@ -77,6 +77,27 @@ describe("assignRoles — input validation", () => {
   it("throws a clear error when roles is an empty array", () => {
     expect(() => assignRoles({ p1: {} }, { roles: [] })).toThrow(/`roles` option is required/);
   });
+
+  it("throws a clear error when roles is an empty object (would send everyone to overflow)", () => {
+    expect(() => assignRoles({ p1: {} }, { roles: {} })).toThrow(/empty object/);
+  });
+
+  it("throws a clear error on a negative role count (not an opaque Array RangeError)", () => {
+    expect(() => assignRoles({ p1: {} }, { roles: { leader: -1 } })).toThrow(
+      /count for role "leader" must be a non-negative integer/
+    );
+  });
+
+  it("throws a clear error on a non-integer role count", () => {
+    expect(() => assignRoles({ p1: {} }, { roles: { leader: 1.5 } })).toThrow(
+      /count for role "leader" must be a non-negative integer/
+    );
+  });
+
+  it("allows a zero count (a role declared but not handed out this round)", () => {
+    const map = assignRoles({ p1: {} }, { roles: { leader: 1, observer: 0 } });
+    expect(map.p1.role).toBe("leader");
+  });
 });
 
 describe("assignRoles — random", () => {

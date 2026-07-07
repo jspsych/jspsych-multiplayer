@@ -20,7 +20,7 @@ import {
 export type { Snapshot, RoleAssignment, RoleMap, Ctx, AssignOptions } from "./roles";
 
 const info = <const>{
-  name: "plugin-multiplayer-role",
+  name: "multiplayer-role",
   version: version,
   parameters: {
     /** The roles to hand out: an array (one slot per entry) or an object of counts. */
@@ -153,12 +153,16 @@ class MultiplayerRolePlugin implements JsPsychPlugin<Info> {
       );
     }
 
-    // ROUND-SCOPED push: read this client's own prior entry first, then merge. `joinedAt` is written
-    // ONCE (first-seen, never re-stamped) so the join-order base stays stable across rounds; per-round
-    // data is namespaced under `rounds[round]` so a later round never clobbers `joinedAt` or an earlier
-    // round's score. (Rests on the adapter being read-back consistent for this client's own writes.)
+    // ROUND-SCOPED push: read this client's own prior entry first, then merge. The push REPLACES this
+    // client's whole entry (overwrite-per-participant adapter semantics), so `prev` is spread first —
+    // every top-level key pushed by earlier trials (e.g. a `cond` field that `role_from`/`rank_by`
+    // reads) must survive this trial's push. `joinedAt` is written ONCE (first-seen, never re-stamped)
+    // so the join-order base stays stable across rounds; per-round data is namespaced under
+    // `rounds[round]` so a later round never clobbers `joinedAt` or an earlier round's score. (Rests
+    // on the adapter being read-back consistent for this client's own writes.)
     const prev = api.get(me) ?? {};
     const payload: Record<string, unknown> = {
+      ...prev,
       joinedAt: (prev.joinedAt as number | undefined) ?? Date.now(),
       rounds: {
         ...((prev.rounds as Record<string, unknown>) ?? {}),

@@ -1,3 +1,6 @@
+import { startTimeline } from "@jspsych/test-utils";
+import { initJsPsych } from "jspsych";
+
 import { GroupSessionData, MultiplayerApiLike } from "./multiplayer-api";
 import MultiplayerRolePlugin from ".";
 
@@ -210,6 +213,39 @@ describe("plugin-multiplayer-role — trial wrapper", () => {
     expect(afterR1.rounds[1]).toEqual({ score: 20 }); // round 1 added
   });
 
+  it("regression: the push preserves pre-existing top-level state (role_from over a prior field)", async () => {
+    // An earlier trial pushed a top-level `cond` field for each participant. The role trial's own
+    // push REPLACES this client's whole entry (overwrite-per-participant), so unless the wrapper
+    // spreads the previous entry into its payload, `cond` is wiped — and role_from (which reads it)
+    // can then never resolve. This runs the wrapper end-to-end over that exact flow.
+    const api = new MockApi("p1");
+    api.seed("p1", { joinedAt: 100, cond: "high" }); // pre-seeded by an earlier trial
+    api.seed("p2", { joinedAt: 200, cond: "low" });
+    const { jsPsych, finished } = makeJsPsych(api);
+    const plugin = new MultiplayerRolePlugin(jsPsych as never);
+
+    plugin.trial(display(), {
+      roles: ["high", "low"],
+      role_from: (entry: any) => entry.cond, // the role IS the carried field
+      group_size: 2,
+      round: 0,
+      push_data: {},
+      timeout: 30000,
+    } as never);
+    await flush();
+
+    // The role resolved from the pre-seeded field…
+    expect(finished).toHaveLength(1);
+    expect(finished[0].timed_out).toBe(false);
+    expect(finished[0].role).toBe("high");
+    expect(finished[0].role_map.p2.role).toBe("low");
+    // …and the pre-existing top-level field survived this trial's own push.
+    const mine = api.get("p1") as any;
+    expect(mine.cond).toBe("high");
+    expect(mine.joinedAt).toBe(100); // still first-seen, not re-stamped
+    expect(mine.rounds[0]).toEqual({}); // round data pushed alongside, not instead
+  });
+
   it("rotate: returns the current round's role on re-run", async () => {
     const run = async (round: number) => {
       const api = new MockApi("p1");
@@ -412,5 +448,53 @@ describe("plugin-multiplayer-role — trial wrapper", () => {
       timed_out: true,
     });
     expect(MultiplayerRolePlugin.getMyRole()).toBeUndefined(); // store cleared
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------
+describe("plugin-multiplayer-role — real jsPsych pipeline (startTimeline smoke test)", () => {
+  it("runs through jsPsych's parameter pipeline, records trial_type, and saves the assignment", async () => {
+    // Real jsPsych instance; only the multiplayer seam (flattened onto pluginAPI by jsPsych core in
+    // jsPsych#3694, not yet in the published types) is stubbed with the same mock the unit tests use.
+    const jsPsych = initJsPsych();
+    const api = new MockApi("p1");
+    api.seed("p1", { joinedAt: 100 });
+    api.seed("p2", { joinedAt: 200 });
+    Object.assign(jsPsych.pluginAPI, {
+      participantId: api.participantId,
+      push: api.push.bind(api),
+      get: api.get.bind(api),
+      getAll: api.getAll.bind(api),
+      wait: api.wait.bind(api),
+      communicate: api.communicate.bind(api),
+    });
+
+    // jsPsych's parameter pipeline warns when a FUNCTION-typed parameter receives a string — the
+    // documented, deliberate tradeoff of typing `strategy` as FUNCTION (see info.parameters). Capture
+    // the warning so it is asserted (the tradeoff is known) rather than leaking into test output.
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+    const { getData, expectFinished, finished } = await startTimeline(
+      [
+        {
+          type: MultiplayerRolePlugin,
+          roles: ["proposer", "responder"],
+          strategy: "join_order",
+          group_size: 2,
+        },
+      ],
+      jsPsych
+    );
+
+    await finished;
+    await expectFinished();
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/non-function value.*strategy/i));
+    warn.mockRestore();
+
+    const data = getData().values()[0];
+    expect(data.trial_type).toBe("multiplayer-role"); // jsPsych records info.name (sans plugin- prefix)
+    expect(data.role).toBe("proposer"); // p1 joined first
+    expect(data.role_map.p2.role).toBe("responder");
+    expect(data.timed_out).toBe(false);
+    expect(MultiplayerRolePlugin.getMyRole()).toBe("proposer");
   });
 });

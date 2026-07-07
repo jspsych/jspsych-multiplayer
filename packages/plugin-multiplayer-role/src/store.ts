@@ -3,7 +3,7 @@
  *
  * Scoped to one experiment per page (always true for jsPsych). Volatile like the data record — lost
  * on reload; the source of truth is the deterministic computation over the session snapshot, so a
- * reconnect should recompute via assignRoles (see plan §8).
+ * reconnect should recompute via assignRoles.
  */
 import { RoleAssignment, RoleMap } from "./roles";
 

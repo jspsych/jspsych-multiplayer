@@ -1,7 +1,7 @@
 /**
  * Pure readiness gate for `plugin-multiplayer-role`.
  *
- * This is where correctness actually lives (see plan §7). It decides *when* a snapshot is safe to
+ * This is where correctness actually lives. It decides *when* a snapshot is safe to
  * assign over. It does NOT manufacture membership consensus — that comes from an upstream "capped,
  * agreed set of N" contract (a waiting-room barrier). Given that contract, this adds field-readiness:
  * don't assign until every present participant carries the data the chosen strategy will read.
@@ -9,7 +9,7 @@
 import { AssignOptions, Ctx, Snapshot, byId } from "./roles";
 
 export interface ReadinessOptions {
-  /** If set, require exactly this many participants (exact-count, not >=, per plan §7). */
+  /** If set, require exactly this many participants (exact-count, not >= — overshoot stalls loudly). */
   groupSize?: number | null;
   strategy?: AssignOptions["strategy"];
   rankBy?: AssignOptions["rankBy"];
@@ -37,7 +37,7 @@ const tryBool = (fn: () => boolean): boolean => {
  */
 export function makeReadiness(opts: ReadinessOptions): (s: Snapshot) => boolean {
   // Exact count converts a contract violation (overshoot) into a loud stall->timeout rather than a
-  // silent subset assignment. It does NOT create membership consensus (plan §7).
+  // silent subset assignment. It does NOT create membership consensus.
   const enoughPlayers = (s: Snapshot) =>
     opts.groupSize == null || Object.keys(s).length === opts.groupSize;
 

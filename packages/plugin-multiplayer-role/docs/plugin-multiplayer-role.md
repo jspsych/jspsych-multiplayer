@@ -17,7 +17,7 @@ In addition to the [parameters available in all plugins](https://www.jspsych.org
 | `rank_by`       | function           | `null`                      | `(entry, id, ctx) => number`. Order participants by a numeric key, highest first.                                          |
 | `role_from`     | function           | `null`                      | `(entry, id, ctx) => string`. The role **is** a value each participant already carries.                                    |
 | `ready`         | function           | `null`                      | `(snapshot) => boolean`. Override the readiness gate; **required** when `strategy` is a custom function.                   |
-| `overflow_role` | string             | `null`                      | Role for participants beyond the declared slots. Only meaningful when `group_size` is `null`.                              |
+| `overflow_role` | string             | `null`                      | Role for participants beyond the declared slots — applies whenever the participant count exceeds the number of role slots. If unset, overflow throws. |
 | `push_data`     | object             | `{}`                        | Round-scoped data this client contributes to the snapshot. Namespaced under the round so it never clobbers earlier rounds. |
 | `save_group`    | boolean            | `false`                     | Include the full group snapshot in the trial data. Off by default to avoid bloat.                                          |
 | `timeout`       | integer            | `30000`                     | Milliseconds to wait for readiness before giving up. `null` waits forever (discouraged).                                   |

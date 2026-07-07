@@ -3,8 +3,7 @@
  *
  * Everything here is a pure function over a group-session snapshot — no I/O, no jsPsych, no network.
  * The plugin wrapper (index.ts) supplies the snapshot and the readiness gate; this module owns the
- * deterministic-consensus logic that every client must compute identically. See
- * docs/role-assignment-plugin-plan.md for the full design rationale.
+ * deterministic-consensus logic that every client must compute identically.
  */
 
 /** A group-session snapshot: participantId -> that participant's pushed data. */
@@ -162,6 +161,22 @@ export function assignRoles(snapshot: Snapshot, opts: AssignOptions): RoleMap {
       "assignRoles: the `roles` option is required — pass an array like " +
         '["proposer","responder"] or a count map like { leader: 1, follower: 3 }.'
     );
+  }
+  if (!Array.isArray(opts.roles)) {
+    const entries = Object.entries(opts.roles);
+    if (entries.length === 0) {
+      throw new Error(
+        "assignRoles: `roles` is an empty object — declare at least one role, e.g. " +
+          "{ leader: 1, follower: 3 } (an empty count map would send every participant to overflow)."
+      );
+    }
+    for (const [role, n] of entries) {
+      if (!Number.isInteger(n) || n < 0) {
+        throw new Error(
+          `assignRoles: the count for role "${role}" must be a non-negative integer, got ${n}.`
+        );
+      }
+    }
   }
   const ids = Object.keys(snapshot).sort(byId);
   const ctx: Ctx = { ids, round: opts.round ?? 0, seed: opts.seed ?? "" };
