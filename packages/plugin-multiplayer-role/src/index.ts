@@ -77,7 +77,8 @@ const info = <const>{
     group: { type: ParameterType.OBJECT },
   },
   // When you run build on your plugin, citations will be generated here based on the CITATION.cff.
-  citations: "__CITATIONS__",
+  // prettier-ignore
+  citations: '__CITATIONS__',
 };
 
 type Info = typeof info;
