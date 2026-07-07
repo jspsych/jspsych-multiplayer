@@ -15,11 +15,16 @@ import JatosAdapter from ".";
  */
 
 /** Build a controllable mock of the jatos global plus helpers to drive its callbacks. */
-function makeMockJatos(workerId: string | number = "w1") {
+function makeMockJatos(
+  // Pass null to simulate a jatos.js build where groupMemberId is not populated.
+  groupMemberId: string | number | null = "w1",
+  workerId: string | number = "worker-99"
+) {
   const store: Record<string, unknown> = {};
   let callbacks: Record<string, ((arg?: unknown) => void) | undefined> = {};
 
   const jatos = {
+    groupMemberId: groupMemberId ?? undefined,
     workerId,
     joinGroup: jest.fn((cbs: Record<string, (arg?: unknown) => void>) => {
       callbacks = cbs;
@@ -71,9 +76,16 @@ describe("construction", () => {
     expect(() => new JatosAdapter()).toThrow(/jatos global is not defined/);
   });
 
-  test("derives participantId from the worker id as a string", () => {
-    (globalThis as Record<string, unknown>).jatos = makeMockJatos(12345).jatos;
+  test("derives participantId from the group member id as a string", () => {
+    // groupMemberId, not workerId: it is unique per group membership, whereas the
+    // same workerId can recur when a worker runs the study more than once.
+    (globalThis as Record<string, unknown>).jatos = makeMockJatos(12345, 777).jatos;
     expect(new JatosAdapter().participantId).toBe("12345");
+  });
+
+  test("falls back to the worker id when groupMemberId is absent", () => {
+    (globalThis as Record<string, unknown>).jatos = makeMockJatos(null, 777).jatos;
+    expect(new JatosAdapter().participantId).toBe("777");
   });
 });
 
@@ -104,6 +116,43 @@ describe("connect", () => {
     const err = (await assertion) as Error;
 
     expect(err.message).toMatch(/timed out/);
+  });
+
+  test("calling connect() again returns the same promise instead of rejoining the group", async () => {
+    const adapter = new JatosAdapter();
+    const first = adapter.connect();
+    const second = adapter.connect(); // while still in flight
+    mock.fireOpen();
+    await first;
+    const third = adapter.connect(); // after it settled
+
+    expect(second).toBe(first);
+    expect(third).toBe(first);
+    expect(mock.jatos.joinGroup).toHaveBeenCalledTimes(1);
+  });
+
+  test("a failed connect() does not block a retry", async () => {
+    const adapter = new JatosAdapter();
+    const first = adapter.connect();
+    mock.fireError("boom");
+    await expect(first).rejects.toThrow(/boom/);
+
+    const retry = adapter.connect();
+    mock.fireOpen();
+    await expect(retry).resolves.toBeUndefined();
+    expect(mock.jatos.joinGroup).toHaveBeenCalledTimes(2);
+  });
+
+  test("honors a custom connectTimeoutMs option", async () => {
+    jest.useFakeTimers();
+    const adapter = new JatosAdapter({ connectTimeoutMs: 5 });
+    const promise = adapter.connect();
+    const assertion = promise.catch((e: unknown) => e);
+
+    await jest.advanceTimersByTimeAsync(5);
+    const err = (await assertion) as Error;
+
+    expect(err.message).toMatch(/timed out after 5 ms/);
   });
 });
 
@@ -281,6 +330,20 @@ describe("channel lifecycle", () => {
 
     await expect(adapter.push({ x: 1 })).rejects.toThrow(/channel closed/);
     expect(mock.jatos.groupSession.set).not.toHaveBeenCalled();
+  });
+
+  test("push() works again after jatos reopens a closed channel", async () => {
+    const adapter = await connectedAdapter();
+
+    // Channel drops: push must fail loudly.
+    mock.fireClose();
+    await expect(adapter.push({ x: 1 })).rejects.toThrow(/channel closed/);
+
+    // jatos.js reopens the channel (onOpen fires again, long after connect settled).
+    // The adapter must restore its connection flags — not just subscriptions.
+    mock.fireOpen();
+    await expect(adapter.push({ x: 2 })).resolves.toBeUndefined();
+    expect(mock.jatos.groupSession.set).toHaveBeenCalledWith("w1", { x: 2 });
   });
 });
 

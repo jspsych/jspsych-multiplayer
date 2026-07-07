@@ -5,7 +5,12 @@ import { GroupSessionData, MultiplayerAdapter, Unsubscribe } from "./multiplayer
  * Only the subset used by this adapter is declared here.
  */
 declare const jatos: {
-  /** Worker ID assigned by JATOS — used as the per-participant namespace key. */
+  /**
+   * Group member ID assigned by JATOS — unique per group membership, used as the
+   * per-participant namespace key. Populated once the worker is part of a group.
+   */
+  groupMemberId?: string | number;
+  /** Worker ID assigned by JATOS — fallback namespace key when groupMemberId is absent. */
   workerId: string | number;
   /** Join a group study and open the WebSocket channel. */
   joinGroup(callbacks: {
@@ -38,7 +43,7 @@ declare const jatos: {
  *   await jsPsych.pluginAPI.connect(new JatosAdapter());
  *   await jsPsych.run(timeline);
  *
- * Each participant's pushed data is stored under groupSession[workerId],
+ * Each participant's pushed data is stored under groupSession[groupMemberId],
  * so keys never collide across participants.
  *
  * @author Hannah Tsukamoto
@@ -62,7 +67,17 @@ export default class JatosAdapter implements MultiplayerAdapter {
    */
   private subscribers = new Set<(data: GroupSessionData) => void>();
 
-  constructor() {
+  /**
+   * The promise from the first connect() call. connect() is not re-entrant —
+   * calling jatos.joinGroup twice would double-register the lifecycle callbacks —
+   * so subsequent calls get the same in-flight/settled promise back.
+   */
+  private connectPromise: Promise<void> | null = null;
+
+  /** Maximum time to wait for the group channel to open before giving up, in ms. */
+  private readonly connectTimeoutMs: number;
+
+  constructor(options: { connectTimeoutMs?: number } = {}) {
     if (typeof jatos === "undefined") {
       throw new Error(
         "JatosAdapter: the jatos global is not defined. " +
@@ -70,14 +85,20 @@ export default class JatosAdapter implements MultiplayerAdapter {
           "This adapter only works when the experiment is running inside JATOS."
       );
     }
-    this.participantId = String(jatos.workerId);
+    // Prefer groupMemberId: it is unique per group membership, whereas workerId can
+    // repeat when the same worker runs the study more than once — two runs keyed by
+    // workerId would collide in the group session. Fall back to workerId for older
+    // jatos.js builds (or contexts) where groupMemberId is not populated.
+    this.participantId = String(jatos.groupMemberId ?? jatos.workerId);
+    this.connectTimeoutMs = options.connectTimeoutMs ?? 20_000;
   }
 
-  /** Maximum time to wait for the group channel to open before giving up, in ms. */
-  private static readonly CONNECT_TIMEOUT_MS = 20_000;
-
   connect(): Promise<void> {
-    return new Promise((resolve, reject) => {
+    // Re-entry guard: hand back the existing promise instead of joining twice.
+    if (this.connectPromise !== null) {
+      return this.connectPromise;
+    }
+    this.connectPromise = new Promise((resolve, reject) => {
       // onOpen reports the channel opening (not the group filling), so it should arrive
       // promptly. If JATOS delivers neither onOpen nor onError — a dropped handshake or
       // unreachable server mid-connect — the promise would otherwise hang forever and the
@@ -88,19 +109,24 @@ export default class JatosAdapter implements MultiplayerAdapter {
         settled = true;
         reject(
           new Error(
-            `JatosAdapter: timed out after ${JatosAdapter.CONNECT_TIMEOUT_MS} ms waiting for the ` +
+            `JatosAdapter: timed out after ${this.connectTimeoutMs} ms waiting for the ` +
               "group channel to open. JATOS reported neither success nor failure — the server may " +
               "be unreachable or the handshake was dropped."
           )
         );
-      }, JatosAdapter.CONNECT_TIMEOUT_MS);
+      }, this.connectTimeoutMs);
 
       jatos.joinGroup({
         onOpen: () => {
+          // Restore the flags before the settled guard: jatos.js can close the channel
+          // (onClose) and later reopen it, and that reopen fires onOpen long after the
+          // connect promise settled. Skipping the flags here would leave push() dead
+          // forever while subscriptions kept firing.
+          this.connected = true;
+          this.channelClosed = false;
           if (settled) return;
           settled = true;
           clearTimeout(timer);
-          this.connected = true;
           resolve();
         },
         onGroupSession: () => {
@@ -137,6 +163,16 @@ export default class JatosAdapter implements MultiplayerAdapter {
         },
       });
     });
+    // A failed connect should not poison future attempts: clear the cache on rejection
+    // so connect() can be called again. The caller still receives the rejection — this
+    // internal handler only resets the guard.
+    const promise = this.connectPromise;
+    promise.catch(() => {
+      if (this.connectPromise === promise) {
+        this.connectPromise = null;
+      }
+    });
+    return promise;
   }
 
   async push(data: Record<string, unknown>): Promise<void> {
@@ -205,6 +241,8 @@ export default class JatosAdapter implements MultiplayerAdapter {
   disconnect(): Promise<void> {
     this.subscribers.clear();
     this.connected = false;
+    // Full teardown resets the re-entry guard so a fresh connect() can rejoin the group.
+    this.connectPromise = null;
     // Close the channel cleanly by leaving the group. Resolve on either outcome —
     // the local teardown above has already happened — and guard for older jatos.js
     // builds that don't expose leaveGroup.
