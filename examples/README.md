@@ -20,9 +20,29 @@ experiment can carry almost no synchronization or coordination code of its own.
 The key rewrite: an earlier version assigned roles by hand in the lobby's `on_finish` (sort the
 participant ids, take the first two as proposer/responder, route the rest to a "game full" screen).
 That block is now a single `plugin-multiplayer-role` trial. Every client independently computes the
-**same** role map from the shared group session — no coordinator, no extra round-trip — and because
-ordering is by first-seen join time, the proposer/responder pair stays stable even if a spectator
-joins later.
+**same** role map from the shared group session — no coordinator, no extra round-trip. Ordering is
+by `joinedAt`, a timestamp the role plugin stamps **once, at its own trial's start** (so
+near-simultaneously on the clients leaving the lobby together — this is not the moment a client
+first connected), with ties broken deterministically by participant id.
+
+Two details in the demo make that ordering trustworthy, and they are worth copying:
+
+1. **The `ready` predicate checks field readiness, not just a head-count.** Supplying a custom
+   `ready` _replaces_ the plugin's strategy-derived gate, so a count-only predicate would let each
+   client assign the instant it sees the peer's lobby entry — before the peer's `joinedAt` has
+   landed. Both clients would then sort the peer's missing timestamp as 0, each conclude the _other_
+   is the proposer, and both would wait for an offer until the barriers time out. The demo's
+   predicate therefore requires every present entry to carry `joinedAt` (or to be an unmistakably
+   mid-game entry, for a spectator arriving during a round).
+2. **Every mid-game push spreads `joinedAt` back in.** The sync plugin pushes `push_data` verbatim
+   and the JATOS adapter replaces the participant's whole group-session entry, so a bare
+   `{ offer }` push would erase `joinedAt`. The demo captures it in `assignRoles`'s `on_finish` and
+   includes it in every later push.
+
+With both in place, a spectator who joins mid-game still sees the two players' original timestamps
+and computes the same proposer/responder pair, so the pair stays stable as long as client clocks are
+reasonably sane (`joinedAt` comes from each client's own clock, so a late joiner with a badly skewed
+clock could in principle sort ahead of the original pair).
 
 ### Population model
 
@@ -30,7 +50,10 @@ The lobby admits when **at least two** players are present, and the role trial a
 as the active pair while any later **extra arrival** becomes a `spectator` routed to a "game is full"
 screen — so over-enrollment is handled gracefully rather than left waiting. (A stricter "exactly two"
 capped variant is possible with the role plugin's `group_size: 2` instead of `overflow_role`; see
-`plugin-multiplayer-role`'s own example.)
+`plugin-multiplayer-role`'s own example.) If role assignment itself times out — a peer vanished
+between the lobby and the role trial — the role trial ends with no role, and the demo routes that
+client to a brief "could not form a group" screen rather than letting it fall off the end of the
+timeline onto a blank page.
 
 The other failure open recruitment produces is an active player **leaving mid-game**. Each barrier that
 waits on the other player (`proposerWaitTrial`, `responderWaitTrial`) sets a `timeout`; if it elapses,
@@ -58,8 +81,15 @@ This example is **illustrative** — it cannot run from a single browser tab tod
 2. the **JATOS** environment, so the `jatos` global and a group study exist; and
 3. at least **two** real participants in the same JATOS group.
 
-The `<script>` tags load the three packages from their built `dist/` in this repo; once the packages
-are published you can load them from a CDN (e.g. `https://unpkg.com/@jspsych-multiplayer/plugin-multiplayer-role`).
+The `<script>` tags load the three packages from their built `dist/` in this repo. `dist/` is not
+checked in, so build the packages first from the repo root:
+
+```sh
+npm install && npm run build
+```
+
+Once the packages are published you can load them from a CDN instead
+(e.g. `https://unpkg.com/@jspsych-multiplayer/plugin-multiplayer-role`).
 
 ### Attribution
 
