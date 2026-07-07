@@ -73,6 +73,7 @@ const info = <const>{
     /** The ordered transcript (array of messages) as this client saw it when the trial ended. */
     transcript: {
       type: ParameterType.OBJECT,
+      array: true,
       default: undefined,
     },
     /** Total number of distinct messages in the transcript at trial end. */
@@ -127,7 +128,10 @@ class MultiplayerChatPlugin implements JsPsychPlugin<Info> {
 
   constructor(private jsPsych: JsPsych) {}
 
-  async trial(display_element: HTMLElement, trial: TrialType<Info>, on_load?: () => void) {
+  // Deliberately synchronous (returns undefined, NOT a Promise): jsPsych races a returned promise
+  // against `finishTrial()`, so an async `trial` that resolves after setup would end the trial
+  // immediately. A sync `trial` makes jsPsych fire `on_load` itself and wait for `finishTrial()`.
+  trial(display_element: HTMLElement, trial: TrialType<Info>) {
     // The multiplayer API is flattened onto pluginAPI by jsPsych core (jsPsych#3694). The published
     // `jspsych` types don't carry it yet, so reach it through the local interface with one cast.
     const api = this.jsPsych.pluginAPI as unknown as MultiplayerApiLike;
@@ -173,14 +177,11 @@ class MultiplayerChatPlugin implements JsPsychPlugin<Info> {
     ) as HTMLButtonElement | null;
     if (endButton && trial.end_button_label != null) endButton.textContent = trial.end_button_label;
 
-    // jsPsych only auto-fires on_load for trials whose `trial()` returns synchronously; this one
-    // returns a Promise, so we invoke the callback ourselves once the screen is rendered.
-    on_load?.();
-
     const start = performance.now();
-    // This participant's own outgoing sequence counter, seeded past any messages already in our slot
-    // (e.g. after a reload) so ids stay unique.
-    let nextSeq = readOwnMessages().length;
+    // This participant's own outgoing sequence counter, seeded past the HIGHEST seq already in our
+    // slot (e.g. after a reload) so ids stay unique. Seeding from the array length would collide
+    // with an existing message if the array ever carried a seq gap.
+    let nextSeq = readOwnMessages().reduce((max, m) => Math.max(max, m.seq), -1) + 1;
     let ended = false;
     let unsubscribe: Unsubscribe | null = null;
     let timer: ReturnType<typeof setTimeout> | null = null;
@@ -269,10 +270,17 @@ class MultiplayerChatPlugin implements JsPsychPlugin<Info> {
       const own = mergeMessages({ [me]: mine }, dataKey).filter((m) => m.senderId === me);
       const nextMessages = appendOwnMessage(own, text, me, nextSeq++, Date.now());
 
-      // Best-effort send: a failed push shows an inline note and re-enables input rather than
-      // crashing the trial (unlike sync, where a push failure is fatal — here sending is recoverable).
+      // Optimistic render: show our own message immediately instead of waiting for the adapter to
+      // echo the push back through subscribe. The echo (or a replay) is harmless because render is
+      // idempotent — mergeMessages de-duplicates by message id.
+      render({ ...api.getAll(), [me]: { ...mine, [dataKey]: nextMessages } });
+
+      // Best-effort send: a failed push shows an inline note rather than crashing the trial (unlike
+      // sync, where a push failure is fatal — here sending is recoverable). Do NOT roll nextSeq back
+      // on failure: pushes are fire-and-forget, so a later send may already have taken the next
+      // number, and reusing a seq would forge a duplicate id that mergeMessages' dedup silently
+      // drops. A skipped seq is harmless; a reused one loses data.
       api.push({ ...mine, [dataKey]: nextMessages }).catch(() => {
-        nextSeq--; // roll the counter back so the retry keeps ids contiguous
         showSendError();
       });
     };
@@ -308,7 +316,13 @@ class MultiplayerChatPlugin implements JsPsychPlugin<Info> {
       } catch {
         // A bad render frame must not tear down the subscription or the trial.
       }
-      if (typeof trial.end_when === "function" && trial.end_when(group)) end("condition");
+      let shouldEnd = false;
+      try {
+        shouldEnd = typeof trial.end_when === "function" && Boolean(trial.end_when(group));
+      } catch {
+        // A throwing end_when predicate must not propagate into the adapter's notify loop.
+      }
+      if (shouldEnd) end("condition");
     });
 
     if (hasDuration) {

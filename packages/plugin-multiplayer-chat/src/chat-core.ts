@@ -62,8 +62,9 @@ function isChatMessage(m: unknown): m is ChatMessage {
  *
  * Ordering is `(ts, senderId, seq)`: primarily by send time, then a deterministic tie-break. Because
  * `ts` comes from each sender's own unsynchronized clock, strict global order across senders is not
- * guaranteed (documented limitation); the tie-break guarantees a single sender's own messages never
- * reorder among themselves and that the sort is stable across clients.
+ * guaranteed (documented limitation). The sort is ts-first and seq-last, so even a single sender's
+ * messages keep their order only while that sender's clock is monotonic; the tie-break does
+ * guarantee the sort is deterministic and identical across clients.
  *
  * De-duplication is by `id`, keeping the first occurrence — so a `subscribe` replay that re-delivers
  * already-seen messages produces an identical transcript (idempotent render).

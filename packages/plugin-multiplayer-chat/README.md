@@ -48,7 +48,9 @@ await jsPsych.run(timeline);
 
 The multiplayer API's `push` **replaces** a participant's slot (it does not merge). A participant therefore owns one slot, so chat history is modeled as an append-only array each participant keeps under `data_key`; the rendered transcript is the merge of every participant's array, ordered by `(timestamp, senderId, seq)` and de-duplicated by message id. When you send, the plugin reads your own slot first and pushes it back with only the chat key changed, so any other data you've pushed (e.g. a role assigned by `plugin-multiplayer-role`) is preserved.
 
-Ordering uses each sender's own clock, which is not synchronized across clients, so strict global order across senders is best-effort; a single sender's own messages never reorder among themselves.
+Ordering uses each sender's own clock, which is not synchronized across clients, so strict global order across senders is best-effort. The sort is timestamp-first (`seq` only breaks ties), so even a single sender's messages keep their order only as long as that sender's local clock is monotonic during the trial — a clock that jumps backwards (e.g. an NTP adjustment mid-chat) can reorder them.
+
+> **Payload growth:** each send re-pushes the sender's *entire* message history (plus the rest of their slot), so bytes on the wire grow roughly quadratically with message count, and backends cap group-session size (e.g. JATOS). This is fine for short discussions; keep very long or high-frequency chats in mind.
 
 ## Example: a two-minute open chat with a "done" button
 

@@ -44,8 +44,9 @@ describe("mergeMessages", () => {
     ]);
   });
 
-  it("never reorders a single sender's messages among themselves", () => {
-    // Same ts on two of one sender's messages: seq must keep them in order.
+  it("keeps a single sender's same-timestamp messages in seq order (ties only — ts sorts first)", () => {
+    // Same ts on two of one sender's messages: seq must keep them in order. Note seq only breaks
+    // ts ties: if a sender's clock ran backwards, ts-first ordering could still reorder them.
     const group: GroupSessionData = {
       p1: { [DATA_KEY]: [msg("p1", 0, 500), msg("p1", 1, 500), msg("p1", 2, 500)] },
     };
