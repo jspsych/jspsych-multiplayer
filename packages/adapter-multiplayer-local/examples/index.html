@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>jsPsychAdapterMultiplayerLocal Example</title>
+    <!-- Loads the adapter's own IIFE build. Run `npm run build` in this package first (or `npx nx
+         build adapter-multiplayer-local` from the repo root) — the bundle below does not exist until
+         you do. Once this package is published you could instead load it from a CDN:
+           <script src="https://unpkg.com/@jspsych-multiplayer/adapter-multiplayer-local"></script> -->
+    <script src="../dist/index.browser.min.js"></script>
+    <style>
+      body { font-family: system-ui, sans-serif; max-width: 40rem; margin: 2rem auto; padding: 0 1rem; }
+      #group { background: #f4f4f5; border-radius: 6px; padding: 0.75rem 1rem; white-space: pre-wrap; }
+      input { padding: 0.4rem; width: 60%; }
+      button { padding: 0.4rem 0.8rem; }
+      code { background: #eee; padding: 0 0.25rem; border-radius: 3px; }
+    </style>
+  </head>
+
+  <body>
+    <!-- ===========================================================================================
+         RUNNABLE two-tab demo of adapter-multiplayer-local.
+
+         Unlike the JATOS/plugin examples, this drives the ADAPTER DIRECTLY (connect / push /
+         subscribe / getAll), so it needs neither a server-side group study nor the jsPsych
+         multiplayer API from jsPsych#3694 — the adapter class is standalone. It is a development /
+         demo tool only: localStorage + cross-tab signalling are same-origin, same-browser,
+         same-machine, and NOT for data collection.
+
+         TO RUN IT:
+           1. Build this package:  npm run build   (produces ../dist/index.browser.min.js)
+           2. Serve the repo over http(s) — localStorage/BroadcastChannel don't work from file://:
+                npx http-server .
+           3. Open the printed URL to THIS file in one tab. The adapter mints a session id and writes
+              it into the URL as ?mp_session=… .
+           4. Copy that FULL URL (including ?mp_session=…) into a SECOND fresh tab or window to join
+              the same room. (Don't use "Duplicate Tab" — it copies sessionStorage and the tabs would
+              share a participant id.) Type in either tab and watch the group state update in both.
+         =========================================================================================== -->
+    <h1>Local multiplayer adapter — two-tab demo</h1>
+    <p>
+      Your participant id: <code id="me"></code>. Open the current URL (with its
+      <code>?mp_session=</code>) in a second tab to see the two of you sharing state.
+    </p>
+    <p>
+      <input id="msg" placeholder="Type a message…" autocomplete="off" />
+      <button id="send">Push</button>
+    </p>
+    <h2>Group state (everyone's latest push)</h2>
+    <div id="group">(connecting…)</div>
+
+    <script>
+      (async () => {
+        // The IIFE build exposes the adapter class as the global `jsPsychAdapterMultiplayerLocal`.
+        const adapter = new jsPsychAdapterMultiplayerLocal();
+        document.getElementById("me").textContent = adapter.participantId;
+
+        const groupEl = document.getElementById("group");
+        const render = (group) => {
+          groupEl.textContent = JSON.stringify(group, null, 2);
+        };
+
+        // A signal from any tab (including our own push) re-reads the store and re-renders here.
+        adapter.subscribe(render);
+
+        // Connect before pushing. This is the only setup the demo needs.
+        await adapter.connect();
+        render(adapter.getAll());
+
+        const input = document.getElementById("msg");
+        const send = () => {
+          const text = input.value.trim();
+          if (!text) return;
+          // push REPLACES this participant's whole slot (matching the JATOS adapter's semantics).
+          adapter.push({ message: text, at: Date.now() }).catch((err) => {
+            // e.g. QuotaExceededError surfaces here rather than escaping as a synchronous throw.
+            groupEl.textContent = "push failed: " + err.message;
+          });
+          input.value = "";
+        };
+        document.getElementById("send").addEventListener("click", send);
+        input.addEventListener("keydown", (e) => {
+          if (e.key === "Enter") send();
+        });
+
+        // Leave the group cleanly when the tab closes so we don't linger as a ghost participant.
+        window.addEventListener("beforeunload", () => adapter.disconnect());
+      })();
+    </script>
+  </body>
+</html>

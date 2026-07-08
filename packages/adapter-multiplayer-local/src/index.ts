@@ -79,6 +79,23 @@ export default class LocalAdapter implements MultiplayerAdapter {
     this.participantId =
       options.participantId ??
       resolveParticipantId(this.keyPrefix, this.sessionId, options.persistParticipant);
+    // A ":" is the key-namespace boundary (`<keyPrefix>:<sessionId>:<participantId>`), and
+    // participantIdFromKey slices on it assuming ids/sessions never contain one. Auto-generated ids
+    // never do, but a user-supplied one could — which would silently mis-parse the snapshot (a
+    // participantId with a ":" would look like it belonged to a different session, so it'd vanish
+    // from getAll). Reject it up front with a clear message instead.
+    if (this.sessionId.includes(":")) {
+      throw new Error(
+        `LocalAdapter: sessionId must not contain ":" (got "${this.sessionId}") — it is the ` +
+          "reserved storage-key namespace separator."
+      );
+    }
+    if (this.participantId.includes(":")) {
+      throw new Error(
+        `LocalAdapter: participantId must not contain ":" (got "${this.participantId}") — it is ` +
+          "the reserved storage-key namespace separator."
+      );
+    }
     // Store a factory, not a signal instance: disconnect() closes the signal (releasing the
     // BroadcastChannel and storage listener), and a later connect() must build a fresh one — a
     // reused closed signal would silently never receive cross-tab updates again. An injected signal
@@ -109,7 +126,15 @@ export default class LocalAdapter implements MultiplayerAdapter {
         new Error("LocalAdapter: push() called before connect(); call connect() first.")
       );
     }
-    writeSlot(this.storage, this.keyPrefix, this.sessionId, this.participantId, data);
+    try {
+      writeSlot(this.storage, this.keyPrefix, this.sessionId, this.participantId, data);
+    } catch (err) {
+      // storage.setItem throws SYNCHRONOUSLY on e.g. QuotaExceededError. Since push() advertises a
+      // Promise, route the failure into the returned promise so a caller's `.catch()` (or `await`)
+      // actually sees it — an uncaught synchronous throw from a Promise-returning method would slip
+      // past .catch() entirely. Nothing was written, so we skip the notify/post below.
+      return Promise.reject(err);
+    }
     // Self-notify: neither the storage event nor BroadcastChannel fires in the writing tab, but our
     // plugins wait on conditions their own push satisfies. Deliver it on a microtask (see
     // scheduleNotify) rather than synchronously so a subscriber that reacts by pushing again can't
@@ -145,6 +170,9 @@ export default class LocalAdapter implements MultiplayerAdapter {
     this.signal?.close();
     // Null the signal so a later connect() rebuilds a fresh one (see createSignal).
     this.signal = null;
+    // Drop all subscribers on disconnect (a reconnect requires re-subscribing). Seam to re-check
+    // once jsPsych core #3694 defines whether subscriptions are expected to survive a reconnect — if
+    // they must, this clear moves out of disconnect() and the signal-rebind in connect() re-wires them.
     this.subscribers.clear();
     this.connected = false;
     // Note: a persisted participant id (persistParticipant) is intentionally left in sessionStorage

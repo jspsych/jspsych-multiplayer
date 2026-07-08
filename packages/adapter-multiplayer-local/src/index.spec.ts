@@ -224,6 +224,55 @@ describe("LocalAdapter", () => {
     expect(a.participantId).not.toBe(b.participantId);
   });
 
+  test("push() rejects (catchably) when storage.setItem throws (e.g. quota exceeded)", async () => {
+    const { storage, bus } = makeBrowser();
+    // A storage double whose writes fail synchronously, as a real QuotaExceededError does.
+    const throwingStorage: SlotStorage = {
+      get length() {
+        return storage.length;
+      },
+      key: (i) => storage.key(i),
+      getItem: (k) => storage.getItem(k),
+      setItem: () => {
+        const err = new Error("QuotaExceededError");
+        err.name = "QuotaExceededError";
+        throw err;
+      },
+      removeItem: (k) => storage.removeItem(k),
+    };
+    const a = new LocalAdapter({
+      sessionId: "sess",
+      storage: throwingStorage,
+      signal: bus.newSignal(),
+      participantId: "alice",
+    });
+    await a.connect();
+    // The synchronous setItem throw must surface through the returned promise, not escape past
+    // .catch() as a synchronous throw from a Promise-returning method.
+    await expect(a.push({ x: 1 })).rejects.toThrow(/quota/i);
+  });
+
+  test("constructor rejects a sessionId containing ':'", () => {
+    const { storage, bus } = makeBrowser();
+    expect(
+      () =>
+        new LocalAdapter({ sessionId: "a:b", storage, signal: bus.newSignal(), participantId: "p" })
+    ).toThrow(/sessionId must not contain ":"/);
+  });
+
+  test("constructor rejects a participantId containing ':'", () => {
+    const { storage, bus } = makeBrowser();
+    expect(
+      () =>
+        new LocalAdapter({
+          sessionId: "sess",
+          storage,
+          signal: bus.newSignal(),
+          participantId: "a:b",
+        })
+    ).toThrow(/participantId must not contain ":"/);
+  });
+
   test("a throwing subscriber does not break the fan-out to others", async () => {
     const { openTab } = makeBrowser();
     const a = openTab({ participantId: "alice" });

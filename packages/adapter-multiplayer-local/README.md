@@ -36,6 +36,8 @@ This per-run namespacing is deliberate: `localStorage` persists across reloads, 
 
 By default a **page refresh starts a new participant** (the old slot becomes a stale ghost — start a fresh session for a clean run). If you want a refresh to rejoin as the *same* participant, pass `persistParticipant: true`; the tab's id is then kept in `sessionStorage` (per-tab, cleared when the tab closes).
 
+> **Caveat — "Duplicate Tab" clones the participant id.** `persistParticipant` relies on `sessionStorage`, and the browser's *Duplicate Tab* feature (and middle-click-open-in-new-tab in some browsers) **copies `sessionStorage` into the new tab**. The duplicate therefore inherits the *same* participantId and the two tabs write the same slot, clobbering each other — so they look like one participant, not two. To bring a second player into a run, open the shared URL (with its `?mp_session=…`) in a **fresh** tab or window rather than duplicating an existing one.
+
 ## Options
 
 ```js
