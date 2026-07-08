@@ -62,7 +62,10 @@ export default class LocalAdapter implements MultiplayerAdapter {
   private readonly sessionId: string;
   private readonly keyPrefix: string;
   private readonly storage: SlotStorage;
-  private readonly signal: ChangeSignal;
+  /** Builds a fresh signal; called on each connect() so a reconnect after disconnect() works. */
+  private readonly createSignal: () => ChangeSignal;
+  /** The live signal while connected; null before connect() and after disconnect(). */
+  private signal: ChangeSignal | null = null;
 
   private connected = false;
   private readonly subscribers = new Set<(data: GroupSessionData) => void>();
@@ -74,18 +77,26 @@ export default class LocalAdapter implements MultiplayerAdapter {
     this.storage = options.storage ?? resolveLocalStorage();
     this.sessionId = options.sessionId ?? resolveSessionId();
     this.participantId =
-      options.participantId ?? resolveParticipantId(this.sessionId, options.persistParticipant);
-    this.signal =
-      options.signal ??
-      createDefaultSignal(
-        `${this.keyPrefix}:${this.sessionId}`,
-        slotPrefix(this.keyPrefix, this.sessionId)
-      );
+      options.participantId ??
+      resolveParticipantId(this.keyPrefix, this.sessionId, options.persistParticipant);
+    // Store a factory, not a signal instance: disconnect() closes the signal (releasing the
+    // BroadcastChannel and storage listener), and a later connect() must build a fresh one — a
+    // reused closed signal would silently never receive cross-tab updates again. An injected signal
+    // is returned as-is (the injector owns its lifecycle).
+    const injected = options.signal;
+    this.createSignal = injected
+      ? () => injected
+      : () =>
+          createDefaultSignal(
+            `${this.keyPrefix}:${this.sessionId}`,
+            slotPrefix(this.keyPrefix, this.sessionId)
+          );
   }
 
   connect(): Promise<void> {
     if (!this.connected) {
       this.connected = true;
+      this.signal = this.createSignal();
       // A signal from another tab means the store changed — re-read and fan out to our subscribers.
       this.signal.onChange(() => this.scheduleNotify());
     }
@@ -104,8 +115,8 @@ export default class LocalAdapter implements MultiplayerAdapter {
     // scheduleNotify) rather than synchronously so a subscriber that reacts by pushing again can't
     // recurse into this call or observe the store mid-update.
     this.scheduleNotify();
-    // Tell the other tabs to re-read.
-    this.signal.post();
+    // Tell the other tabs to re-read. (signal is non-null whenever connected.)
+    this.signal?.post();
     return Promise.resolve();
   }
 
@@ -129,11 +140,16 @@ export default class LocalAdapter implements MultiplayerAdapter {
     // includes us (a lingering slot would inflate their group_size).
     if (this.connected) {
       removeSlot(this.storage, this.keyPrefix, this.sessionId, this.participantId);
-      this.signal.post();
+      this.signal?.post();
     }
-    this.signal.close();
+    this.signal?.close();
+    // Null the signal so a later connect() rebuilds a fresh one (see createSignal).
+    this.signal = null;
     this.subscribers.clear();
     this.connected = false;
+    // Note: a persisted participant id (persistParticipant) is intentionally left in sessionStorage
+    // so a refresh rejoins as the same participant. Its slot was removed above and is re-created on
+    // the next push — the brief gap is expected for the rejoin-on-refresh flow.
     return Promise.resolve();
   }
 
@@ -193,11 +209,15 @@ function resolveSessionId(): string {
 }
 
 /** Resolve this tab's participant id, optionally persisting it per-tab for rejoin-on-refresh. */
-function resolveParticipantId(sessionId: string, persist: boolean | undefined): string {
+function resolveParticipantId(
+  keyPrefix: string,
+  sessionId: string,
+  persist: boolean | undefined
+): string {
   if (!persist || typeof sessionStorage === "undefined") {
     return generateId();
   }
-  const key = `mp:participant:${sessionId}`;
+  const key = `${keyPrefix}:participant:${sessionId}`;
   try {
     const existing = sessionStorage.getItem(key);
     if (existing) return existing;

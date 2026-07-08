@@ -39,13 +39,15 @@ class BusSignal implements ChangeSignal {
   private handler: (() => void) | null = null;
   constructor(private peers: Set<BusSignal>) {}
   post(): void {
+    // Only peers with a live handler (i.e. currently connected) receive the ping.
     for (const s of this.peers) if (s !== this && s.handler) s.handler();
   }
   onChange(handler: () => void): void {
     this.handler = handler;
   }
   close(): void {
-    this.peers.delete(this);
+    // Drop only the handler, not membership — a reconnect re-registers via onChange. This mirrors
+    // the real adapter, which rebuilds a fresh signal on connect() after disconnect() closed the old.
     this.handler = null;
   }
 }
@@ -180,6 +182,23 @@ describe("LocalAdapter", () => {
     await flush();
     expect(bob.getAll()).toEqual({ bob: { here: true } });
     expect(bobSaw.at(-1)).toEqual({ bob: { here: true } });
+  });
+
+  test("reconnect after disconnect resumes cross-tab updates", async () => {
+    const { openTab } = makeBrowser();
+    const alice = openTab({ participantId: "alice" });
+    const bob = openTab({ participantId: "bob" });
+    await alice.connect();
+    await bob.connect();
+
+    await bob.disconnect();
+    await bob.connect(); // reconnect — must re-register for cross-tab signals
+
+    const bobSaw: GroupSessionData[] = [];
+    bob.subscribe((data) => bobSaw.push(data));
+    await alice.push({ msg: "again" });
+    await flush();
+    expect(bobSaw.at(-1)).toEqual({ alice: { msg: "again" } });
   });
 
   test("unsubscribe stops further updates", async () => {
