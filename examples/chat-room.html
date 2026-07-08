@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Multiplayer Chat Room — jsPsych multiplayer</title>
+    <!-- jsPsych core MUST carry the multiplayer API (jsPsych#3694). The published `jspsych` on
+         unpkg does not yet, so this loads it as a placeholder — swap in a build of #3694 to run. -->
+    <script src="https://unpkg.com/jspsych"></script>
+    <script src="https://unpkg.com/@jspsych/plugin-survey-text"></script>
+    <script src="https://unpkg.com/@jspsych/plugin-html-button-response"></script>
+    <!-- The multiplayer packages. These resolve once the sibling packages are built in this repo;
+         once they are published, load them from a CDN instead, e.g.
+           <script src="https://unpkg.com/@jspsych-multiplayer/plugin-multiplayer-chat"></script> -->
+    <script src="../packages/adapter-multiplayer-local/dist/index.browser.min.js"></script>
+    <script src="../packages/plugin-multiplayer-sync/dist/index.browser.min.js"></script>
+    <script src="../packages/plugin-multiplayer-chat/dist/index.browser.min.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/jspsych/css/jspsych.css" />
+  </head>
+
+  <body></body>
+  <script>
+    // ===============================================================================================
+    // Multiplayer Chat Room — a real-time demo for the jsPsych multiplayer packages.
+    //
+    // Participants pick a display name, wait in a lobby until enough people have joined, then chat in
+    // a shared room for a fixed time. It composes three packages so the experiment carries almost no
+    // networking or synchronization code of its own:
+    //   • adapter-multiplayer-local — the network backend. localStorage + cross-tab signalling, so
+    //                                 the whole thing runs by OPENING TWO BROWSER TABS — no server.
+    //                                 (Swap in adapter-multiplayer-jatos for a real, cross-device
+    //                                 deployment; nothing else in the timeline changes.)
+    //   • plugin-multiplayer-sync   — the lobby is one declarative barrier: push your name, wait
+    //                                 until at least MIN_PLAYERS participants are present.
+    //   • plugin-multiplayer-chat   — the room itself: a continuously-open trial that renders the
+    //                                 merged transcript and lets this participant send messages.
+    //
+    // -----------------------------------------------------------------------------------------------
+    // ILLUSTRATIVE example. Unlike the JATOS demos it needs no server, but it still cannot run from a
+    // released jsPsych today: connecting ANY adapter requires the multiplayer API from jsPsych#3694,
+    // which is not yet in a release. Once a #3694 build is in place, this runs for real in two tabs of
+    // one browser (see examples/README.md → "Running it"). The local adapter is same-origin,
+    // same-browser, same-machine — a development/demo tool, NOT for data collection.
+    // ===============================================================================================
+
+    // How many participants must be present before the lobby opens the chat room.
+    const MIN_PLAYERS = 2;
+    // How long the chat room stays open, in milliseconds.
+    const CHAT_DURATION_MS = 5 * 60 * 1000;
+
+    const jsPsych = initJsPsych();
+
+    // Hold the adapter instance so we can read our own participant id below (to label our own
+    // messages "You"). Connecting it is the only network setup the timeline needs.
+    const localAdapter = new jsPsychAdapterMultiplayerLocal();
+
+    // A participant's display name, collected before the lobby and published to the group session so
+    // every client can label messages by name instead of by raw participant id.
+    let myName = "";
+
+    // 1) Ask for a display name.
+    const nameTrial = {
+      type: jsPsychSurveyText,
+      questions: [{ prompt: "Choose a display name for the chat:", required: true, name: "name" }],
+      on_finish: (data) => {
+        myName = (data.response.name || "").trim() || "Anonymous";
+      },
+    };
+
+    // 2) Lobby: publish our name + join time, then wait until enough named players are present.
+    //    push_data is stored under our own slot; the chat plugin preserves it when it later pushes
+    //    messages (it reads its own slot and only rewrites the chat key), so `name` stays available
+    //    to sender_label for the whole session.
+    const lobbyTrial = {
+      type: jsPsychMultiplayerSync,
+      // Re-read myName at runtime (it's set in the previous trial's on_finish).
+      push_data: () => ({ name: myName, joinedAt: Date.now() }),
+      prompt: `<p>Waiting for at least ${MIN_PLAYERS} players to join…</p>
+               <p>Open this page in another tab (keep the <code>?mp_session=</code> in the URL) to add a player.</p>`,
+      // Count only entries that have actually published a name — a peer mid-handshake without one
+      // yet shouldn't tip us over the threshold.
+      wait_for: (group) =>
+        Object.values(group).filter((entry) => entry && entry.name).length >= MIN_PLAYERS,
+    };
+
+    // 3) The chat room.
+    const chatTrial = {
+      type: jsPsychMultiplayerChat,
+      prompt: "<p>You're in! Chat with the other players below.</p>",
+      duration: CHAT_DURATION_MS,
+      end_button_label: "Leave chat",
+      show_roster: true,
+      // Label each message by the sender's chosen name; our own messages read "You". Falls back to a
+      // generic label if a name somehow isn't present (e.g. a peer that left before publishing one).
+      sender_label: (senderId, group) => {
+        if (senderId === localAdapter.participantId) return "You";
+        const entry = group[senderId];
+        return (entry && entry.name) || "A participant";
+      },
+    };
+
+    // 4) Wrap-up screen.
+    const doneTrial = {
+      type: jsPsychHtmlButtonResponse,
+      choices: ["Finish"],
+      stimulus: () => {
+        const chat = jsPsych.data.get().filter({ trial_type: "multiplayer-chat" }).values()[0] || {};
+        const total = chat.message_count ?? 0;
+        const mine = chat.messages_sent ?? 0;
+        return `<h2>Thanks for chatting!</h2>
+                <p>${total} message${total === 1 ? "" : "s"} were exchanged; you sent ${mine}.</p>`;
+      },
+    };
+
+    // Connect the backend, then run. Everything above is backend-agnostic — swapping the adapter on
+    // the line below is the only change needed to move from local two-tab testing to JATOS.
+    jsPsych.pluginAPI.connect(localAdapter).then(() => {
+      jsPsych.run([nameTrial, lobbyTrial, chatTrial, doneTrial]);
+    });
+  </script>
+</html>
