@@ -1,0 +1,10 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "jsPsychMultiplayerRole"
+version: 0.0.1
+license: MIT
+repository-code: "https://github.com/jspsych/jspsych-multiplayer"
+authors:
+  - family-names: "Tsukamoto"
+    given-names: "Hannah"
+    orcid: "https://orcid.org/0009-0008-9840-8413"
