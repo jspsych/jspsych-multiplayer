@@ -2,9 +2,11 @@
 <html>
   <head>
     <title>Multiplayer Chat Room — jsPsych multiplayer</title>
-    <!-- jsPsych core MUST carry the multiplayer API (jsPsych#3694). The published `jspsych` on
-         unpkg does not yet, so this loads it as a placeholder — swap in a build of #3694 to run. -->
-    <script src="https://unpkg.com/jspsych"></script>
+    <!-- jsPsych core MUST carry the multiplayer API (jsPsych#3694), which is not yet in a release.
+         Until it merges, load the PR's preview build from jsDelivr instead of the published `jspsych`.
+         This URL is pinned to #3694 commit 01b8ee4 (preview SHA c43b3a1) and WILL go stale on the next
+         PR commit — see examples/README.md "Running it" for how to find the current one. -->
+    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@c43b3a1f285ef2d899cd43960c889a4a9d630dc9/packages/jspsych/dist/index.browser.min.js"></script>
     <script src="https://unpkg.com/@jspsych/plugin-survey-text"></script>
     <script src="https://unpkg.com/@jspsych/plugin-html-button-response"></script>
     <!-- The multiplayer packages. These resolve once the sibling packages are built in this repo;
@@ -13,7 +15,10 @@
     <script src="../packages/adapter-multiplayer-local/dist/index.browser.min.js"></script>
     <script src="../packages/plugin-multiplayer-sync/dist/index.browser.min.js"></script>
     <script src="../packages/plugin-multiplayer-chat/dist/index.browser.min.js"></script>
-    <link rel="stylesheet" href="https://unpkg.com/jspsych/css/jspsych.css" />
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@c43b3a1f285ef2d899cd43960c889a4a9d630dc9/packages/jspsych/css/jspsych.css"
+    />
   </head>
 
   <body></body>

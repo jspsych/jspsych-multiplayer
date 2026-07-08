@@ -37,28 +37,55 @@ backend-specific — the lobby and chat trials are identical either way.
 
 ### Running it
 
-Unlike the JATOS demos, this example needs **no server** — but it still cannot run from a released
-`jsPsych` today, because connecting any adapter requires the multiplayer API from
-[jsPsych#3694](https://github.com/jspsych/jsPsych/pull/3694), which is not yet in a release. Once a
-#3694 build is in place:
+Unlike the JATOS demos, this example needs **no server infrastructure** — but connecting any adapter
+still requires the multiplayer API from [jsPsych#3694](https://github.com/jspsych/jsPsych/pull/3694),
+which hasn't merged/released yet. Two ways to get that API today:
 
-1. Build the packages from the repo root (their `dist/` is not checked in):
+#### Running it today (pre-#3694): jsDelivr preview build
+
+jsPsych's PR bot publishes a preview build of every commit on #3694, hosted on jsDelivr — no release,
+no vendoring #3694's types locally. `chat-room.html` is wired to use it already:
+
+1. Find the current preview link: open [#3694](https://github.com/jspsych/jsPsych/pull/3694), find the
+   pinned bot comment titled "📦 Preview build ready," and copy the `jspsych` URL under "All package
+   URLs" (plus the matching `jspsych.css` URL). **This link is pinned to a commit SHA and goes stale on
+   every new PR commit** — `chat-room.html`'s `<script>`/`<link>` tags carry the SHA that was current
+   when this was last verified; if the demo stops loading, this is the first thing to check and
+   re-pin. Don't commit-and-forget a pinned URL into every example — this one recipe, re-run as needed,
+   is the durable fix.
+
+2. Build the multiplayer packages from the repo root (their `dist/` is gitignored, not checked in):
 
    ```sh
    npm install && npm run build
    ```
 
-2. Serve the repo over http(s) — **don't** open the file from a `file://` URL, where `localStorage`
+   **If a package's `dist/` already exists and you're not sure it's current**, rebuild anyway — a
+   stale `dist/` built before a since-merged fix silently reproduces bugs that were already fixed
+   upstream (this bit us once: `plugin-multiplayer-chat`'s `dist/` predated its own "make `trial()`
+   synchronous" fix by two hours, and the symptom looked like a jsPsych-core race condition rather
+   than a stale artifact).
+
+3. Serve the repo over http(s) — **don't** open the file from a `file://` URL, where `localStorage`
    origin behavior varies by browser:
 
    ```sh
    npx http-server .
    ```
 
-3. Open the printed URL to `examples/chat-room.html` in one tab. On first load the local adapter mints
+4. Open the printed URL to `examples/chat-room.html` in one tab. On first load the local adapter mints
    a fresh session and writes it into the URL as `?mp_session=…`. **Copy that full URL** (including
    `?mp_session=…`) into a second tab to bring another player into the same room. Opening the bare
    URL again would start a different session.
+
+Verified working end-to-end this way: name entry → lobby → live chat → message delivery across two
+tabs, zero console errors.
+
+#### Running it after #3694 merges
+
+Once #3694 releases, swap `chat-room.html`'s jsPsych `<script>`/`<link>` tags back to the published
+`jspsych` package (e.g. `https://unpkg.com/jspsych`) and repeat steps 2–4 above — nothing else in the
+timeline changes.
 
 Because the local adapter is same-origin, same-browser, same-machine, this is a development and demo
 tool only — not for data collection. For real, multi-participant data use JATOS or another networked
