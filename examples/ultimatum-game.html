@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Multiplayer Ultimatum Game — jsPsych multiplayer</title>
+    <!-- jatos.js is injected by JATOS at runtime; it provides the group session + channel this
+         experiment runs over. -->
+    <script src="jatos.js"></script>
+    <!-- jsPsych core MUST carry the multiplayer API (jsPsych#3694). The published `jspsych` on
+         unpkg does not yet, so this loads it as a placeholder — swap in a build of #3694 to run. -->
+    <script src="https://unpkg.com/jspsych"></script>
+    <script src="https://unpkg.com/@jspsych/plugin-html-button-response"></script>
+    <script src="https://unpkg.com/@jspsych/plugin-html-keyboard-response"></script>
+    <!-- The three multiplayer packages. These resolve once the sibling packages are built in this
+         repo; once they are published, load them from a CDN instead, e.g.
+           <script src="https://unpkg.com/@jspsych-multiplayer/plugin-multiplayer-role"></script> -->
+    <script src="../packages/adapter-multiplayer-jatos/dist/index.browser.min.js"></script>
+    <script src="../packages/plugin-multiplayer-role/dist/index.browser.min.js"></script>
+    <script src="../packages/plugin-multiplayer-sync/dist/index.browser.min.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/jspsych/css/jspsych.css" />
+  </head>
+
+  <body></body>
+  <script>
+    // ===============================================================================================
+    // Multiplayer Ultimatum Game — the end-to-end demo for the jsPsych multiplayer packages.
+    //
+    // Two players split a $10 pot. The PROPOSER offers the RESPONDER some amount; the RESPONDER
+    // accepts (both keep the split) or rejects (both get nothing). It is the canonical turn-based
+    // economic game (Güth, Schmittberger & Schwarze, 1982).
+    //
+    // This rewrite composes three packages so the experiment carries almost no synchronization or
+    // coordination code of its own:
+    //   • adapter-multiplayer-jatos — the network backend (JATOS group session + channel).
+    //   • plugin-multiplayer-role   — assigns proposer/responder by DETERMINISTIC CONSENSUS. This
+    //                                 replaces the hand-rolled "sort the participant ids and take the
+    //                                 first two" block the earlier version ran in the lobby's
+    //                                 on_finish. Every client now computes the SAME role map with no
+    //                                 coordinator, and late arrivals fall to an overflow "spectator".
+    //   • plugin-multiplayer-sync   — every wait-for-the-other-player point is one declarative trial
+    //                                 (push your data, wait until a condition over the group holds).
+    //
+    // -----------------------------------------------------------------------------------------------
+    // ILLUSTRATIVE example — it shows how the packages fit together; it is NOT runnable from a single
+    // browser tab today. To actually run it you need:
+    //   1. a jsPsych core that includes the multiplayer API (jsPsych#3694), not yet in a release;
+    //   2. the JATOS environment (so the `jatos` global and a group study exist); and
+    //   3. at least two real participants in the same JATOS group.
+    //
+    // Adapted from the author's ultimatum-game demo in jsPsych#3694 (MIT). The hand-rolled role
+    // block there becomes the plugin-multiplayer-role trial below.
+    // ===============================================================================================
+    jatos.onLoad(async () => {
+      const jsPsych = initJsPsych({ on_finish: () => jatos.endStudy() });
+
+      // Connect the network backend before running. Every multiplayer trial below talks to the group
+      // session through this adapter; nothing about the timeline is JATOS-specific.
+      await jsPsych.pluginAPI.connect(new jsPsychAdapterMultiplayerJatos());
+
+      const POT = 10;
+
+      // How long a mid-game barrier waits for the other player before concluding they have left.
+      // This is the sync plugin's `timeout` parameter (milliseconds) — edit it freely to suit your
+      // population. Keep it comfortably longer than a real participant needs to read and respond, so a
+      // slow-but-present player is never mistaken for an absent one (a responder pondering an offer can
+      // easily exceed the role plugin's 30 s default, so we use 60 s here).
+      const PARTNER_TIMEOUT_MS = 60000;
+
+      let myRole; // "proposer" | "responder" | "spectator" (undefined if role assignment timed out)
+      let proposerId;
+      let responderId;
+      let myJoinedAt; // this client's join timestamp, read back after role assignment (see below)
+      let proposerOffer; // integer 0–10
+      let responderDecision; // "accept" | "reject"
+      let partnerLeft = false; // set if a mid-game barrier times out waiting for the other player
+
+      // ── Lobby ────────────────────────────────────────────────────────────────────────────────
+      // Push a ready signal and hold until at least two players are present. This is the membership
+      // barrier: it caps the group the role trial then assigns over.
+      const lobby = {
+        type: jsPsychMultiplayerSync,
+        push_data: { status: "ready" },
+        wait_for: (group) => Object.keys(group).length >= 2,
+        message: "<p>Waiting for another player to join…</p>",
+      };
+
+      // ── Role assignment (deterministic consensus) ──────────────────────────────────────────────
+      // The first two participants become proposer and responder; everyone beyond the two declared
+      // slots gets the overflow role "spectator". Ordering is by `joinedAt`, a timestamp the role
+      // plugin stamps ONCE when its own trial starts — i.e. near-simultaneously on the clients
+      // leaving the lobby — with ties broken deterministically by participant id. Because every
+      // later push below carries `joinedAt` forward, a spectator who joins mid-game still sees both
+      // players' original timestamps and computes the SAME pair, so the assignment stays stable
+      // without any extra coordination.
+      //
+      // `ready` gates WHEN a snapshot is safe to assign over, and it must keep BOTH conditions:
+      //   • membership: at least two participants are present (re-asserting the lobby's guarantee);
+      //   • field readiness: every present entry carries the data `join_order` sorts on. A custom
+      //     `ready` REPLACES the plugin's strategy-derived gate, so a count-only predicate would let
+      //     each client assign the moment it sees the peer's lobby entry — before the peer's
+      //     `joinedAt` lands. Each would sort the peer's missing timestamp as 0, conclude the OTHER
+      //     client is the proposer, and both would sit waiting for an offer until the barriers
+      //     time out. An entry counts as field-ready if it has `joinedAt`, or if it is unmistakably
+      //     a mid-game player (it carries `offer`/`decision`) — that fallback keeps a late
+      //     spectator's gate live even if a future edit drops `joinedAt` from a mid-game push.
+      const assignRoles = {
+        type: jsPsychMultiplayerRole,
+        roles: ["proposer", "responder"],
+        strategy: "join_order",
+        overflow_role: "spectator",
+        ready: (group) =>
+          Object.keys(group).length >= 2 &&
+          Object.values(group).every(
+            (entry) =>
+              entry.joinedAt != null || entry.offer !== undefined || entry.decision !== undefined
+          ),
+        // Save the snapshot the roles were computed over so on_finish can read back `joinedAt`.
+        save_group: true,
+        message: "<p>Assigning roles…</p>",
+        on_finish: (data) => {
+          myRole = jsPsychMultiplayerRole.getMyRole();
+          // The role plugin also exposes WHO holds each role, so the game can read their pushed data.
+          const byRole = jsPsychMultiplayerRole.participantsByRole();
+          proposerId = byRole.proposer?.[0];
+          responderId = byRole.responder?.[0];
+          // Capture this client's `joinedAt`. The sync plugin pushes `push_data` verbatim and the
+          // adapter replaces this participant's WHOLE group-session entry on push, so every
+          // mid-game push below must spread `joinedAt` back in — otherwise the first push would
+          // erase it, and a late spectator (whose `ready` gate and `join_order` both read it) could
+          // stall to a timeout or compute a different proposer/responder pair.
+          myJoinedAt = data.group?.[jsPsych.pluginAPI.participantId]?.joinedAt;
+        },
+      };
+
+      // ── Spectator: a third+ participant who arrived after the game was full ─────────────────────
+      const gameFull = {
+        timeline: [
+          {
+            type: jsPsychHtmlKeyboardResponse,
+            stimulus: "<p>Sorry, this game is already full. Thank you for your interest.</p>",
+            choices: "NO_KEYS",
+            trial_duration: 4000,
+            on_finish: () => jsPsych.pluginAPI.disconnect(),
+          },
+        ],
+        conditional_function: () => myRole === "spectator",
+      };
+
+      // ── Proposer: choose an offer ──────────────────────────────────────────────────────────────
+      const proposerOfferTrial = {
+        type: jsPsychHtmlButtonResponse,
+        stimulus: `
+          <p>You are the <strong>Proposer</strong>.</p>
+          <p>There is <strong>$${POT}</strong> in the pot.</p>
+          <p>Choose how much to offer the Responder. You keep the rest.</p>
+        `,
+        choices: Array.from({ length: POT + 1 }, (_, index) => `$${index}`),
+        on_finish: (data) => {
+          proposerOffer = data.response; // button index equals dollar amount
+        },
+      };
+
+      // ── Proposer: send the offer, then wait for the responder's decision ───────────────────────
+      // `timeout` + `on_timeout` are how the sync plugin handles an abandoned partner: if the
+      // responder never decides, the barrier ends, we note it, and the timeline routes to a "left"
+      // screen instead of hanging forever. The handling stays declarative — one flag, no bespoke
+      // coordination — so the experiment still carries essentially no synchronization code of its own.
+      const proposerWaitTrial = {
+        type: jsPsychMultiplayerSync,
+        // `joinedAt` rides along because a push replaces this client's whole entry (see assignRoles).
+        push_data: () => ({ offer: proposerOffer, joinedAt: myJoinedAt }),
+        wait_for: (group) => group[responderId]?.decision !== undefined,
+        timeout: PARTNER_TIMEOUT_MS,
+        on_timeout: () => {
+          partnerLeft = true;
+        },
+        message: () => `
+          <p>You offered the Responder <strong>$${proposerOffer}</strong> and kept $${POT - proposerOffer}.</p>
+          <p>Waiting for the Responder…</p>
+        `,
+        on_finish: (data) => {
+          // On timeout the barrier ends without the condition met, so guard the read.
+          if (data.timed_out) return;
+          responderDecision = data.group[responderId].decision;
+        },
+      };
+
+      const proposerTimeline = {
+        timeline: [proposerOfferTrial, proposerWaitTrial],
+        conditional_function: () => myRole === "proposer",
+      };
+
+      // ── Responder: wait for the proposer's offer ───────────────────────────────────────────────
+      const responderWaitTrial = {
+        type: jsPsychMultiplayerSync,
+        wait_for: (group) => group[proposerId]?.offer !== undefined,
+        timeout: PARTNER_TIMEOUT_MS,
+        on_timeout: () => {
+          partnerLeft = true;
+        },
+        message: "<p>Waiting for the Proposer's offer…</p>",
+        on_finish: (data) => {
+          if (data.timed_out) return;
+          proposerOffer = data.group[proposerId].offer;
+        },
+      };
+
+      // ── Responder: accept or reject ────────────────────────────────────────────────────────────
+      const responderDecisionTrial = {
+        type: jsPsychHtmlButtonResponse,
+        stimulus: () => `
+          <p>You are the <strong>Responder</strong>.</p>
+          <p>The Proposer offered you <strong>$${proposerOffer}</strong> and kept $${POT - proposerOffer}.</p>
+          <p>Do you accept?</p>
+        `,
+        choices: ["Accept", "Reject"],
+        on_finish: (data) => {
+          responderDecision = data.response === 0 ? "accept" : "reject";
+        },
+      };
+
+      // ── Responder: send the decision ───────────────────────────────────────────────────────────
+      const responderSendDecisionTrial = {
+        type: jsPsychMultiplayerSync,
+        // `joinedAt` rides along because a push replaces this client's whole entry (see assignRoles).
+        push_data: () => ({ decision: responderDecision, joinedAt: myJoinedAt }),
+        // Resolve as soon as our own decision is visible in the group session.
+        wait_for: (group) => group[responderId]?.decision !== undefined,
+        message: "<p>Sending your decision…</p>",
+      };
+
+      const responderTimeline = {
+        timeline: [
+          responderWaitTrial,
+          {
+            // Only decide if the proposer actually made an offer — skipped if they abandoned.
+            timeline: [responderDecisionTrial, responderSendDecisionTrial],
+            conditional_function: () => !partnerLeft,
+          },
+        ],
+        conditional_function: () => myRole === "responder",
+      };
+
+      // ── Both players: outcome ──────────────────────────────────────────────────────────────────
+      const outcomeTrial = {
+        type: jsPsychHtmlKeyboardResponse,
+        stimulus: () => {
+          const accepted = responderDecision === "accept";
+          const proposerEarns = accepted ? POT - proposerOffer : 0;
+          const responderEarns = accepted ? proposerOffer : 0;
+
+          const verdict = accepted
+            ? `<p style="color:green">The offer was <strong>accepted</strong>.</p>`
+            : `<p style="color:red">The offer was <strong>rejected</strong>. Both players earn $0.</p>`;
+
+          return myRole === "proposer"
+            ? `${verdict}
+               <p>You offered $${proposerOffer} and kept $${POT - proposerOffer}.</p>
+               <p>You earn: <strong>$${proposerEarns}</strong></p>`
+            : `${verdict}
+               <p>The Proposer offered you $${proposerOffer}.</p>
+               <p>You earn: <strong>$${responderEarns}</strong></p>`;
+        },
+        choices: [" "],
+        prompt: "<p>Press space to finish.</p>",
+      };
+
+      // Shown instead of the outcome when a mid-game barrier timed out — i.e. the other player left.
+      const partnerLeftScreen = {
+        timeline: [
+          {
+            type: jsPsychHtmlKeyboardResponse,
+            stimulus:
+              "<p>The other player left the game, so this round could not be completed.</p>" +
+              "<p>Thank you for playing.</p>",
+            choices: [" "],
+            prompt: "<p>Press space to finish.</p>",
+          },
+        ],
+        conditional_function: () => partnerLeft,
+      };
+
+      // The outcome runs only if both players saw the round through.
+      const outcome = {
+        timeline: [outcomeTrial],
+        conditional_function: () => !partnerLeft,
+      };
+
+      // ── Fallback: role assignment timed out ────────────────────────────────────────────────────
+      // If readiness is never reached within the role trial's timeout (e.g. a peer disappears
+      // between the lobby and the role trial), the trial ends with no role. Such a client is
+      // neither an active player nor a spectator, so give it an explicit exit screen instead of
+      // letting it fall off the end of the timeline onto a blank page.
+      const noGroupScreen = {
+        timeline: [
+          {
+            type: jsPsychHtmlKeyboardResponse,
+            stimulus: "<p>Could not form a group — the session has ended.</p>",
+            choices: "NO_KEYS",
+            trial_duration: 4000,
+            on_finish: () => jsPsych.pluginAPI.disconnect(),
+          },
+        ],
+        conditional_function: () => myRole == null,
+      };
+
+      // The game runs only for the two active players (proposer/responder); spectators saw the
+      // "game full" screen and a timed-out client saw the "could not form a group" screen above.
+      const gameTimeline = {
+        timeline: [proposerTimeline, responderTimeline, partnerLeftScreen, outcome],
+        conditional_function: () => myRole === "proposer" || myRole === "responder",
+      };
+
+      await jsPsych.run([lobby, assignRoles, gameFull, noGroupScreen, gameTimeline]);
+    });
+  </script>
+</html>
