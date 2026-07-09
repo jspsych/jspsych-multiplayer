@@ -172,7 +172,22 @@ a `trial_duration` below `PARTNER_TIMEOUT_MS`, so a slow-but-present player is f
 choice before they can ever be read as absent. This demo leaves that off by default — it imposes an
 auto-advance and a forced decision, which is a behavioral choice better made deliberately than baked in.
 
-### Running it
+### `ultimatum-game-local.html`
+
+The same game, wired to `adapter-multiplayer-local` instead of `adapter-multiplayer-jatos` (and
+without the `jatos.onLoad` wrapper), so it runs from **two browser tabs on one machine, no server** —
+the same local-adapter setup `chat-room.html` uses. Everything else in the timeline (role assignment,
+sync barriers, outcome screens) is identical to `ultimatum-game.html`; see that section above for the
+full design notes.
+
+Use this file for iterating on the game logic itself. Use `ultimatum-game.html` when you want to test
+against a real JATOS deployment.
+
+Run it the same way as `chat-room.html`: build the packages, serve the repo over http(s), open the
+file in one tab, then copy the full URL (including `?mp_session=…`) into a second tab. See
+`chat-room.html`'s "Running it" section above for the jsDelivr preview build and step-by-step details.
+
+### Running it (`ultimatum-game.html`)
 
 This example is **illustrative** — it cannot run from a single browser tab today. It requires:
 
