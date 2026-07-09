@@ -69,7 +69,13 @@
     // 1) Ask for a display name.
     const nameTrial = {
       type: jsPsychSurveyText,
-      questions: [{ prompt: "Choose a display name for the chat:", required: true, name: "name" }],
+      questions: [
+        {
+          prompt: "Choose a display name — this is what other participants will see you as in the chat:",
+          required: true,
+          name: "name",
+        },
+      ],
       on_finish: (data) => {
         myName = (data.response.name || "").trim() || "Anonymous";
       },
