@@ -1,6 +1,6 @@
 {
   "name": "@jspsych-multiplayer/plugin-multiplayer-role",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "jsPsych plugin: assign multiplayer group roles by deterministic consensus",
   "type": "module",
   "main": "dist/index.cjs",

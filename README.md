@@ -45,12 +45,17 @@ The contributed packages can be found in the `/packages` directory. Plugins are 
 
 Plugin | Contributor | Description
 ----------- | ----------- | -----------
+[multiplayer-chat](https://github.com/jspsych/jspsych-multiplayer/blob/main/packages/plugin-multiplayer-chat/README.md) | [Hannah Tsukamoto](https://github.com/htsukamoto5) | jsPsych plugin: real-time chat room for the multiplayer API 
+[multiplayer-role](https://github.com/jspsych/jspsych-multiplayer/blob/main/packages/plugin-multiplayer-role/README.md) | [Hannah Tsukamoto](https://github.com/htsukamoto5) | jsPsych plugin: assign multiplayer group roles by deterministic consensus 
+[multiplayer-sync](https://github.com/jspsych/jspsych-multiplayer/blob/main/packages/plugin-multiplayer-sync/README.md) | [Hannah Tsukamoto](https://github.com/htsukamoto5) | jsPsych plugin: synchronization barrier (push → wait) for the multiplayer API 
 
 
 ### Adapters
 
 Adapter | Contributor | Description
 ----------- | ----------- | -----------
+[multiplayer-jatos](https://github.com/jspsych/jspsych-multiplayer/blob/main/packages/adapter-multiplayer-jatos/README.md) | [Hannah Tsukamoto](https://github.com/htsukamoto5) | JATOS group study adapter for the jsPsych multiplayer API 
+[multiplayer-local](https://github.com/jspsych/jspsych-multiplayer/blob/main/packages/adapter-multiplayer-local/README.md) | [Hannah Tsukamoto](https://github.com/htsukamoto5) | Zero-infrastructure localStorage adapter for the jsPsych multiplayer API (local dev/demo only) 
 
 ## Guidelines for contributions
 ### Contribution requirements

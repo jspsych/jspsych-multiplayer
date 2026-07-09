@@ -1,6 +1,6 @@
 {
   "name": "@jspsych-multiplayer/plugin-multiplayer-chat",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "jsPsych plugin: real-time chat room for the multiplayer API",
   "type": "module",
   "main": "dist/index.cjs",
