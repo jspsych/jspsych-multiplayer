@@ -1,6 +1,6 @@
 {
   "name": "@jspsych-multiplayer/adapter-multiplayer-local",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Zero-infrastructure localStorage adapter for the jsPsych multiplayer API (local dev/demo only)",
   "type": "module",
   "main": "dist/index.cjs",

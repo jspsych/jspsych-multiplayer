@@ -1,6 +1,6 @@
 {
   "name": "@jspsych-multiplayer/adapter-multiplayer-jatos",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "JATOS group study adapter for the jsPsych multiplayer API",
   "type": "module",
   "main": "dist/index.cjs",
