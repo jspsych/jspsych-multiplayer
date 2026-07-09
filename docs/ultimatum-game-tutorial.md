@@ -186,8 +186,9 @@ Piece by piece:
   the instant it sees the peer's lobby entry — possibly before the peer's `joinedAt` lands — sort
   the missing timestamp as 0, conclude the *other* client is the proposer, and both would sit
   waiting for an offer that never comes. (The `entry.offer !== undefined || entry.decision !==
-  undefined` fallback keeps the gate live for a spectator who arrives mid-game and sees entries that
-  are unmistakably mid-round.)
+  undefined` fallback is a deliberate liveness choice for one buggy-edit case — when the carry rule
+  below is followed, it never fires. The end of Section 7 covers exactly what it does and doesn't
+  protect.)
 - **`on_finish` captures what the rest of the timeline needs**: this client's role (via the
   `getMyRole()` static), the two player IDs by role (via `participantsByRole()`), and — because
   `save_group: true` saved the snapshot the roles were computed over — this client's own `joinedAt`.
@@ -215,8 +216,9 @@ push_data: () => ({ decision: responderDecision, joinedAt: myJoinedAt }),
 
 Walk through what happens *without* it. The proposer pushes a bare `{ offer: 9 }`. Because pushes
 replace rather than merge (Section 2), the proposer's slot — which the role trial had left as
-`{ status: "ready", joinedAt: 1783619087856 }` — is now just `{ offer: 9 }`. The timestamp that
-determined who the proposer *is* has been erased from the shared state.
+`{ status: "ready", joinedAt: 1783619087856, rounds: { "0": {} } }` (the `rounds` key is the role
+plugin's own per-round bookkeeping) — is now just `{ offer: 9 }`. The timestamp that determined who
+the proposer *is* has been erased from the shared state.
 
 Between the two original players, nothing visibly breaks at first — they already captured their
 roles in local variables. The failure arrives with the next client that has to *compute* roles from
@@ -233,13 +235,30 @@ Hence the pattern, in three steps, all visible in Section 6's and Section 8–9'
 1. **Capture:** `save_group: true` on the role trial, then in `on_finish` read your own slot's
    `joinedAt` into a variable (`myJoinedAt`).
 2. **Carry:** include `joinedAt: myJoinedAt` in every subsequent `push_data`.
-3. **Guard:** the role trial's `ready` predicate refuses to assign over entries missing their sort
-   field, so even a future edit that forgets step 2 fails loudly (assignment waits) rather than
-   silently diverging.
+3. **Guard — for initial assignment only:** the role trial's `ready` predicate refuses to assign
+   over a lobby entry whose `joinedAt` hasn't landed yet, closing the race described in Section 6.
+   It does *not* catch a forgotten carry: the predicate's fallback clause deliberately admits
+   mid-game entries (`offer` or `decision` present), so a bare `{ offer: 9 }` slot passes the gate
+   and a late joiner assigns over it anyway — sorting the missing timestamp as 0, exactly the
+   silent divergence above. For everything after initial assignment, the carry rule (step 2) is
+   the **only** protection.
+
+Why does the example's gate tolerate that, rather than being strict so a forgotten carry at least
+fails loudly? Because the divergence it admits is *inert in this design*, and strictness would
+punish the wrong person. A missing timestamp sorts **first**, never last — so a late joiner can
+never sort ahead of a timestamp-less player into a player slot; it always still lands in the
+overflow role, still routes to the "game full" screen, and never acts on who it *thinks* the pair
+is. A strict gate would instead leave that innocent spectator hanging until the role trial's 30 s
+timeout and exit them through "could not form a group" — trading a graceful participant experience
+for a loud dev-time signal about a bug the carry rule already owns. If you adapt this design so
+that late joiners *do* act on the computed role map, revisit that trade: strictness may then be
+worth it.
 
 The general form of the rule outlives this example: **whatever fields of your slot other clients
-depend on, every push must carry them forward.** The chat-room example obeys the same law with a
-different field — participants publish `name` in the lobby, and the chat plugin re-reads its own
+depend on, every push must carry them forward** — and *only* them: the correct pushes above still
+happily erase `status` and the role plugin's `rounds` key, because nothing downstream reads those.
+The rule is not "preserve everything"; it's "preserve what other clients depend on." The chat-room
+example obeys the same law with a different field — participants publish `name` in the lobby, and the chat plugin re-reads its own
 slot and rewrites only the chat keys so `name` survives. If you build your own multiplayer flow on
 this API, "what does this push erase?" is the review question to ask at every `push_data`.
 
