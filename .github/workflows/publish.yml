@@ -37,12 +37,16 @@ jobs:
         with:
           node-version: 24.x
 
-      # Trusted publishing requires npm >= 11.5.1, but the npm minor bundled with Node 24
-      # varies by point release. Pin the npm 12 major (requires Node 22+) rather than
-      # npm@latest, so a future npm major that raises its Node requirement can't break
-      # this job again (npm 12 broke it on the previous Node 20 runner).
+      # Trusted publishing requires npm >= 11.5.1, but the npm bundled with Node 24 varies by
+      # point release, so pin explicitly rather than relying on npm@latest.
+      #
+      # Pin the npm 11 major, NOT npm@12: npm 12.0.0 bundles `sigstore` only under
+      # node_modules/pacote/node_modules and workspaces/libnpmpublish/node_modules, neither of
+      # which is resolvable from the installed node_modules/libnpmpublish. With
+      # NPM_CONFIG_PROVENANCE=true the publish then dies with "Cannot find module 'sigstore'".
+      # npm 11 hoists sigstore to the top level (node_modules/sigstore), so provenance works.
       - name: Upgrade npm to a version that supports trusted publishing
-        run: npm install -g npm@12
+        run: npm install -g npm@11
 
       - name: Install dependencies
         run: npm ci
