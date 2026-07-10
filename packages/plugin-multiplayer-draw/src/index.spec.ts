@@ -342,6 +342,24 @@ describe("multiplayer-draw plugin", () => {
     expect(roster.textContent).toContain("peer");
   });
 
+  it("labels roster entries via roster_label when provided", async () => {
+    const api = new MockApi("me");
+    api.pushAs("peer", { name: "Bob" });
+    const { jsPsych } = makeJsPsych(api);
+    const el = display();
+
+    await new MultiplayerDrawPlugin(jsPsych as never).trial(el, {
+      ...base,
+      show_roster: true,
+      roster_label: (id: string, group: GroupSessionData) =>
+        id === "me" ? "You" : (group[id] as any)?.name ?? id,
+    } as never);
+
+    const roster = el.querySelector(".jspsych-multiplayer-draw-roster") as HTMLElement;
+    expect(roster.textContent).toContain("Bob");
+    expect(roster.textContent).not.toContain("peer");
+  });
+
   it("clears a peer's LAST stroke when they undo it to an empty array (full repaint)", async () => {
     // Regression guard: a peer undoing down to zero strokes leaves their slot as { draw_strokes: [] }.
     // applyUpdate must still detect the vanished stroke and full-repaint — otherwise the peer's last

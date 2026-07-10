@@ -31,6 +31,7 @@ await jsPsych.run(timeline);
 | `end_button_label`   | string      | `null`                | If set, show a button with this label that ends the trial when clicked. `null` hides it.                                                 |
 | `end_when`           | function    | `null`                | Predicate `(group) => boolean` evaluated on every update; the trial ends when it returns true.                                           |
 | `show_roster`        | boolean     | `false`               | Show the list of participants currently present in the group session.                                                                    |
+| `roster_label`       | function    | `null`                | `(participantId, group) => string` — how to label each participant in the roster. Defaults to the raw participant id; supply to show names. |
 | `store_full_strokes` | boolean     | `true`                | Include full stroke point arrays in trial data. Set `false` to store only counts (see "Payload growth" below).                           |
 
 > **Set at least one end condition** (`duration`, `end_button_label`, or `end_when`). With none, the trial can never end, and the plugin logs a warning.

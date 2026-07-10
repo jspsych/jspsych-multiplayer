@@ -91,6 +91,15 @@ const info = <const>{
       type: ParameterType.BOOL,
       default: false,
     },
+    /**
+     * How to label each participant in the roster. `(participantId, group) => string`. Defaults to
+     * showing the raw participant id; supply this to show display names (e.g. read a `name` field a
+     * lobby pushed into each participant's slot). Only used when `show_roster` is true.
+     */
+    roster_label: {
+      type: ParameterType.FUNCTION,
+      default: null,
+    },
     /** Include the full stroke arrays (with points) in trial data. Set false to store only counts. */
     store_full_strokes: {
       type: ParameterType.BOOL,
@@ -226,6 +235,11 @@ class MultiplayerDrawPlugin implements JsPsychPlugin<Info> {
       ".jspsych-multiplayer-draw-canvas"
     ) as HTMLCanvasElement;
     const ctx = canvas.getContext("2d") as CanvasRenderingContext2D;
+    // Suppress text selection and touch scrolling/panning on the canvas so a drag always draws
+    // rather than selecting or scrolling the page. (Complements preventDefault in onPointerDown.)
+    canvas.style.touchAction = "none";
+    canvas.style.userSelect = "none";
+    (canvas.style as CSSStyleDeclaration & { webkitUserSelect?: string }).webkitUserSelect = "none";
     const roster = display_element.querySelector(
       ".jspsych-multiplayer-draw-roster"
     ) as HTMLElement | null;
@@ -374,8 +388,17 @@ class MultiplayerDrawPlugin implements JsPsychPlugin<Info> {
 
     function updateRoster(group: GroupSessionData) {
       if (!roster) return;
-      const names = Object.keys(group);
-      roster.textContent = names.length ? `Present: ${names.join(", ")}` : "";
+      const labels = Object.keys(group).map((id) => {
+        if (typeof trial.roster_label === "function") {
+          try {
+            return String(trial.roster_label(id, group));
+          } catch {
+            // A throwing label function must not break rendering — fall back to the raw id.
+          }
+        }
+        return id;
+      });
+      roster.textContent = labels.length ? `Present: ${labels.join(", ")}` : "";
     }
 
     // --- Pushing (throttled while a stroke is active; see docs/draw-plugin-design.md) -------------
@@ -406,6 +429,10 @@ class MultiplayerDrawPlugin implements JsPsychPlugin<Info> {
 
     const onPointerDown = (e: PointerEvent) => {
       if (ended) return;
+      // Claim the gesture: without this, pressing on the canvas while text elsewhere on the page is
+      // selected is interpreted as a native drag of that selection (the cursor turns into a "no"
+      // symbol and only single dots register). preventDefault suppresses that drag.
+      e.preventDefault();
       // Not implemented in every test/DOM environment (e.g. jsdom) — real browsers all support it.
       canvas.setPointerCapture?.(e.pointerId);
       const p = pointFromEvent(e);

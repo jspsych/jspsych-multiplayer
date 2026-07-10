@@ -142,14 +142,20 @@
         Object.values(group).filter((entry) => entry && entry.name).length >= MIN_PLAYERS,
     };
 
-    // 3) The shared canvas. The roster shows raw participant ids (the draw plugin labels by id, not by
-    //    the lobby name); everything else is drawing.
+    // 3) The shared canvas. roster_label turns each participant id into the display name that the
+    //    lobby pushed into that participant's slot (falling back to a generic label), so the roster
+    //    reads "Present: Alice, Bob" instead of raw ids. Our own entry reads "You".
     const drawTrial = {
       type: jsPsychMultiplayerDraw,
       prompt: "<p>You're in! Draw together on the shared canvas below.</p>",
       duration: DRAW_DURATION_MS,
       end_button_label: "I'm done",
       show_roster: true,
+      roster_label: (participantId, group) => {
+        if (participantId === localAdapter.participantId) return "You";
+        const entry = group[participantId];
+        return (entry && entry.name) || "A participant";
+      },
     };
 
     // 4) Wrap-up screen.
