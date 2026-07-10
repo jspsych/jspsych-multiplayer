@@ -14,9 +14,11 @@
          `npm install && npm run build` from the repo root first — dist/ is gitignored). Once they are
          published, load them from a CDN instead, e.g.
            <script src="https://unpkg.com/@jspsych-multiplayer/plugin-multiplayer-draw"></script> -->
-    <script src="../packages/adapter-multiplayer-local/dist/index.browser.min.js"></script>
-    <script src="../packages/plugin-multiplayer-sync/dist/index.browser.min.js"></script>
-    <script src="../packages/plugin-multiplayer-draw/dist/index.browser.min.js"></script>
+    <!-- The `?v=` query is a cache-buster: bump it after rebuilding the packages so the browser is
+         forced to re-fetch the new bundle instead of serving a stale cached copy. -->
+    <script src="../packages/adapter-multiplayer-local/dist/index.browser.min.js?v=2"></script>
+    <script src="../packages/plugin-multiplayer-sync/dist/index.browser.min.js?v=2"></script>
+    <script src="../packages/plugin-multiplayer-draw/dist/index.browser.min.js?v=2"></script>
     <link
       rel="stylesheet"
       href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@c43b3a1f285ef2d899cd43960c889a4a9d630dc9/packages/jspsych/css/jspsych.css"
@@ -40,6 +42,14 @@
         border-radius: 50%;
         cursor: pointer;
         padding: 0;
+        /* Center the (variable-size) brush dot and keep every button on the same baseline — without
+           this, the largest dot's bigger font-size pushes its button up and off-center. */
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        vertical-align: middle;
+        overflow: hidden;
+        box-sizing: border-box;
       }
       .jspsych-multiplayer-draw-color.is-selected,
       .jspsych-multiplayer-draw-size.is-selected,
