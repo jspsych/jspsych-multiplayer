@@ -94,6 +94,16 @@
         display: block;
         margin: 12px auto 0;
       }
+      .drawing-result img {
+        display: block;
+        max-width: 90vw;
+        border: 1px solid #333;
+        margin: 12px auto;
+      }
+      .drawing-result a.download-link {
+        display: inline-block;
+        margin-bottom: 8px;
+      }
     </style>
   </head>
 
@@ -155,6 +165,7 @@
     // 3) The shared canvas. roster_label turns each participant id into the display name that the
     //    lobby pushed into that participant's slot (falling back to a generic label), so the roster
     //    reads "Present: Alice, Bob" instead of raw ids. Our own entry reads "You".
+    let drawingDataUrl = null;
     const drawTrial = {
       type: jsPsychMultiplayerDraw,
       prompt: "<p>You're in! Draw together on the shared canvas below.</p>",
@@ -166,9 +177,20 @@
         const entry = group[participantId];
         return (entry && entry.name) || "A participant";
       },
+      // Capture the final canvas as a PNG data URL for the wrap-up screen below. This is DEMO-side
+      // logic, not a plugin feature — the plugin's job is syncing the canvas, not managing a
+      // download UX (filename conventions, browser quirks, etc. an experimenter may not want at
+      // all). on_finish runs before the next trial clears display_element, so the canvas is still
+      // in the DOM and fully painted at this point.
+      on_finish: () => {
+        const canvas = jsPsych
+          .getDisplayElement()
+          .querySelector(".jspsych-multiplayer-draw-canvas");
+        drawingDataUrl = canvas ? canvas.toDataURL("image/png") : null;
+      },
     };
 
-    // 4) Wrap-up screen.
+    // 4) Wrap-up screen: show the finished drawing and offer to download it as a PNG.
     const doneTrial = {
       type: jsPsychHtmlButtonResponse,
       choices: ["Finish"],
@@ -176,8 +198,15 @@
         const draw = jsPsych.data.get().filter({ trial_type: "multiplayer-draw" }).values()[0] || {};
         const total = draw.stroke_count ?? 0;
         const mine = draw.strokes_drawn ?? 0;
+        const image = drawingDataUrl
+          ? `<div class="drawing-result">
+               <a class="download-link" href="${drawingDataUrl}" download="drawing.png">Download drawing (PNG)</a>
+               <img src="${drawingDataUrl}" alt="The finished collaborative drawing" />
+             </div>`
+          : "";
         return `<h2>Thanks for drawing!</h2>
-                <p>${total} stroke${total === 1 ? "" : "s"} were drawn in total; you drew ${mine}.</p>`;
+                <p>${total} stroke${total === 1 ? "" : "s"} were drawn in total; you drew ${mine}.</p>
+                ${image}`;
       },
     };
 
