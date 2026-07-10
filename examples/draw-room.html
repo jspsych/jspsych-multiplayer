@@ -245,8 +245,24 @@
       // reference `canvasRef` saved in on_load instead — a canvas keeps its rendered pixel buffer
       // even after being detached from the document, so toDataURL() on the saved reference still
       // works here.
+      //
+      // The plugin's canvas is transparent by default (its on-screen white is only CSS
+      // `background: #fff`, not real pixel data), so exporting it directly would produce a PNG with
+      // transparent gaps wherever nothing was drawn. Composite onto an opaque white offscreen canvas
+      // first so the downloaded/displayed image always has a solid background.
       on_finish: () => {
-        drawingDataUrl = canvasRef ? canvasRef.toDataURL("image/png") : null;
+        if (!canvasRef) {
+          drawingDataUrl = null;
+          return;
+        }
+        const flattened = document.createElement("canvas");
+        flattened.width = canvasRef.width;
+        flattened.height = canvasRef.height;
+        const ctx = flattened.getContext("2d");
+        ctx.fillStyle = "#fff";
+        ctx.fillRect(0, 0, flattened.width, flattened.height);
+        ctx.drawImage(canvasRef, 0, 0);
+        drawingDataUrl = flattened.toDataURL("image/png");
       },
     };
 
