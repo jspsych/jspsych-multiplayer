@@ -207,11 +207,15 @@ class MultiplayerDrawPlugin implements JsPsychPlugin<Info> {
             ${brushSizes
               .map(
                 (w, i) =>
+                  // The size indicator is a CSS circle sized in px (not a ● glyph, whose ink isn't
+                  // centered in its line box), so it stays perfectly centered at any brush size.
                   `<button type="button" class="jspsych-multiplayer-draw-size${
                     i === Math.floor(brushSizes.length / 2) ? " is-selected" : ""
-                  }" data-width="${w}" style="font-size:${Math.round(
-                    8 + (w / Math.max(...brushSizes, 1e-9)) * 14
-                  )}px;line-height:1">●</button>`
+                  }" data-width="${w}"><span class="jspsych-multiplayer-draw-dot" style="display:block;width:${Math.round(
+                    4 + (w / Math.max(...brushSizes, 1e-9)) * 14
+                  )}px;height:${Math.round(
+                    4 + (w / Math.max(...brushSizes, 1e-9)) * 14
+                  )}px;border-radius:50%;background:currentColor"></span></button>`
               )
               .join("")}
           </span>
