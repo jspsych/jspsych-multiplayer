@@ -202,10 +202,16 @@
                } minutes total. The room closes early for everyone once every participant clicks "I'm done".</p>`,
       duration: DRAW_DURATION_MS,
       show_roster: true,
+      // Also shows each participant's "I'm done" status (✓), since the room only closes once
+      // everyone has clicked it (see end_when below) — participants should be able to see who
+      // they're still waiting on.
       roster_label: (participantId, group) => {
-        if (participantId === localAdapter.participantId) return "You";
         const entry = group[participantId];
-        return (entry && entry.name) || "A participant";
+        const name =
+          participantId === localAdapter.participantId
+            ? "You"
+            : (entry && entry.name) || "A participant";
+        return entry && entry.draw_done === true ? `${name} ✓` : name;
       },
       // Only participants who made it through the lobby (i.e. pushed a `name`) count toward "everyone
       // is done" — an as-yet-unnamed slot from a mid-lobby refresh shouldn't block the room forever.
