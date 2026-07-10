@@ -193,6 +193,7 @@
     // room once every participant's flag is set — the same "wait for everyone" pattern the sync
     // plugin's lobby uses, just phrased as an exit condition instead of an entry one.
     let drawingDataUrl = null;
+    let canvasRef = null;
     const drawTrial = {
       type: jsPsychMultiplayerDraw,
       prompt: `<p>You're in! Draw together on the shared canvas below.</p>
@@ -214,11 +215,13 @@
       },
       // Adds the demo's own "I'm done" button below the canvas (see the on_finish/on_load note
       // above) — deliberately NOT the plugin's `end_button_label`, which would end only the
-      // clicker's own trial rather than coordinating with `end_when` above.
+      // clicker's own trial rather than coordinating with `end_when` above. Also grabs a direct
+      // reference to the canvas element for on_finish below — see that callback's comment for why.
       on_load: () => {
         const wrap = jsPsych
           .getDisplayElement()
           .querySelector(".jspsych-multiplayer-draw-canvas-wrap");
+        canvasRef = wrap.querySelector(".jspsych-multiplayer-draw-canvas");
         const button = document.createElement("button");
         button.type = "button";
         button.className = "draw-room-done-button";
@@ -234,13 +237,16 @@
       // Capture the final canvas as a PNG data URL for the wrap-up screen below. This is DEMO-side
       // logic, not a plugin feature — the plugin's job is syncing the canvas, not managing a
       // download UX (filename conventions, browser quirks, etc. an experimenter may not want at
-      // all). on_finish runs before the next trial clears display_element, so the canvas is still
-      // in the DOM and fully painted at this point.
+      // all).
+      //
+      // IMPORTANT: jsPsych clears display_element.innerHTML BEFORE firing on_finish (see
+      // TimelineNode's executeTrial -> cleanupTrial, called ahead of the awaited onFinish() in
+      // run()), so querying the DOM for the canvas here always returns null. Use the direct element
+      // reference `canvasRef` saved in on_load instead — a canvas keeps its rendered pixel buffer
+      // even after being detached from the document, so toDataURL() on the saved reference still
+      // works here.
       on_finish: () => {
-        const canvas = jsPsych
-          .getDisplayElement()
-          .querySelector(".jspsych-multiplayer-draw-canvas");
-        drawingDataUrl = canvas ? canvas.toDataURL("image/png") : null;
+        drawingDataUrl = canvasRef ? canvasRef.toDataURL("image/png") : null;
       },
     };
 
