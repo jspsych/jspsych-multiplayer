@@ -295,8 +295,16 @@
 
     // Connect the backend, then run. Everything above is backend-agnostic — swapping the adapter on
     // the line below is the only change needed to move from local two-tab testing to JATOS.
+    //
+    // jsPsych.run() resolves once the timeline (including the "Finish" click on doneTrial) is fully
+    // done; without this, clicking Finish just leaves a blank display_element with no indication the
+    // demo is actually over. This replaces it with an explicit "you can close this now" message.
     jsPsych.pluginAPI.connect(localAdapter).then(() => {
-      jsPsych.run([nameTrial, lobbyTrial, drawTrial, doneTrial]);
+      jsPsych.run([nameTrial, lobbyTrial, drawTrial, doneTrial]).then(() => {
+        jsPsych.getDisplayElement().innerHTML = `
+          <h2>Demo complete</h2>
+          <p>You can close this browser tab now.</p>`;
+      });
     });
   </script>
 </html>
