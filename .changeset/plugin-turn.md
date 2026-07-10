@@ -1,0 +1,5 @@
+---
+"@jspsych-multiplayer/plugin-multiplayer-turn": minor
+---
+
+Add `plugin-multiplayer-turn`: a sequential turn-taking coordinator. Every participant runs one live trial; it derives whose turn it is from the shared session (the active player is the first in the turn order that hasn't moved), shows the active player a prompt + commit button and everyone else a live "waiting for X" status plus the move history, and ends for everyone once the sequence completes (or `timeout` elapses). It is a coordinator, not a decision UI — the move value is supplied via `get_move` (often reading a choice made in an earlier trial) — so it composes with `plugin-multiplayer-match` (`turn_order: () => match.getMyMatch().members`) and `plugin-multiplayer-choice`. Built on the multiplayer API's real-time `subscribe` primitive; supports explicit/functional/default turn orders, an optional start barrier, auto-commit (no button), and exposes the pure core (`resolveTurnOrder`/`activeIndex`/`collectMoves`) as statics. Unlocks sequential-move paradigms (ultimatum, bargaining, sequential public-goods).

@@ -1,0 +1,9 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "jsPsychMultiplayerTurn"
+version: 0.1.0
+license: MIT
+repository-code: "https://github.com/jspsych/jspsych-multiplayer"
+authors:
+  - family-names: "Liao"
+    given-names: "Mandy"
