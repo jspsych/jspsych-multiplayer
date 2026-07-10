@@ -342,6 +342,51 @@ describe("multiplayer-draw plugin", () => {
     expect(roster.textContent).toContain("peer");
   });
 
+  it("clears a peer's LAST stroke when they undo it to an empty array (full repaint)", async () => {
+    // Regression guard: a peer undoing down to zero strokes leaves their slot as { draw_strokes: [] }.
+    // applyUpdate must still detect the vanished stroke and full-repaint — otherwise the peer's last
+    // stroke stays painted on our canvas forever. doFullRepaint is the only caller of clearRect, so a
+    // clearRect after the empty push is the observable proof the repaint happened.
+    const api = new MockApi("me");
+    const { jsPsych } = makeJsPsych(api);
+    const el = display();
+
+    await new MultiplayerDrawPlugin(jsPsych as never).trial(el, { ...base } as never);
+
+    api.pushAs("peer", {
+      draw_strokes: [
+        {
+          id: "peer#0",
+          authorId: "peer",
+          seq: 0,
+          points: [
+            { x: 0, y: 0 },
+            { x: 0.5, y: 0.5 },
+          ],
+          tool: "pen",
+          color: "#000",
+          width: 0.01,
+          done: true,
+          ts: 5,
+        },
+      ],
+    });
+
+    // Spy on clearRect (the only caller is doFullRepaint) and reset it: the canvas mock's clearRect
+    // is a persistent jest.fn that already recorded the init repaint, so we must mockClear to count
+    // only calls from here on. Otherwise the init repaint would satisfy the assertion by itself.
+    const clearSpy = jest.spyOn(
+      canvasOf(el).getContext("2d") as CanvasRenderingContext2D,
+      "clearRect"
+    );
+    clearSpy.mockClear();
+
+    api.pushAs("peer", { draw_strokes: [] }); // peer undoes their only stroke
+
+    expect(clearSpy).toHaveBeenCalled();
+    clearSpy.mockRestore();
+  });
+
   it("ends on the end button with ended_by 'button' and includes stroke data", async () => {
     const api = new MockApi("me");
     const { jsPsych, finished } = makeJsPsych(api);

@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Multiplayer Draw Room — jsPsych multiplayer</title>
+    <!-- jsPsych core MUST carry the multiplayer API (jsPsych#3694), which is not yet in a release.
+         Until it merges, load the PR's preview build from jsDelivr instead of the published `jspsych`.
+         This URL is pinned to the same #3694 preview SHA as chat-room.html. A SHA-pinned URL keeps
+         loading indefinitely (it never 404s); what goes stale is the #3694 API it was pinned against,
+         so if the demo misbehaves against a newer #3694, re-pin — see examples/README.md "Running it". -->
+    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@c43b3a1f285ef2d899cd43960c889a4a9d630dc9/packages/jspsych/dist/index.browser.min.js"></script>
+    <script src="https://unpkg.com/@jspsych/plugin-survey-text"></script>
+    <script src="https://unpkg.com/@jspsych/plugin-html-button-response"></script>
+    <!-- The multiplayer packages resolve from the sibling packages' built dist/ in this repo (run
+         `npm install && npm run build` from the repo root first — dist/ is gitignored). Once they are
+         published, load them from a CDN instead, e.g.
+           <script src="https://unpkg.com/@jspsych-multiplayer/plugin-multiplayer-draw"></script> -->
+    <script src="../packages/adapter-multiplayer-local/dist/index.browser.min.js"></script>
+    <script src="../packages/plugin-multiplayer-sync/dist/index.browser.min.js"></script>
+    <script src="../packages/plugin-multiplayer-draw/dist/index.browser.min.js"></script>
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@c43b3a1f285ef2d899cd43960c889a4a9d630dc9/packages/jspsych/css/jspsych.css"
+    />
+    <style>
+      /* The draw plugin ships no CSS of its own (matching the other multiplayer plugins), so this
+         demo adds just enough to make the canvas and toolbar visible and usable. */
+      .jspsych-multiplayer-draw-toolbar {
+        display: flex;
+        gap: 6px;
+        align-items: center;
+        justify-content: center;
+        flex-wrap: wrap;
+        margin-bottom: 8px;
+      }
+      .jspsych-multiplayer-draw-color,
+      .jspsych-multiplayer-draw-size {
+        width: 28px;
+        height: 28px;
+        border: 2px solid #ccc;
+        border-radius: 50%;
+        cursor: pointer;
+        padding: 0;
+      }
+      .jspsych-multiplayer-draw-color.is-selected,
+      .jspsych-multiplayer-draw-size.is-selected,
+      .jspsych-multiplayer-draw-pen.is-selected,
+      .jspsych-multiplayer-draw-eraser.is-selected {
+        border-color: #1971c2;
+        box-shadow: 0 0 0 2px rgba(25, 113, 194, 0.3);
+      }
+      .jspsych-multiplayer-draw-pen,
+      .jspsych-multiplayer-draw-eraser,
+      .jspsych-multiplayer-draw-undo,
+      .jspsych-multiplayer-draw-end {
+        padding: 4px 12px;
+        cursor: pointer;
+      }
+      .jspsych-multiplayer-draw-canvas-wrap {
+        width: 640px;
+        height: 480px;
+        max-width: 90vw;
+        margin: 0 auto;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .jspsych-multiplayer-draw-canvas {
+        border: 1px solid #333;
+        background: #fff;
+        touch-action: none; /* let the pointer draw instead of scrolling/panning on touch devices */
+      }
+      .jspsych-multiplayer-draw-roster {
+        text-align: center;
+        color: #666;
+        font-size: 0.9em;
+        margin-bottom: 6px;
+      }
+      .jspsych-multiplayer-draw-error {
+        text-align: center;
+        color: #c92a2a;
+        margin-top: 6px;
+      }
+      .jspsych-multiplayer-draw-end {
+        display: block;
+        margin: 12px auto 0;
+      }
+    </style>
+  </head>
+
+  <body></body>
+  <script>
+    // ===============================================================================================
+    // Multiplayer Draw Room — a real-time demo for the jsPsych multiplayer packages.
+    //
+    // Participants pick a display name, wait in a lobby until enough people have joined, then draw
+    // TOGETHER on one shared canvas for a fixed time. It is the highest-rate demo of the multiplayer
+    // API's `subscribe` primitive: where the chat room pushes once per message, the draw plugin pushes
+    // continuously (throttled + point-decimated) while a stroke is active. It composes three packages:
+    //   • adapter-multiplayer-local — the network backend. localStorage + cross-tab signalling, so the
+    //                                 whole thing runs by OPENING TWO BROWSER TABS — no server.
+    //   • plugin-multiplayer-sync   — the lobby: push your name, wait until MIN_PLAYERS are present.
+    //   • plugin-multiplayer-draw   — the shared canvas: pen/eraser, colors, brush sizes, and an undo
+    //                                 that only ever removes THIS participant's own last stroke.
+    //
+    // -----------------------------------------------------------------------------------------------
+    // ILLUSTRATIVE example. Like chat-room.html it needs no server, but connecting ANY adapter still
+    // requires the multiplayer API from jsPsych#3694, which is not yet in a release. The local adapter
+    // is same-origin, same-browser, same-machine — a development/demo tool, NOT for data collection.
+    // ===============================================================================================
+
+    // How many participants must be present before the lobby opens the draw room.
+    const MIN_PLAYERS = 2;
+    // How long the draw room stays open, in milliseconds.
+    const DRAW_DURATION_MS = 5 * 60 * 1000;
+
+    const jsPsych = initJsPsych();
+
+    // Connecting the adapter is the only network setup the timeline needs. persistParticipant keeps
+    // this tab's participant id in sessionStorage, so a mid-lobby refresh rejoins as the SAME
+    // participant instead of leaving a stale "ghost" slot that would falsely satisfy the lobby.
+    const localAdapter = new jsPsychAdapterMultiplayerLocal({ persistParticipant: true });
+
+    let myName = "";
+
+    // 1) Ask for a display name.
+    const nameTrial = {
+      type: jsPsychSurveyText,
+      questions: [{ prompt: "Choose a display name:", required: true, name: "name" }],
+      on_finish: (data) => {
+        myName = (data.response.name || "").trim() || "Anonymous";
+      },
+    };
+
+    // 2) Lobby: publish our name + join time, then wait until enough named players are present.
+    const lobbyTrial = {
+      type: jsPsychMultiplayerSync,
+      push_data: () => ({ name: myName, joinedAt: Date.now() }),
+      // NB: the sync plugin's waiting-HTML parameter is `message`, not `prompt`.
+      message: `<p>Waiting for at least ${MIN_PLAYERS} players to join…</p>
+               <p>Open this page in another tab (keep the <code>?mp_session=</code> in the URL) to add a player.</p>`,
+      wait_for: (group) =>
+        Object.values(group).filter((entry) => entry && entry.name).length >= MIN_PLAYERS,
+    };
+
+    // 3) The shared canvas. The roster shows raw participant ids (the draw plugin labels by id, not by
+    //    the lobby name); everything else is drawing.
+    const drawTrial = {
+      type: jsPsychMultiplayerDraw,
+      prompt: "<p>You're in! Draw together on the shared canvas below.</p>",
+      duration: DRAW_DURATION_MS,
+      end_button_label: "I'm done",
+      show_roster: true,
+    };
+
+    // 4) Wrap-up screen.
+    const doneTrial = {
+      type: jsPsychHtmlButtonResponse,
+      choices: ["Finish"],
+      stimulus: () => {
+        const draw = jsPsych.data.get().filter({ trial_type: "multiplayer-draw" }).values()[0] || {};
+        const total = draw.stroke_count ?? 0;
+        const mine = draw.strokes_drawn ?? 0;
+        return `<h2>Thanks for drawing!</h2>
+                <p>${total} stroke${total === 1 ? "" : "s"} were drawn in total; you drew ${mine}.</p>`;
+      },
+    };
+
+    // Connect the backend, then run. Everything above is backend-agnostic — swapping the adapter on
+    // the line below is the only change needed to move from local two-tab testing to JATOS.
+    jsPsych.pluginAPI.connect(localAdapter).then(() => {
+      jsPsych.run([nameTrial, lobbyTrial, drawTrial, doneTrial]);
+    });
+  </script>
+</html>

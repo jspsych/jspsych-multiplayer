@@ -200,7 +200,9 @@ class MultiplayerDrawPlugin implements JsPsychPlugin<Info> {
                 (w, i) =>
                   `<button type="button" class="jspsych-multiplayer-draw-size${
                     i === Math.floor(brushSizes.length / 2) ? " is-selected" : ""
-                  }" data-width="${w}">●</button>`
+                  }" data-width="${w}" style="font-size:${Math.round(
+                    8 + (w / Math.max(...brushSizes, 1e-9)) * 14
+                  )}px;line-height:1">●</button>`
               )
               .join("")}
           </span>
@@ -339,7 +341,9 @@ class MultiplayerDrawPlugin implements JsPsychPlugin<Info> {
         // onUndoClick, and a peer-triggered full repaint below still paints everyone including us.
         if (authorId === me) continue;
         const strokes = readStrokes(group[authorId], dataKey);
-        if (strokes.length === 0) continue;
+        // NB: do NOT early-continue on an empty array. When a peer undoes their LAST stroke their
+        // slot becomes empty, and skipping here would leave that stroke painted on our canvas forever
+        // (planAuthorPaint below is what detects the vanished strokeId and asks for a full repaint).
         const state = paintStates.get(authorId) ?? emptyPaintState();
         const result = planAuthorPaint(strokes, state);
         if (result.needsFullRepaint) {
