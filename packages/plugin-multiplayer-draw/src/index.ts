@@ -222,6 +222,7 @@ class MultiplayerDrawPlugin implements JsPsychPlugin<Info> {
           <button type="button" class="jspsych-multiplayer-draw-pen is-selected">Pen</button>
           <button type="button" class="jspsych-multiplayer-draw-eraser">Eraser</button>
           <button type="button" class="jspsych-multiplayer-draw-undo">Undo</button>
+          <button type="button" class="jspsych-multiplayer-draw-redo">Redo</button>
         </div>
         ${trial.show_roster ? `<div class="jspsych-multiplayer-draw-roster"></div>` : ""}
         <div class="jspsych-multiplayer-draw-canvas-wrap">
@@ -286,6 +287,7 @@ class MultiplayerDrawPlugin implements JsPsychPlugin<Info> {
 
     // --- Own stroke state ---------------------------------------------------------------------
     let ownStrokes: Stroke[] = readStrokes(api.get(me), dataKey);
+    let undoneStrokes: Stroke[] = [];
     let nextSeq = ownStrokes.reduce((max, s) => Math.max(max, s.seq), -1) + 1;
     let activeStroke: Stroke | null = null;
     let pushTimer: ReturnType<typeof setInterval> | null = null;
@@ -440,6 +442,7 @@ class MultiplayerDrawPlugin implements JsPsychPlugin<Info> {
       // Not implemented in every test/DOM environment (e.g. jsdom) — real browsers all support it.
       canvas.setPointerCapture?.(e.pointerId);
       const p = pointFromEvent(e);
+      undoneStrokes = []; // clear redo stack on new draw
       activeStroke = {
         id: makeStrokeId(me, nextSeq),
         authorId: me,
@@ -456,6 +459,7 @@ class MultiplayerDrawPlugin implements JsPsychPlugin<Info> {
       if (pushTimer == null) {
         pushTimer = setInterval(flushPush, Math.max(1, trial.push_interval_ms));
       }
+      updateUndoRedoButtons();
     };
 
     const onPointerMove = (e: PointerEvent) => {
@@ -494,6 +498,19 @@ class MultiplayerDrawPlugin implements JsPsychPlugin<Info> {
     const undoButton = display_element.querySelector(
       ".jspsych-multiplayer-draw-undo"
     ) as HTMLButtonElement;
+    const redoButton = display_element.querySelector(
+      ".jspsych-multiplayer-draw-redo"
+    ) as HTMLButtonElement;
+
+    const updateUndoRedoButtons = () => {
+      if (undoButton) {
+        undoButton.disabled = ownStrokes.length === 0;
+      }
+      if (redoButton) {
+        redoButton.disabled = undoneStrokes.length === 0;
+      }
+    };
+    updateUndoRedoButtons();
 
     colorButtons.forEach((btn) => {
       btn.addEventListener("click", () => {
@@ -531,12 +548,30 @@ class MultiplayerDrawPlugin implements JsPsychPlugin<Info> {
         pushTimer = null;
       }
       activeStroke = null; // drop the in-progress stroke itself, before any further push
-      ownStrokes = undoLastStroke(ownStrokes);
+      if (ownStrokes.length > 0) {
+        const undone = ownStrokes[ownStrokes.length - 1];
+        undoneStrokes.push(undone);
+        ownStrokes = undoLastStroke(ownStrokes);
+      }
       const mine = api.get(me) ?? {};
       doFullRepaint(localGroup()); // instant local feedback; peers repaint when the push echoes
       api.push({ ...mine, [dataKey]: ownStrokes }).catch(() => showSendError());
+      updateUndoRedoButtons();
     };
     undoButton.addEventListener("click", onUndoClick);
+
+    const onRedoClick = () => {
+      if (ended) return;
+      const strokeToRestore = undoneStrokes.pop();
+      if (!strokeToRestore) return;
+      strokeToRestore.ts = Date.now(); // update timestamp so it renders on top collaboratively
+      ownStrokes.push(strokeToRestore);
+      const mine = api.get(me) ?? {};
+      doFullRepaint(localGroup()); // instant local feedback; peers repaint when the push echoes
+      api.push({ ...mine, [dataKey]: ownStrokes }).catch(() => showSendError());
+      updateUndoRedoButtons();
+    };
+    redoButton.addEventListener("click", onRedoClick);
 
     // --- Resize (forces a full repaint — normalized coordinates survive, the paint-progress cursor
     // tracking does not, since the pixel canvas was cleared) -------------------------------------
@@ -565,6 +600,7 @@ class MultiplayerDrawPlugin implements JsPsychPlugin<Info> {
       penButton.removeEventListener("click", onPenClick);
       eraserButton.removeEventListener("click", onEraserClick);
       undoButton.removeEventListener("click", onUndoClick);
+      redoButton.removeEventListener("click", onRedoClick);
       endButton?.removeEventListener("click", onEndClick);
 
       const group = api.getAll();

@@ -276,6 +276,102 @@ describe("multiplayer-draw plugin", () => {
     }
   });
 
+  it("undo and redo buttons are enabled/disabled correctly", async () => {
+    const api = new MockApi("me");
+    const { jsPsych } = makeJsPsych(api);
+    const el = display();
+
+    await new MultiplayerDrawPlugin(jsPsych as never).trial(el, { ...base } as never);
+
+    const undoBtn = el.querySelector(".jspsych-multiplayer-draw-undo") as HTMLButtonElement;
+    const redoBtn = el.querySelector(".jspsych-multiplayer-draw-redo") as HTMLButtonElement;
+
+    // Initially both are disabled (no strokes)
+    expect(undoBtn.disabled).toBe(true);
+    expect(redoBtn.disabled).toBe(true);
+
+    // Draw a stroke -> Undo is enabled, Redo is disabled
+    drawStroke(el, [10, 10], [50, 50]);
+    await flush();
+    expect(undoBtn.disabled).toBe(false);
+    expect(redoBtn.disabled).toBe(true);
+
+    // Undo -> Undo is disabled, Redo is enabled
+    undoBtn.click();
+    await flush();
+    expect(undoBtn.disabled).toBe(true);
+    expect(redoBtn.disabled).toBe(false);
+
+    // Redo -> Undo is enabled, Redo is disabled
+    redoBtn.click();
+    await flush();
+    expect(undoBtn.disabled).toBe(false);
+    expect(redoBtn.disabled).toBe(true);
+  });
+
+  it("redoing a stroke restores it, updates its timestamp, and pushes it to the API", async () => {
+    const api = new MockApi("me");
+    const { jsPsych } = makeJsPsych(api);
+    const el = display();
+
+    await new MultiplayerDrawPlugin(jsPsych as never).trial(el, { ...base } as never);
+
+    drawStroke(el, [10, 10], [50, 50]);
+    await flush();
+
+    const originalStroke = (api.getAll().me.draw_strokes as any[])[0];
+    const originalTs = originalStroke.ts;
+
+    // Undo
+    (el.querySelector(".jspsych-multiplayer-draw-undo") as HTMLButtonElement).click();
+    await flush();
+    expect((api.getAll().me.draw_strokes as any[]).length).toBe(0);
+
+    // Sleep a tiny bit to guarantee a newer timestamp if we redo
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    // Redo
+    (el.querySelector(".jspsych-multiplayer-draw-redo") as HTMLButtonElement).click();
+    await flush();
+
+    const redoneStrokes = api.getAll().me.draw_strokes as any[];
+    expect(redoneStrokes.length).toBe(1);
+    expect(redoneStrokes[0].id).toBe(originalStroke.id);
+    expect(redoneStrokes[0].ts).toBeGreaterThan(originalTs);
+  });
+
+  it("starting a new stroke clears the redo stack", async () => {
+    const api = new MockApi("me");
+    const { jsPsych } = makeJsPsych(api);
+    const el = display();
+
+    await new MultiplayerDrawPlugin(jsPsych as never).trial(el, { ...base } as never);
+
+    const undoBtn = el.querySelector(".jspsych-multiplayer-draw-undo") as HTMLButtonElement;
+    const redoBtn = el.querySelector(".jspsych-multiplayer-draw-redo") as HTMLButtonElement;
+
+    drawStroke(el, [10, 10], [50, 50]);
+    await flush();
+
+    // Undo to put it in redo stack
+    undoBtn.click();
+    await flush();
+    expect(redoBtn.disabled).toBe(false);
+
+    // Draw a new stroke
+    drawStroke(el, [20, 20], [60, 60]);
+    await flush();
+
+    // Redo should be disabled now
+    expect(redoBtn.disabled).toBe(true);
+    expect(undoBtn.disabled).toBe(false);
+
+    // Checking the API state contains only the second stroke
+    const mine = api.getAll().me.draw_strokes as any[];
+    expect(mine.length).toBe(1);
+    expect(mine[0].points[0]).toMatchObject({ x: 20 / 320 });
+  });
+
   it("switching to the eraser tool tags new strokes with tool: 'eraser'", async () => {
     const api = new MockApi("me");
     const { jsPsych } = makeJsPsych(api);
