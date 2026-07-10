@@ -453,10 +453,13 @@ jatos.onLoad(async () => {
 ```
 
 (Plus the `<script src="jatos.js">` tag JATOS injects, and loading the JATOS adapter bundle instead
-of the local one.) The lobby, the role consensus, the barriers, the timeout handling, the spectator
-routing — every trial in between is byte-for-byte identical, because nothing in the timeline is
-backend-specific. That's the development loop this package set is designed for: **iterate on game
-logic in two tabs on your laptop; change one object to run the study.**
+of the local one.) The coordination that makes this a _multiplayer_ experiment — the lobby, the role
+consensus, the barriers, the timeout handling — is identical across both files, because none of it is
+backend-specific. (The two example files do differ in a few backend-adjacent details beyond the
+connection code — e.g. the local variant adds a "download data" button and reaches its closing screen
+by a slightly different route — but the multiplayer logic itself is unchanged.) That's the
+development loop this package set is designed for: **iterate on game logic in two tabs on your
+laptop; change one object to run the study.**
 
 The same swap works in the other direction for any adapter implementing the `MultiplayerAdapter`
 interface, so a future backend (e.g. a WebSocket server, or Firebase) slots in without touching
