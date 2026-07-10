@@ -1,6 +1,6 @@
 # @jspsych-multiplayer/plugin-multiplayer-draw
 
-A real-time collaborative drawing canvas for multiplayer jsPsych experiments, built on the multiplayer plugin API. Every participant draws on one shared canvas; strokes from everyone appear live on everyone else's screen. Includes pen/eraser tools, a fixed color palette, brush sizes, and an undo button that only ever removes this participant's own last stroke.
+A real-time collaborative drawing canvas for multiplayer jsPsych experiments, built on the multiplayer plugin API. Every participant draws on one shared canvas; strokes from everyone appear live on everyone else's screen. Includes pen/eraser tools, a fixed color palette, brush sizes, and undo/redo buttons that only ever act on this participant's own strokes.
 
 Where [`plugin-multiplayer-chat`](../plugin-multiplayer-chat) pushes once per message (sparse, human-paced), this plugin pushes continuously while a stroke is active — it is the first plugin that stresses the multiplayer API's real-time **`subscribe`** primitive at a genuinely high rate, not just an event-driven one.
 
@@ -51,6 +51,7 @@ await jsPsych.run(timeline);
 - **Pen** — draws with the selected color and brush size.
 - **Eraser** — removes ink using canvas `destination-out` compositing, so it works regardless of background color.
 - **Undo** — removes only this participant's own last stroke (or discards the in-progress one, if mid-stroke). Never touches another participant's strokes — safe by construction, since a participant only ever writes their own group-session slot.
+- **Redo** — restores the most recently undone stroke (local-only stack; not synced or persisted). Its timestamp is refreshed to the current time so it repaints on top of everything drawn since the undo, preserving the eraser's paint-order correctness. Starting a new stroke clears the redo stack.
 
 ## Data model and correctness notes
 
