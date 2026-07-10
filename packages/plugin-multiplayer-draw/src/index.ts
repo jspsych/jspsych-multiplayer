@@ -167,7 +167,10 @@ class MultiplayerDrawPlugin implements JsPsychPlugin<Info> {
     const brushSizes = trial.brush_sizes.length > 0 ? trial.brush_sizes : DEFAULT_BRUSH_SIZES;
 
     const hasDuration = typeof trial.duration === "number" && trial.duration > 0;
-    if (!hasDuration && trial.end_button_label == null && typeof trial.end_when !== "function") {
+    // An empty-string label is treated as "no button" — it would otherwise render a blank-but-live
+    // end button and silently suppress the no-end-condition warning below.
+    const hasEndButton = trial.end_button_label != null && trial.end_button_label !== "";
+    if (!hasDuration && !hasEndButton && typeof trial.end_when !== "function") {
       console.warn(
         "multiplayer-draw: no `duration`, `end_button_label`, or `end_when` set — the trial has no " +
           "way to end. Provide at least one end condition."
@@ -210,9 +213,7 @@ class MultiplayerDrawPlugin implements JsPsychPlugin<Info> {
           <canvas class="jspsych-multiplayer-draw-canvas"></canvas>
         </div>
         ${
-          trial.end_button_label != null
-            ? `<button type="button" class="jspsych-multiplayer-draw-end"></button>`
-            : ""
+          hasEndButton ? `<button type="button" class="jspsych-multiplayer-draw-end"></button>` : ""
         }
       </div>`;
 
@@ -229,7 +230,7 @@ class MultiplayerDrawPlugin implements JsPsychPlugin<Info> {
     const endButton = display_element.querySelector(
       ".jspsych-multiplayer-draw-end"
     ) as HTMLButtonElement | null;
-    if (endButton && trial.end_button_label != null) endButton.textContent = trial.end_button_label;
+    if (endButton && hasEndButton) endButton.textContent = trial.end_button_label as string;
 
     // --- Tool state -------------------------------------------------------------------------------
     let currentColor = colors[0];
@@ -332,6 +333,11 @@ class MultiplayerDrawPlugin implements JsPsychPlugin<Info> {
       const pending: Array<{ stroke: Stroke; fromPointIndex: number }> = [];
 
       for (const authorId of Object.keys(group)) {
+        // Skip our own slot: our strokes are painted optimistically as the pointer moves, so the
+        // echo of our own push would repaint the same segments a second time (wasted work, and for
+        // any future non-opaque brush it would darken overlaps). Our own undo repaints directly via
+        // onUndoClick, and a peer-triggered full repaint below still paints everyone including us.
+        if (authorId === me) continue;
         const strokes = readStrokes(group[authorId], dataKey);
         if (strokes.length === 0) continue;
         const state = paintStates.get(authorId) ?? emptyPaintState();
@@ -353,6 +359,13 @@ class MultiplayerDrawPlugin implements JsPsychPlugin<Info> {
       }
       for (const p of pending) strokeSegment(p.stroke, p.fromPointIndex);
       if (roster) updateRoster(group);
+    }
+
+    // The group snapshot as this client should see it right now, with our own (possibly un-pushed,
+    // mid-stroke) `ownStrokes` overlaid on top of the last-pushed session. Using this for a full
+    // repaint keeps an in-progress stroke's not-yet-pushed tail from vanishing until the next push.
+    function localGroup(): GroupSessionData {
+      return { ...api.getAll(), [me]: { ...(api.get(me) ?? {}), [dataKey]: ownStrokes } };
     }
 
     function updateRoster(group: GroupSessionData) {
@@ -485,11 +498,7 @@ class MultiplayerDrawPlugin implements JsPsychPlugin<Info> {
       activeStroke = null; // drop the in-progress stroke itself, before any further push
       ownStrokes = undoLastStroke(ownStrokes);
       const mine = api.get(me) ?? {};
-      const optimisticGroup: GroupSessionData = {
-        ...api.getAll(),
-        [me]: { ...mine, [dataKey]: ownStrokes },
-      };
-      doFullRepaint(optimisticGroup); // instant local feedback; peers repaint when the push echoes
+      doFullRepaint(localGroup()); // instant local feedback; peers repaint when the push echoes
       api.push({ ...mine, [dataKey]: ownStrokes }).catch(() => showSendError());
     };
     undoButton.addEventListener("click", onUndoClick);
@@ -500,7 +509,7 @@ class MultiplayerDrawPlugin implements JsPsychPlugin<Info> {
       if (resizeTimer != null) clearTimeout(resizeTimer);
       resizeTimer = setTimeout(() => {
         sizeCanvas();
-        doFullRepaint(api.getAll());
+        doFullRepaint(localGroup());
       }, 100);
     };
     window.addEventListener("resize", onResize);

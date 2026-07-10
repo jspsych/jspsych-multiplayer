@@ -136,6 +136,32 @@ describe("multiplayer-draw plugin", () => {
     expect(mine[0].points.length).toBeGreaterThanOrEqual(2);
   });
 
+  it("does not repaint own strokes when the client's own push echoes back (no double-paint)", async () => {
+    // Own strokes are painted optimistically as the pointer moves; the subscribe echo of our own
+    // push must NOT repaint the same segments. Regression guard for the applyUpdate `authorId === me`
+    // skip — without it, each own stroke was painted twice (once optimistically, once on the echo).
+    const api = new MockApi("me");
+    const { jsPsych } = makeJsPsych(api);
+    const el = display();
+
+    await new MultiplayerDrawPlugin(jsPsych as never).trial(el, { ...base } as never);
+
+    const ctx = canvasOf(el).getContext("2d") as CanvasRenderingContext2D;
+    const strokeSpy = jest.spyOn(ctx, "stroke");
+
+    // MockApi.push fires subscribers synchronously (no await before fire()), so the echo of the
+    // pointerup flush has already been delivered by the time drawStroke returns. A two-point stroke
+    // paints exactly one segment optimistically; the echo would add a second call if own strokes
+    // were not skipped.
+    drawStroke(el, [10, 10], [50, 50]);
+    expect(strokeSpy).toHaveBeenCalledTimes(1);
+
+    await flush();
+    expect(strokeSpy).toHaveBeenCalledTimes(1);
+
+    strokeSpy.mockRestore();
+  });
+
   it("drawing preserves unrelated keys in my own slot (the push-replaces-slot crux)", async () => {
     const api = new MockApi("me");
     api.pushAs("me", { role: "proposer" });
