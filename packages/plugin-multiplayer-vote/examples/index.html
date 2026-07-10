@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>jsPsychMultiplayerVote Example</title>
+    <script src="https://unpkg.com/jspsych"></script>
+    <!-- Once this plugin package is published, load it from a CDN instead:
+         <script src="https://unpkg.com/@jspsych-multiplayer/plugin-multiplayer-vote"></script> -->
+    <script src="../dist/index.browser.min.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/jspsych/css/jspsych.css" />
+  </head>
+
+  <body></body>
+  <script>
+    // ---------------------------------------------------------------------------------------------
+    // ILLUSTRATIVE example — it shows the intended API, it is NOT a self-contained demo.
+    //
+    // The vote trial collects a ballot over a SHARED multiplayer group session and barriers on the
+    // whole group, so to actually run it you need:
+    //   1. the jsPsych multiplayer API (jsPsych#3694), which is not yet in a released jsPsych, and
+    //   2. a connected network adapter plus several real participants in the same group.
+    // It therefore cannot run from a single browser tab today.
+    // ---------------------------------------------------------------------------------------------
+
+    const jsPsych = initJsPsych();
+
+    // 1. Connect a multiplayer adapter before running, e.g. the JATOS adapter:
+    //      import JatosAdapter from "@jspsych-multiplayer/adapter-multiplayer-jatos";
+    //      await jsPsych.pluginAPI.connect(new JatosAdapter());
+
+    // 2. An anonymous group vote. Every player votes; the trial waits until all four have voted, then
+    //    reveals the tally and the plurality winner. Nobody sees who voted for what.
+    const nextGame = {
+      type: jsPsychMultiplayerVote,
+      prompt: "<p>Which game should the group play next? Majority wins.</p>",
+      choices: ["Trust", "Ultimatum", "Public goods"],
+      expected_players: 4, // wait for all four ballots before revealing
+      reveal_prompt: "<h3>The votes are in</h3>",
+      on_finish: (data) => {
+        // winner is null on a tie — decide however you like (here: keep it and branch later).
+        data.next_game = data.winner ? data.winner.label : "Public goods";
+      },
+    };
+
+    // 3. Branch on data.winner / data.tally in a normal on_finish / conditional_function.
+    jsPsych.run([nextGame]);
+  </script>
+</html>

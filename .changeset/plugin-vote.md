@@ -1,0 +1,5 @@
+---
+"@jspsych-multiplayer/plugin-multiplayer-vote": minor
+---
+
+Add `plugin-multiplayer-vote`: an anonymous group poll. Every participant votes for one of the same options; the trial pushes that vote and barriers until all `expected_players` have voted, then optionally reveals the aggregate tally and the plurality winner. Unlike `plugin-multiplayer-choice`, the emphasis is the aggregate, not the individual pick, and the ballot is anonymous — the data and reveal carry per-option counts and the winner, never a participant → vote mapping (the tally is labelled from the trial's own `choices`, so no untrusted per-voter string is ever exposed). Winner is plurality: the option with the most votes, with `is_tie`/`tied_options` when the top count is shared and `winner: null` when nobody voted. Built as a barrier-then-reveal trial on the multiplayer API (jsPsych#3694); supports a wait `timeout` (proceeds partial, flags `timed_out`), `reveal:false`, custom `button_html`, and exposes the pure core (`tally`/`plurality`/`countVoted`) as statics. Unlocks group-consensus paradigms (majority-rule choices, "vote for the next round", opinion polls).
