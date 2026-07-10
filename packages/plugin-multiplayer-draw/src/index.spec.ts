@@ -1,6 +1,7 @@
 import { startTimeline } from "@jspsych/test-utils";
 import { initJsPsych } from "jspsych";
 
+import * as drawCore from "./draw-core";
 import { GroupSessionData, MultiplayerApiLike, Unsubscribe } from "./multiplayer-api";
 import MultiplayerDrawPlugin from ".";
 
@@ -403,6 +404,55 @@ describe("multiplayer-draw plugin", () => {
 
     expect(clearSpy).toHaveBeenCalled();
     clearSpy.mockRestore();
+  });
+
+  it("does not drop own unpushed stroke when a peer triggers a full repaint", async () => {
+    const api = new MockApi("me");
+    const { jsPsych } = makeJsPsych(api);
+    const el = display();
+
+    await new MultiplayerDrawPlugin(jsPsych as never).trial(el, { ...base } as never);
+
+    api.pushAs("peer", {
+      draw_strokes: [
+        {
+          id: "peer#0",
+          authorId: "peer",
+          seq: 0,
+          points: [
+            { x: 0, y: 0 },
+            { x: 0.5, y: 0.5 },
+          ],
+          tool: "pen",
+          color: "#000",
+          width: 0.01,
+          done: true,
+          ts: 5,
+        },
+      ],
+    });
+
+    const canvas = canvasOf(el);
+    canvas.dispatchEvent(pointerEvent("pointerdown", 10, 10));
+    canvas.dispatchEvent(pointerEvent("pointermove", 20, 20));
+
+    expect(api.get("me")).toBeUndefined();
+
+    const planRepaintSpy = jest.spyOn(drawCore, "planRepaint");
+    planRepaintSpy.mockClear();
+
+    api.pushAs("peer", { draw_strokes: [] });
+
+    expect(planRepaintSpy).toHaveBeenCalled();
+    const calledGroup = planRepaintSpy.mock.calls[0][0];
+    expect(calledGroup.me).toBeDefined();
+    expect(calledGroup.me.draw_strokes).toHaveLength(1);
+    expect(calledGroup.me.draw_strokes[0]).toMatchObject({
+      authorId: "me",
+      tool: "pen",
+    });
+
+    planRepaintSpy.mockRestore();
   });
 
   it("ends on the end button with ended_by 'button' and includes stroke data", async () => {

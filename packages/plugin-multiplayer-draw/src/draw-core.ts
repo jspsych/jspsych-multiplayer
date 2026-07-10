@@ -5,7 +5,7 @@
  * in `plugin-multiplayer-chat`). The thin `index.ts` trial wires these functions to
  * `subscribe`/`push`, the canvas, and pointer events.
  *
- * See `docs/draw-plugin-design.md` for the full design rationale, in particular why:
+ * Design rationale details why:
  *  - points are normalized against a FIXED-aspect-ratio canvas, not independently per axis;
  *  - a full repaint must sort strokes globally by `ts`, not iterate `getAll()`'s per-author order
  *    (destination-out erasing makes paint order a correctness property, not cosmetic);

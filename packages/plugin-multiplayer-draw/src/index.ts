@@ -38,7 +38,7 @@ const info = <const>{
       type: ParameterType.STRING,
       default: "draw_strokes",
     },
-    /** Canvas width:height ratio. Fixed and shared across clients so normalized points stay geometrically consistent regardless of each client's viewport (see `docs/draw-plugin-design.md`). */
+    /** Canvas width:height ratio. Fixed and shared across clients so normalized points stay geometrically consistent regardless of each client's viewport. */
     aspect_ratio: {
       type: ParameterType.FLOAT,
       default: 4 / 3,
@@ -260,7 +260,7 @@ class MultiplayerDrawPlugin implements JsPsychPlugin<Info> {
     // --- Canvas sizing (fixed aspect ratio, letterboxed) -------------------------------------------
     // Both axes normalize against `canvas.width` (the fixed dimension) — NOT independently against
     // width and height — so a fixed aspect ratio keeps geometry consistent across differently-sized
-    // client viewports. See docs/draw-plugin-design.md, "Canvas sizing".
+    // client viewports.
     function sizeCanvas() {
       const availW = Math.max(1, canvasWrap.clientWidth || 320);
       const availH = Math.max(1, canvasWrap.clientHeight || availW / aspectRatio);
@@ -376,7 +376,7 @@ class MultiplayerDrawPlugin implements JsPsychPlugin<Info> {
       }
 
       if (needsFull) {
-        doFullRepaint(group);
+        doFullRepaint(localGroup());
         return;
       }
       for (const p of pending) strokeSegment(p.stroke, p.fromPointIndex);
@@ -405,7 +405,7 @@ class MultiplayerDrawPlugin implements JsPsychPlugin<Info> {
       roster.textContent = labels.length ? `Present: ${labels.join(", ")}` : "";
     }
 
-    // --- Pushing (throttled while a stroke is active; see docs/draw-plugin-design.md) -------------
+    // --- Pushing (throttled while a stroke is active) --------------------------------------------
     function flushPush() {
       const mine = api.get(me) ?? {};
       api.push({ ...mine, [dataKey]: ownStrokes }).catch(() => {
@@ -523,7 +523,7 @@ class MultiplayerDrawPlugin implements JsPsychPlugin<Info> {
     eraserButton.addEventListener("click", onEraserClick);
 
     // Undo: removes ONLY this participant's own last stroke (or the in-progress one). Safe by
-    // construction — a participant only ever writes their own slot. See docs/draw-plugin-design.md.
+    // construction — a participant only ever writes their own slot.
     const onUndoClick = () => {
       if (ended) return;
       if (pushTimer != null) {
