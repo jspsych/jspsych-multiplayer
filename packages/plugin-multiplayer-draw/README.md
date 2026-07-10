@@ -48,7 +48,7 @@ await jsPsych.run(timeline);
 
 ## Tools
 
-- **Pen** — draws with the selected color and brush size.
+- **Pen** — draws with the selected color and brush size. Clicking a color swatch also switches the active tool to Pen (matching common drawing-app behavior), since color has no effect while erasing.
 - **Eraser** — removes ink using canvas `destination-out` compositing, so it works regardless of background color.
 - **Undo** — removes only this participant's own last stroke (or discards the in-progress one, if mid-stroke). Never touches another participant's strokes — safe by construction, since a participant only ever writes their own group-session slot.
 - **Redo** — restores the most recently undone stroke (local-only stack; not synced or persisted). Its timestamp is refreshed to the current time so it repaints on top of everything drawn since the undo, preserving the eraser's paint-order correctness. Starting a new stroke clears the redo stack.

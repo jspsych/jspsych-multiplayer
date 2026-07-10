@@ -404,6 +404,30 @@ describe("multiplayer-draw plugin", () => {
     expect(mine[0].width).toBe(0.02);
   });
 
+  it("picking a color switches the active tool back to pen", async () => {
+    const api = new MockApi("me");
+    const { jsPsych } = makeJsPsych(api);
+    const el = display();
+
+    await new MultiplayerDrawPlugin(jsPsych as never).trial(el, { ...base } as never);
+    const eraserButton = el.querySelector(".jspsych-multiplayer-draw-eraser") as HTMLButtonElement;
+    const penButton = el.querySelector(".jspsych-multiplayer-draw-pen") as HTMLButtonElement;
+    eraserButton.click();
+    expect(eraserButton.classList.contains("is-selected")).toBe(true);
+
+    const colorButtons = el.querySelectorAll(".jspsych-multiplayer-draw-color");
+    (colorButtons[1] as HTMLButtonElement).click();
+
+    expect(penButton.classList.contains("is-selected")).toBe(true);
+    expect(eraserButton.classList.contains("is-selected")).toBe(false);
+
+    drawStroke(el, [10, 10], [50, 50]);
+    await flush();
+    const mine = api.getAll().me.draw_strokes as any[];
+    expect(mine[0].tool).toBe("pen");
+    expect(mine[0].color).toBe("#222");
+  });
+
   it("re-renders (via subscribe) when a peer pushes a stroke — no throw, roster updates", async () => {
     const api = new MockApi("me");
     const { jsPsych } = makeJsPsych(api);

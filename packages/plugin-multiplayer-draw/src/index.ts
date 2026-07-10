@@ -512,20 +512,6 @@ class MultiplayerDrawPlugin implements JsPsychPlugin<Info> {
     };
     updateUndoRedoButtons();
 
-    colorButtons.forEach((btn) => {
-      btn.addEventListener("click", () => {
-        currentColor = (btn as HTMLElement).dataset.color as string;
-        colorButtons.forEach((b) => b.classList.remove("is-selected"));
-        btn.classList.add("is-selected");
-      });
-    });
-    sizeButtons.forEach((btn) => {
-      btn.addEventListener("click", () => {
-        currentWidth = Number((btn as HTMLElement).dataset.width);
-        sizeButtons.forEach((b) => b.classList.remove("is-selected"));
-        btn.classList.add("is-selected");
-      });
-    });
     const onPenClick = () => {
       currentTool = "pen";
       penButton.classList.add("is-selected");
@@ -538,6 +524,22 @@ class MultiplayerDrawPlugin implements JsPsychPlugin<Info> {
     };
     penButton.addEventListener("click", onPenClick);
     eraserButton.addEventListener("click", onEraserClick);
+
+    colorButtons.forEach((btn) => {
+      btn.addEventListener("click", () => {
+        currentColor = (btn as HTMLElement).dataset.color as string;
+        colorButtons.forEach((b) => b.classList.remove("is-selected"));
+        btn.classList.add("is-selected");
+        onPenClick(); // picking a color implies you want to draw with it
+      });
+    });
+    sizeButtons.forEach((btn) => {
+      btn.addEventListener("click", () => {
+        currentWidth = Number((btn as HTMLElement).dataset.width);
+        sizeButtons.forEach((b) => b.classList.remove("is-selected"));
+        btn.classList.add("is-selected");
+      });
+    });
 
     // Undo: removes ONLY this participant's own last stroke (or the in-progress one). Safe by
     // construction — a participant only ever writes their own slot.
