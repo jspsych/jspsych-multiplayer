@@ -101,6 +101,47 @@ Because the local adapter is same-origin, same-browser, same-machine, this is a 
 tool only — not for data collection. For real, multi-participant data use JATOS or another networked
 adapter.
 
+## `vote-room.html`
+
+An anonymous **group vote**: participants pick a display name, wait in a lobby until enough people
+have joined, then cast a ballot among the same options. The trial barriers until the whole group has
+voted, then reveals the aggregate tally and the plurality winner. Like `chat-room.html` it runs on the
+local adapter, so it can be driven **entirely from two browser tabs, no server**.
+
+### What it demonstrates
+
+| Package                                          | Role in the demo                                                                                                       |
+| ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------- |
+| `@jspsych-multiplayer/adapter-multiplayer-local` | The network backend — `localStorage` + cross-tab signalling. Connected once, before `jsPsych.run`. **Dev/demo only.** |
+| `@jspsych-multiplayer/plugin-multiplayer-sync`   | The lobby: one declarative barrier — push your name, wait until at least `MIN_PLAYERS` participants are present.       |
+| `@jspsych-multiplayer/plugin-multiplayer-vote`   | The ballot: everyone votes among the same options, the group barriers until all votes are in, then the **anonymous** tally + plurality winner are revealed. |
+
+Two composition details worth copying:
+
+1. **The vote is anonymous.** The vote plugin's data and reveal carry per-option counts and the
+   winner — never a participant → vote mapping. The lobby publishes each participant's `name` for the
+   roster, but the ballot itself never ties a name to a choice.
+2. **`expected_players` is read dynamically from the lobby, not hardcoded.** The demo sets
+   `expected_players: () => namedPresent(jsPsych.pluginAPI.getAll())` — the count of participants who
+   pushed a `name` — so the barrier waits for exactly the players actually present, even if more than
+   `MIN_PLAYERS` joined. jsPsych evaluates the function at trial start.
+
+### Swapping in a real backend
+
+Change the one adapter line from `adapter-multiplayer-local` to `adapter-multiplayer-jatos` (and load
+`jatos.js` / wrap `jsPsych.run` in `jatos.onLoad`, as in `ultimatum-game.html`). Nothing else in the
+timeline is backend-specific.
+
+### Running it
+
+Same as [`chat-room.html`](#running-it) — build the packages, serve the repo, and open
+`examples/vote-room.html` across two tabs (copy the `?mp_session=…` URL into the second):
+
+```sh
+npm install && npm run build
+npx http-server .
+```
+
 ## `ultimatum-game.html`
 
 A turn-based **ultimatum game** (Güth, Schmittberger & Schwarze, 1982): two players split a $10 pot.
