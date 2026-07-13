@@ -131,6 +131,35 @@ Run it the same way as `chat-room.html`: build the packages, serve the repo over
 printed URL in one tab, then a second tab with the same `?mp_session=` in the URL. See
 `chat-room.html`'s "Running it" section above for the jsDelivr preview build and step-by-step details.
 
+## `public-goods-local.html`
+
+A **timed public-goods game**: two players each hold an endowment and, in a single time-boxed round,
+*simultaneously* decide how much to contribute to a common pool that is multiplied and split equally.
+It is the econ-game companion to `countdown-timer.html`, and the showcase for a **synchronized
+contribution deadline** — the contribution buttons are a plain `html-button-response`, with a shared
+countdown drawn on top of them.
+
+### What it demonstrates
+
+| Package                                             | Role in the demo                                                                                                                             |
+| --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `@jspsych-multiplayer/adapter-multiplayer-local`    | The network backend — `localStorage` + cross-tab signalling. Connected once, before `jsPsych.run`. **Dev/demo only.**                          |
+| `@jspsych-multiplayer/plugin-multiplayer-sync`      | The lobby, and the "wait for both contributions" barrier, each one declarative push-then-wait.                                                |
+| `@jspsych-multiplayer/plugin-multiplayer-countdown` | Used through its **exported statics** (`startedAtKey` / `resolveStartedAt` / `computeRemaining` / `formatTime`), not as a trial.               |
+
+This is the countdown plugin's flagship **"render a synced timer during another trial"** use — the
+same core the draw-room demo is meant to render from. The contribution trial resolves the group's
+consensus start (the minimum start timestamp across all slots) on a 100 ms interval and paints the
+same remaining time into both tabs, so the window closes together within skew + latency. A public-
+goods game fits the countdown because its pacing is *duration-bound* (everyone acts within one
+window), unlike the turn-based ultimatum game.
+
+### Running it
+
+Run it the same way as `chat-room.html`: build the packages, serve the repo over http(s), open the
+printed URL in one tab, then a second tab with the same `?mp_session=` in the URL. See
+`chat-room.html`'s "Running it" section above for the jsDelivr preview build and step-by-step details.
+
 ## `ultimatum-game.html`
 
 A turn-based **ultimatum game** (Güth, Schmittberger & Schwarze, 1982): two players split a $10 pot.
