@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Multiplayer Scoreboard Room (end-of-game) — jsPsych multiplayer</title>
+    <!-- jsPsych core MUST carry the multiplayer API (jsPsych#3694), which is not yet in a release.
+         Until it merges, load the PR's preview build from jsDelivr instead of the published `jspsych`.
+         This URL is pinned to the same #3694 preview SHA as chat-room.html. A SHA-pinned URL keeps
+         loading indefinitely (it never 404s); what goes stale is the #3694 API it was pinned against,
+         so if the demo misbehaves against a newer #3694, re-pin — see examples/README.md "Running it". -->
+    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@c43b3a1f285ef2d899cd43960c889a4a9d630dc9/packages/jspsych/dist/index.browser.min.js"></script>
+    <script src="https://unpkg.com/@jspsych/plugin-survey-text"></script>
+    <script src="https://unpkg.com/@jspsych/plugin-html-button-response"></script>
+    <!-- The multiplayer packages resolve from the sibling packages' built dist/ in this repo (run
+         `npm install && npm run build` from the repo root first — dist/ is gitignored). Once they are
+         published, load them from a CDN instead, e.g.
+           <script src="https://unpkg.com/@jspsych-multiplayer/plugin-multiplayer-scoreboard"></script> -->
+    <!-- The `?v=` query is a cache-buster: bump it after rebuilding the packages so the browser is
+         forced to re-fetch the new bundle instead of serving a stale cached copy. -->
+    <script src="../packages/adapter-multiplayer-local/dist/index.browser.min.js?v=1"></script>
+    <script src="../packages/plugin-multiplayer-sync/dist/index.browser.min.js?v=1"></script>
+    <script src="../packages/plugin-multiplayer-scoreboard/dist/index.browser.min.js?v=1"></script>
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@c43b3a1f285ef2d899cd43960c889a4a9d630dc9/packages/jspsych/css/jspsych.css"
+    />
+  </head>
+
+  <body></body>
+  <script>
+    // ===============================================================================================
+    // Multiplayer Scoreboard Room (end-of-game) — a demo for the jsPsych multiplayer packages.
+    //
+    // Participants pick a display name, wait in a lobby, each answers a short quiz for points, then hit
+    // a scoreboard that WAITS (a barrier) until everyone has reported and reveals the final ranking all
+    // at once — so no one sees a partial board. It composes three packages:
+    //   • adapter-multiplayer-local     — the network backend. localStorage + cross-tab signalling, so
+    //                                     the whole thing runs by OPENING TWO BROWSER TABS — no server.
+    //   • plugin-multiplayer-sync       — the lobby: push your name, wait until MIN_PLAYERS present.
+    //   • plugin-multiplayer-scoreboard — the end board: pushes this client's final score, barriers on
+    //                                     `group_size` reporters, then every client independently ranks
+    //                                     the same snapshot and shows it with a Continue button.
+    //
+    // Contrast with plugin-multiplayer-live-scoreboard (see live-scoreboard-room.html), which stays
+    // open and fills in live as peers report. This one is a one-shot reveal at the end of the game.
+    //
+    // -----------------------------------------------------------------------------------------------
+    // ILLUSTRATIVE example. Like chat-room.html it needs no server, but connecting ANY adapter still
+    // requires the multiplayer API from jsPsych#3694, which is not yet in a release. The local adapter
+    // is same-origin, same-browser, same-machine — a development/demo tool, NOT for data collection.
+    // ===============================================================================================
+
+    const MIN_PLAYERS = 2;
+
+    // A tiny trivia quiz. Each correct answer is worth POINTS_PER_CORRECT; the scoreboard sums them.
+    const POINTS_PER_CORRECT = 10;
+    const QUIZ = [
+      { q: "What is 2 + 2?", options: ["3", "4", "5"], correct: 1 },
+      { q: "Capital of France?", options: ["London", "Paris", "Berlin"], correct: 1 },
+      { q: "On a clear day, the sky is…", options: ["Green", "Blue", "Red"], correct: 1 },
+    ];
+
+    const jsPsych = initJsPsych();
+
+    // Connecting the adapter is the only network setup the timeline needs. persistParticipant keeps
+    // this tab's participant id in sessionStorage, so a mid-lobby refresh rejoins as the SAME
+    // participant instead of leaving a stale "ghost" slot that would falsely satisfy the lobby.
+    const localAdapter = new jsPsychAdapterMultiplayerLocal({ persistParticipant: true });
+
+    const namedPresent = (group) =>
+      Object.values(group).filter((entry) => entry && entry.name).length;
+
+    let myName = "";
+
+    // 1) Ask for a display name.
+    const nameTrial = {
+      type: jsPsychSurveyText,
+      questions: [{ prompt: "Choose a display name:", required: true, name: "name" }],
+      on_finish: (data) => {
+        myName = (data.response.name || "").trim() || "Anonymous";
+      },
+    };
+
+    // 2) Lobby: publish our name + join time, then wait until enough named players are present.
+    const lobbyTrial = {
+      type: jsPsychMultiplayerSync,
+      push_data: () => ({ name: myName, joinedAt: Date.now() }),
+      // NB: the sync plugin's waiting-HTML parameter is `message`, not `prompt`.
+      message: `<p>Waiting for at least ${MIN_PLAYERS} players to join…</p>
+               <p>Open this page in another tab (keep the <code>?mp_session=</code> in the URL) to add a player.</p>`,
+      wait_for: (group) => namedPresent(group) >= MIN_PLAYERS,
+    };
+
+    // 3) The quiz. Each question tags its own trial with `points` in on_finish, so the scoreboard can
+    //    sum them straight out of jsPsych's data — the documented `score` pattern.
+    const quizTrials = QUIZ.map((item) => ({
+      type: jsPsychHtmlButtonResponse,
+      stimulus: `<p style="font-size:1.2em">${item.q}</p>`,
+      choices: item.options,
+      on_finish: (data) => {
+        data.points = data.response === item.correct ? POINTS_PER_CORRECT : 0;
+      },
+    }));
+
+    // 4) The end-of-game board. `score` is auto-computed from this client's own prior data (never typed
+    //    in) — the sum of the `points` earned in the quiz. `group_size` makes it a BARRIER: it waits
+    //    until that many players have reported before revealing, so no one sees a partial ranking. We
+    //    read it dynamically from the players who made it through the lobby.
+    const scoreboardTrial = {
+      type: jsPsychMultiplayerScoreboard,
+      title: "<h2>Final scores</h2>",
+      score: () => jsPsych.data.get().select("points").sum(),
+      label: () => myName,
+      score_format: (s) => `${s} pts`,
+      group_size: () => namedPresent(jsPsych.pluginAPI.getAll()),
+      message: "<p>Quiz complete — waiting for the other players to finish…</p>",
+      button_label: "Continue",
+    };
+
+    // 5) Wrap-up screen: report this client's final rank and score from the scoreboard trial's data.
+    const doneTrial = {
+      type: jsPsychHtmlButtonResponse,
+      choices: ["Finish"],
+      stimulus: () => {
+        const sb =
+          jsPsych.data.get().filter({ trial_type: "multiplayer-scoreboard" }).values()[0] || {};
+        const rank = sb.my_rank ?? "—";
+        const score = sb.my_score ?? "—";
+        const n = sb.num_players ?? "—";
+        return `<h2>Game over!</h2>
+                <p>You finished <strong>#${rank}</strong> of ${n} with <strong>${score}</strong> points.</p>`;
+      },
+    };
+
+    // Connect the backend, then run. Everything above is backend-agnostic — swapping the adapter on
+    // the line below is the only change needed to move from local two-tab testing to JATOS.
+    jsPsych.pluginAPI.connect(localAdapter).then(() => {
+      jsPsych.run([nameTrial, lobbyTrial, ...quizTrials, scoreboardTrial, doneTrial]).then(() => {
+        jsPsych.getDisplayElement().innerHTML = `
+          <h2>Demo complete</h2>
+          <p>You can close this browser tab now.</p>`;
+      });
+    });
+  </script>
+</html>
