@@ -146,6 +146,64 @@ class MultiplayerChatPlugin implements JsPsychPlugin<Info> {
       );
     }
 
+    // --- Base styling (injected once) ---------------------------------------------------------
+    // The plugin ships no separate CSS asset (matching this repo's other plugins' convention), so
+    // without this the sender/text spans render as unstyled inline text with nothing between them
+    // — e.g. "AliceHello" — unreadable once more than a couple of messages arrive.
+    const STYLE_ID = "jspsych-multiplayer-chat-styles";
+    if (!document.getElementById(STYLE_ID)) {
+      const style = document.createElement("style");
+      style.id = STYLE_ID;
+      style.textContent = `
+        .jspsych-multiplayer-chat-log {
+          max-width: 30em;
+          max-height: 20em;
+          margin: 1em auto;
+          padding: 0.5em 0.75em;
+          overflow-y: auto;
+          text-align: left;
+          border: 1px solid #ccc;
+          border-radius: 4px;
+        }
+        .jspsych-multiplayer-chat-message {
+          display: block;
+          margin-bottom: 0.4em;
+        }
+        .jspsych-multiplayer-chat-sender {
+          font-weight: bold;
+          margin-right: 0.4em;
+        }
+        .jspsych-multiplayer-chat-sender::after {
+          content: ":";
+        }
+        .jspsych-multiplayer-chat-message.is-self .jspsych-multiplayer-chat-sender {
+          color: #2a6;
+        }
+        .jspsych-multiplayer-chat-roster {
+          max-width: 30em;
+          margin: 0 auto 0.5em;
+          font-size: 0.9em;
+          color: #666;
+        }
+        .jspsych-multiplayer-chat-form {
+          display: flex;
+          gap: 0.5em;
+          max-width: 30em;
+          margin: 0 auto;
+        }
+        .jspsych-multiplayer-chat-input {
+          flex: 1;
+        }
+        .jspsych-multiplayer-chat-error {
+          max-width: 30em;
+          margin: 0.3em auto 0;
+          color: #c00;
+          font-size: 0.9em;
+        }
+      `;
+      document.head.appendChild(style);
+    }
+
     // --- Render the shell ---------------------------------------------------------------------
     display_element.innerHTML = `
       <div class="jspsych-multiplayer-chat">
