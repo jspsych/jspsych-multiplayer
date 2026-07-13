@@ -101,6 +101,36 @@ Because the local adapter is same-origin, same-browser, same-machine, this is a 
 tool only — not for data collection. For real, multi-participant data use JATOS or another networked
 adapter.
 
+## `countdown-timer.html`
+
+A **synchronized group timer**: participants wait in a lobby until enough have joined, then see the
+same countdown ending at (approximately) the same moment for everyone, followed by a hard barrier
+before the results screen. Like `chat-room.html` it runs on the local adapter, so you can drive it
+**entirely from two browser tabs**, no server.
+
+### What it demonstrates
+
+| Package                                            | Role in the demo                                                                                                            |
+| -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `@jspsych-multiplayer/adapter-multiplayer-local`   | The network backend — `localStorage` + cross-tab signalling. Connected once, before `jsPsych.run`. **Dev/demo only.**       |
+| `@jspsych-multiplayer/plugin-multiplayer-sync`     | Two declarative barriers: the lobby before the timer, and a "wait for everyone to finish" barrier after it.                 |
+| `@jspsych-multiplayer/plugin-multiplayer-countdown` | The shared timer: every client derives the same remaining time from the minimum start timestamp across all slots.          |
+
+The composition detail worth copying is the **barrier sandwich**:
+
+1. **A barrier before** the countdown makes every client resolve the consensus start at nearly the
+   same instant, so the timer is already converged when it appears (no visible downward step as later
+   timestamps arrive).
+2. **A barrier after** it holds everyone at the line before the results screen, because the countdown
+   is *not itself a barrier* — clients end within clock skew + latency, not exactly together. The
+   wrap-up screen reads back `own_started_at − started_at` to show this client's entry skew.
+
+### Running it
+
+Run it the same way as `chat-room.html`: build the packages, serve the repo over http(s), open the
+printed URL in one tab, then a second tab with the same `?mp_session=` in the URL. See
+`chat-room.html`'s "Running it" section above for the jsDelivr preview build and step-by-step details.
+
 ## `ultimatum-game.html`
 
 A turn-based **ultimatum game** (Güth, Schmittberger & Schwarze, 1982): two players split a $10 pot.
