@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>jsPsychMultiplayerReady — runnable demo</title>
+    <script src="https://unpkg.com/jspsych"></script>
+    <script src="https://unpkg.com/@jspsych/plugin-html-keyboard-response"></script>
+    <script src="../dist/index.browser.min.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/jspsych/css/jspsych.css" />
+  </head>
+
+  <body></body>
+  <script>
+    // =============================================================================================
+    // RUNNABLE demo of plugin-multiplayer-ready.
+    //
+    // The real multiplayer API (jsPsych#3694) isn't in a released jsPsych yet, so this demo grafts a
+    // small localStorage-backed multiplayer API onto `jsPsych.pluginAPI` — the same three methods
+    // (push / getAll / wait) the plugin codes against, and the same approach as the real
+    // `adapter-multiplayer-local`. That makes the plugin genuinely run here.
+    //
+    //   • DEFAULT (single tab): a simulated peer auto-checks-in ~2.5s after load, so you can see the
+    //     whole flow — click "I'm ready", watch the waiting message, then advance — on your own.
+    //   • REAL cross-tab: add `?sim=0` to the URL and open the SAME url (it pins `?mp_session=`) in a
+    //     second tab. Each tab clicks ready; the barrier clears only once BOTH have.
+    // =============================================================================================
+
+    const params = new URLSearchParams(location.search);
+    const simulatePeer = params.get("sim") !== "0"; // simulated peer on by default
+
+    // Pin a shared session id into the URL so a second tab joins the same group.
+    let sessionId = params.get("mp_session");
+    if (!sessionId) {
+      sessionId = Math.random().toString(36).slice(2, 8);
+      params.set("mp_session", sessionId);
+      history.replaceState(null, "", `${location.pathname}?${params}`);
+    }
+    const myId = "p-" + Math.random().toString(36).slice(2, 7);
+
+    // --- Minimal localStorage-backed multiplayer API (push / getAll / wait) -----------------------
+    function installLocalMultiplayerAPI(api) {
+      const prefix = `mpready-demo:${sessionId}:`;
+      const waiters = new Set();
+
+      const getAll = () => {
+        const out = {};
+        for (let i = 0; i < localStorage.length; i++) {
+          const key = localStorage.key(i);
+          if (key.startsWith(prefix)) out[key.slice(prefix.length)] = JSON.parse(localStorage.getItem(key));
+        }
+        return out;
+      };
+      const notify = () => waiters.forEach((check) => check());
+
+      api.participantId = myId;
+      api.getAll = getAll;
+      api.push = async (data) => {
+        localStorage.setItem(prefix + myId, JSON.stringify(data)); // overwrite-per-participant
+        notify();
+      };
+      api.wait = (condition, timeout) =>
+        new Promise((resolve, reject) => {
+          if (condition(getAll())) return resolve(getAll()); // fast path
+          let settled = false;
+          const check = () => {
+            if (!settled && condition(getAll())) {
+              settled = true;
+              cleanup();
+              resolve(getAll());
+            }
+          };
+          const cleanup = () => {
+            waiters.delete(check);
+            if (timer) clearTimeout(timer);
+          };
+          waiters.add(check);
+          const timer =
+            timeout != null
+              ? setTimeout(() => {
+                  if (!settled) {
+                    settled = true;
+                    cleanup();
+                    reject(new Error(`wait timed out after ${timeout}ms`));
+                  }
+                }, timeout)
+              : null;
+        });
+
+      // Cross-tab: another tab's write fires a storage event — re-check every pending wait().
+      window.addEventListener("storage", notify);
+    }
+
+    const jsPsych = initJsPsych({
+      on_finish: () => jsPsych.data.displayData(), // dump the trial data so you can inspect rt/wait_time/etc.
+    });
+    installLocalMultiplayerAPI(jsPsych.pluginAPI);
+
+    // Simulated peer: check in automatically a couple of seconds after load (single-tab convenience).
+    if (simulatePeer) {
+      setTimeout(() => {
+        localStorage.setItem(
+          `mpready-demo:${sessionId}:sim-peer`,
+          JSON.stringify({ ready: true, name: "Sim Player" })
+        );
+        window.dispatchEvent(new StorageEvent("storage")); // nudge our own tab's waiters
+      }, 2500);
+    }
+
+    const readyGate = {
+      type: jsPsychMultiplayerReady,
+      expected_players: 2, // this participant + one other
+      stimulus: "<p>You'll be matched with another player.</p>",
+      prompt: "<p style='color:#666'>(demo: a simulated player checks in a couple of seconds after the page loads)</p>",
+      waiting_message: "<p>✅ You're ready. Waiting for the other player to check in…</p>",
+      minimum_wait: 1500, // keep the waiting message up ≥1.5s so it never just flashes by
+      timeout: 30000,
+      on_timeout: () => console.warn("The other player didn't check in within 30s."),
+    };
+
+    const start = {
+      type: jsPsychHtmlKeyboardResponse,
+      stimulus: "<p>🎉 Everyone's ready! Press any key to begin the experiment.</p>",
+    };
+
+    jsPsych.run([readyGate, start]);
+  </script>
+</html>

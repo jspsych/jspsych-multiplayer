@@ -303,10 +303,28 @@
         conditional_function: () => myRole == null,
       };
 
+      // ── Final screen: tell the participant it's over ────────────────────────────────────────
+      // Shown after the round completes (outcome or partnerLeftScreen), so a player never lands on
+      // a blank page after pressing space. No data-download button here — JATOS is already the
+      // data-collection path (the top-level on_finish below calls jatos.endStudy(), which JATOS
+      // uses to hand the participant off), so an on-screen JSON dump would be redundant and could
+      // read as an extra step the participant needs to take. See ultimatum-game-local.html for the
+      // dev/demo version's click-triggered download.
+      const doneScreen = {
+        timeline: [
+          {
+            type: jsPsychHtmlKeyboardResponse,
+            stimulus: "<p>The session has ended. Thank you for playing.</p>",
+            choices: "NO_KEYS",
+            trial_duration: 4000,
+          },
+        ],
+      };
+
       // The game runs only for the two active players (proposer/responder); spectators saw the
       // "game full" screen and a timed-out client saw the "could not form a group" screen above.
       const gameTimeline = {
-        timeline: [proposerTimeline, responderTimeline, partnerLeftScreen, outcome],
+        timeline: [proposerTimeline, responderTimeline, partnerLeftScreen, outcome, doneScreen],
         conditional_function: () => myRole === "proposer" || myRole === "responder",
       };
 
