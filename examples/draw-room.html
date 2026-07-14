@@ -8,7 +8,6 @@
          loading indefinitely (it never 404s); what goes stale is the #3694 API it was pinned against,
          so if the demo misbehaves against a newer #3694, re-pin — see examples/README.md "Running it". -->
     <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@c43b3a1f285ef2d899cd43960c889a4a9d630dc9/packages/jspsych/dist/index.browser.min.js"></script>
-    <script src="https://unpkg.com/@jspsych/plugin-survey-text"></script>
     <script src="https://unpkg.com/@jspsych/plugin-html-button-response"></script>
     <!-- The multiplayer packages resolve from the sibling packages' built dist/ in this repo (run
          `npm install && npm run build` from the repo root first — dist/ is gitignored). Once they are
@@ -130,13 +129,18 @@
     // ===============================================================================================
     // Multiplayer Draw Room — a real-time demo for the jsPsych multiplayer packages.
     //
-    // Participants pick a display name, wait in a lobby until enough people have joined, then draw
-    // TOGETHER on one shared canvas for a fixed time. It is the highest-rate demo of the multiplayer
-    // API's `subscribe` primitive: where the chat room pushes once per message, the draw plugin pushes
-    // continuously (throttled + point-decimated) while a stroke is active. It composes three packages:
+    // Participants wait in a lobby until enough people have joined, then draw TOGETHER on one shared
+    // canvas for a fixed time. Unlike chat-room.html, participants are never asked to pick a display
+    // name — strokes on the canvas aren't attributed by name anywhere in the UI, so a name-entry step
+    // would add a trial with no payoff. Instead the roster labels players by JOIN ORDER ("Player 1",
+    // "Player 2", …), derived from the `joinedAt` timestamp the lobby already pushes. It is the
+    // highest-rate demo of the multiplayer API's `subscribe` primitive: where the chat room pushes once
+    // per message, the draw plugin pushes continuously (throttled + point-decimated) while a stroke is
+    // active. It composes three packages:
     //   • adapter-multiplayer-local — the network backend. localStorage + cross-tab signalling, so the
     //                                 whole thing runs by OPENING TWO BROWSER TABS — no server.
-    //   • plugin-multiplayer-sync   — the lobby: push your name, wait until MIN_PLAYERS are present.
+    //   • plugin-multiplayer-sync   — the lobby: push a join timestamp, wait until MIN_PLAYERS are
+    //                                 present.
     //   • plugin-multiplayer-draw   — the shared canvas: pen/eraser, colors, brush sizes, and an undo
     //                                 that only ever removes THIS participant's own last stroke.
     //   • plugin-multiplayer-countdown — used here NOT as a trial but through its exported statics
@@ -171,31 +175,35 @@
     // participant instead of leaving a stale "ghost" slot that would falsely satisfy the lobby.
     const localAdapter = new jsPsychAdapterMultiplayerLocal({ persistParticipant: true });
 
-    let myName = "";
-
-    // 1) Ask for a display name.
-    const nameTrial = {
-      type: jsPsychSurveyText,
-      questions: [{ prompt: "Choose a display name:", required: true, name: "name" }],
-      on_finish: (data) => {
-        myName = (data.response.name || "").trim() || "Anonymous";
-      },
+    // Turns a participant id into a "Player N" label by JOIN ORDER: sort the group's entries by the
+    // `joinedAt` timestamp each pushes in the lobby (ties broken by participant id, so the ordering
+    // stays deterministic even for two joins in the same millisecond) and use the 1-based index. Own
+    // entry reads "You" instead. Shared by the lobby's message and the draw trial's roster_label so
+    // both stages agree on numbering.
+    const playerLabel = (participantId, group) => {
+      if (participantId === localAdapter.participantId) return "You";
+      const ordered = Object.entries(group)
+        .filter(([, entry]) => entry && typeof entry.joinedAt === "number")
+        .sort(([idA, a], [idB, b]) => a.joinedAt - b.joinedAt || (idA < idB ? -1 : 1));
+      const index = ordered.findIndex(([id]) => id === participantId);
+      return index === -1 ? "A participant" : `Player ${index + 1}`;
     };
 
-    // 2) Lobby: publish our name + join time, then wait until enough named players are present.
+    // 1) Lobby: publish our join time, then wait until enough players are present.
     const lobbyTrial = {
       type: jsPsychMultiplayerSync,
-      push_data: () => ({ name: myName, joinedAt: Date.now() }),
+      push_data: () => ({ joinedAt: Date.now() }),
       // NB: the sync plugin's waiting-HTML parameter is `message`, not `prompt`.
       message: `<p>Waiting for at least ${MIN_PLAYERS} players to join…</p>
                <p>Open this page in another tab (keep the <code>?mp_session=</code> in the URL) to add a player.</p>`,
       wait_for: (group) =>
-        Object.values(group).filter((entry) => entry && entry.name).length >= MIN_PLAYERS,
+        Object.values(group).filter((entry) => entry && typeof entry.joinedAt === "number").length >=
+        MIN_PLAYERS,
     };
 
-    // 3) The shared canvas. roster_label turns each participant id into the display name that the
-    //    lobby pushed into that participant's slot (falling back to a generic label), so the roster
-    //    reads "Present: Alice, Bob" instead of raw ids. Our own entry reads "You".
+    // 2) The shared canvas. roster_label uses playerLabel (above) to turn each participant id into a
+    //    join-order label, so the roster reads "Present: Player 1, Player 2" instead of raw ids. Our
+    //    own entry reads "You".
     //
     // The room closes for EVERYONE as soon as either (a) the synced clock (below) reaches zero, or
     // (b) every participant present has clicked "I'm done". Both routes go through the same
@@ -229,16 +237,16 @@
       // they're still waiting on.
       roster_label: (participantId, group) => {
         const entry = group[participantId];
-        const name =
-          participantId === localAdapter.participantId
-            ? "You"
-            : (entry && entry.name) || "A participant";
-        return entry && entry.draw_done === true ? `${name} ✓` : name;
+        const label = playerLabel(participantId, group);
+        return entry && entry.draw_done === true ? `${label} ✓` : label;
       },
-      // Only participants who made it through the lobby (i.e. pushed a `name`) count toward "everyone
-      // is done" — an as-yet-unnamed slot from a mid-lobby refresh shouldn't block the room forever.
+      // Only participants who made it through the lobby (i.e. pushed a `joinedAt`) count toward
+      // "everyone is done" — an as-yet-unjoined slot from a mid-lobby refresh shouldn't block the room
+      // forever.
       end_when: (group) => {
-        const present = Object.values(group).filter((entry) => entry && entry.name);
+        const present = Object.values(group).filter(
+          (entry) => entry && typeof entry.joinedAt === "number"
+        );
         return present.length > 0 && present.every((entry) => entry.draw_done === true);
       },
       // Adds the demo's own "I'm done" button below the canvas (see the on_finish/on_load note
@@ -266,8 +274,8 @@
 
         // Register this client's start (read own slot → spread → push, keep-if-present) exactly as
         // the countdown plugin does, so a refresh resumes the same deadline and we never clobber the
-        // `name`/`draw_done` this participant already pushed. push is fire-and-forget; the clock falls
-        // back to our own start until (possibly lower) peer timestamps arrive.
+        // `joinedAt`/`draw_done` this participant already pushed. push is fire-and-forget; the clock
+        // falls back to our own start until (possibly lower) peer timestamps arrive.
         const mineAtLoad = jsPsych.pluginAPI.get(localAdapter.participantId) || {};
         const already =
           typeof mineAtLoad[DRAW_START_KEY] === "number" && Number.isFinite(mineAtLoad[DRAW_START_KEY]);
@@ -327,7 +335,7 @@
       },
     };
 
-    // 4) Wrap-up screen: show the finished drawing and offer to download it as a PNG.
+    // 3) Wrap-up screen: show the finished drawing and offer to download it as a PNG.
     const doneTrial = {
       type: jsPsychHtmlButtonResponse,
       choices: ["Finish"],
@@ -354,7 +362,7 @@
     // done; without this, clicking Finish just leaves a blank display_element with no indication the
     // demo is actually over. This replaces it with an explicit "you can close this now" message.
     jsPsych.pluginAPI.connect(localAdapter).then(() => {
-      jsPsych.run([nameTrial, lobbyTrial, drawTrial, doneTrial]).then(() => {
+      jsPsych.run([lobbyTrial, drawTrial, doneTrial]).then(() => {
         jsPsych.getDisplayElement().innerHTML = `
           <h2>Demo complete</h2>
           <p>You can close this browser tab now.</p>`;

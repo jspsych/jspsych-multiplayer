@@ -133,8 +133,10 @@ printed URL in one tab, then a second tab with the same `?mp_session=` in the UR
 
 ## `draw-room.html`
 
-A real-time **collaborative drawing canvas**: participants pick a display name, wait in a lobby until
-enough have joined, then draw together on one shared canvas for a synced, time-boxed round. It is the
+A real-time **collaborative drawing canvas**: participants wait in a lobby until enough have joined,
+then draw together on one shared canvas for a synced, time-boxed round. Unlike `chat-room.html`,
+participants are never asked for a display name — strokes aren't attributed by name anywhere in the
+UI, so the roster labels players by join order ("Player 1", "Player 2", …) instead. It is the
 highest-rate demo of the multiplayer API's `subscribe` primitive (continuous, throttled pushes while a
 stroke is active, vs. `chat-room.html`'s one push per message), and the flagship demo for the countdown
 plugin's **"render a synced timer during another trial"** use — the same core `public-goods-local.html`
@@ -147,7 +149,7 @@ from two browser tabs**, no server.
 | Package                                             | Role in the demo                                                                                                                 |
 | --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
 | `@jspsych-multiplayer/adapter-multiplayer-local`    | The network backend — `localStorage` + cross-tab signalling. Connected once, before `jsPsych.run`. **Dev/demo only.**            |
-| `@jspsych-multiplayer/plugin-multiplayer-sync`      | The lobby: push your name, wait until at least `MIN_PLAYERS` are present.                                                        |
+| `@jspsych-multiplayer/plugin-multiplayer-sync`      | The lobby: push a join timestamp, wait until at least `MIN_PLAYERS` are present.                                                 |
 | `@jspsych-multiplayer/plugin-multiplayer-draw`      | The shared canvas: pen/eraser, colors, brush sizes, and an undo that only ever removes this participant's own last stroke.       |
 | `@jspsych-multiplayer/plugin-multiplayer-countdown` | Used through its **exported statics** (`startedAtKey` / `resolveStartedAt` / `computeRemaining` / `formatTime`), not as a trial. |
 
