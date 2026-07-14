@@ -101,6 +101,50 @@ Because the local adapter is same-origin, same-browser, same-machine, this is a 
 tool only — not for data collection. For real, multi-participant data use JATOS or another networked
 adapter.
 
+## `match-room.html`
+
+A **"pair up, then play"** demo: participants pick a display name, wait in a lobby, then get
+partitioned into **pairs** by deterministic consensus, are shown who they're matched with, and play
+one round of Prisoner's Dilemma with their partner. Like `chat-room.html` it runs on the local
+adapter, so it can be driven **entirely from two (or any even number of) browser tabs, no server**.
+
+### What it demonstrates
+
+| Package                                          | Role in the demo                                                                                                       |
+| ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------- |
+| `@jspsych-multiplayer/adapter-multiplayer-local` | The network backend — `localStorage` + cross-tab signalling. Connected once, before `jsPsych.run`. **Dev/demo only.** |
+| `@jspsych-multiplayer/plugin-multiplayer-sync`   | The lobby: one declarative barrier — push your name, wait until `MIN_PLAYERS` participants are present.                |
+| `@jspsych-multiplayer/plugin-multiplayer-match`  | The matchmaker: partitions the group into pairs; exposes this client's partners via `getMyMatch()`.                   |
+| `@jspsych-multiplayer/plugin-multiplayer-choice` | The round: each pair plays a Prisoner's Dilemma, keyed **per pair**.                                                   |
+
+`match` is the odd primitive out: it has **no UI of its own** — it's a short barrier that just
+resolves "who is with whom". This demo shows its value by *using* that result, which is exactly how
+`match` is meant to compose. Two details worth copying:
+
+1. **The paired round is namespaced per pair.** `choice`'s `data_key` is derived from the pair's
+   members (`"pd_" + members.sort().join("_")`) so two pairs keep separate ballots, and its
+   `expected_players` is the pair size, so the barrier lifts once *both partners* have chosen — not
+   the whole room.
+2. **Spectators are handled with a `conditional_function`.** With an odd number of players,
+   `leftover: "spectator"` leaves the extra unmatched (`getMyMatch()` is undefined); the game node's
+   `conditional_function` skips the round for them.
+
+### Swapping in a real backend
+
+Change the one adapter line from `adapter-multiplayer-local` to `adapter-multiplayer-jatos` (and load
+`jatos.js` / wrap `jsPsych.run` in `jatos.onLoad`, as in `ultimatum-game.html`). Nothing else in the
+timeline is backend-specific.
+
+### Running it
+
+Same as [`chat-room.html`](#running-it) — build the packages, serve the repo, and open
+`examples/match-room.html` across two tabs (copy the `?mp_session=…` URL into the second):
+
+```sh
+npm install && npm run build
+npx http-server .
+```
+
 ## `ultimatum-game.html`
 
 A turn-based **ultimatum game** (Güth, Schmittberger & Schwarze, 1982): two players split a $10 pot.

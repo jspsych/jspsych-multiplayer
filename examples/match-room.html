@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Multiplayer Match Room (pair up + play) — jsPsych multiplayer</title>
+    <!-- jsPsych core MUST carry the multiplayer API (jsPsych#3694), which is not yet in a release.
+         Until it merges, load the PR's preview build from jsDelivr instead of the published `jspsych`.
+         This URL is pinned to the same #3694 preview SHA as chat-room.html. A SHA-pinned URL keeps
+         loading indefinitely (it never 404s); what goes stale is the #3694 API it was pinned against,
+         so if the demo misbehaves against a newer #3694, re-pin — see examples/README.md "Running it". -->
+    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@c43b3a1f285ef2d899cd43960c889a4a9d630dc9/packages/jspsych/dist/index.browser.min.js"></script>
+    <script src="https://unpkg.com/@jspsych/plugin-survey-text"></script>
+    <script src="https://unpkg.com/@jspsych/plugin-html-button-response"></script>
+    <!-- The multiplayer packages resolve from the sibling packages' built dist/ in this repo (run
+         `npm install && npm run build` from the repo root first — dist/ is gitignored). Once they are
+         published, load them from a CDN instead, e.g.
+           <script src="https://unpkg.com/@jspsych-multiplayer/plugin-multiplayer-match"></script> -->
+    <!-- The `?v=` query is a cache-buster: bump it after rebuilding the packages so the browser is
+         forced to re-fetch the new bundle instead of serving a stale cached copy. -->
+    <script src="../packages/adapter-multiplayer-local/dist/index.browser.min.js?v=1"></script>
+    <script src="../packages/plugin-multiplayer-sync/dist/index.browser.min.js?v=1"></script>
+    <script src="../packages/plugin-multiplayer-match/dist/index.browser.min.js?v=1"></script>
+    <script src="../packages/plugin-multiplayer-choice/dist/index.browser.min.js?v=1"></script>
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@c43b3a1f285ef2d899cd43960c889a4a9d630dc9/packages/jspsych/css/jspsych.css"
+    />
+    <style>
+      .jspsych-multiplayer-choice-options {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        justify-content: center;
+        margin-top: 12px;
+      }
+      .jspsych-multiplayer-choice-prompt {
+        font-size: 1.1em;
+      }
+    </style>
+  </head>
+
+  <body></body>
+  <script>
+    // ===============================================================================================
+    // Multiplayer Match Room — a "pair up, then play" demo for the jsPsych multiplayer packages.
+    //
+    // Participants pick a display name, wait in a lobby, then plugin-multiplayer-match partitions the
+    // group into PAIRS by deterministic consensus (every client computes the SAME pairing from the
+    // shared snapshot — no coordinator). Each pair is shown who they're matched with, then plays one
+    // round of Prisoner's Dilemma with plugin-multiplayer-choice, namespaced PER PAIR so two pairs
+    // don't count each other's moves. It composes four packages:
+    //   • adapter-multiplayer-local — the network backend. localStorage + cross-tab signalling, so it
+    //                                 all runs by OPENING TWO (or any even number of) BROWSER TABS.
+    //   • plugin-multiplayer-sync   — the lobby: push your name, wait until MIN_PLAYERS present.
+    //   • plugin-multiplayer-match  — the matchmaker: partitions the group into pairs; exposes this
+    //                                 client's partners via jsPsychMultiplayerMatch.getMyMatch().
+    //   • plugin-multiplayer-choice — the round: each pair plays a Prisoner's Dilemma, keyed per pair.
+    //
+    // match is the odd primitive out: it has NO UI of its own — it's a short barrier that just resolves
+    // "who is with whom". This demo shows its value by USING that result (a partner reveal + a paired
+    // game), which is exactly how match is meant to compose in a real experiment.
+    //
+    // -----------------------------------------------------------------------------------------------
+    // ILLUSTRATIVE example. Like chat-room.html it needs no server, but connecting ANY adapter still
+    // requires the multiplayer API from jsPsych#3694, which is not yet in a release. The local adapter
+    // is same-origin, same-browser, same-machine — a development/demo tool, NOT for data collection.
+    // ===============================================================================================
+
+    // Pairs, so open an EVEN number of tabs (2 is the simplest). An odd extra becomes a spectator.
+    const MIN_PLAYERS = 2;
+    const MOVES = ["Cooperate", "Defect"];
+    // Classic Prisoner's Dilemma payoffs. PAYOFFS[myMove][theirMove]; index 0 = Cooperate, 1 = Defect.
+    const PAYOFFS = [
+      [3, 0],
+      [5, 1],
+    ];
+
+    const jsPsych = initJsPsych();
+
+    // Connecting the adapter is the only network setup the timeline needs. persistParticipant keeps
+    // this tab's participant id in sessionStorage, so a mid-lobby refresh rejoins as the SAME
+    // participant instead of leaving a stale "ghost" slot that would falsely satisfy the lobby.
+    const localAdapter = new jsPsychAdapterMultiplayerLocal({ persistParticipant: true });
+
+    const namedPresent = (group) =>
+      Object.values(group).filter((entry) => entry && entry.name).length;
+
+    // Map a participant id to the display name it pushed in the lobby; our own id reads "You".
+    const nameOfId = (id) =>
+      id === localAdapter.participantId
+        ? "You"
+        : (jsPsych.pluginAPI.get(id) || {}).name || "A player";
+
+    let myName = "";
+
+    // 1) Ask for a display name.
+    const nameTrial = {
+      type: jsPsychSurveyText,
+      questions: [{ prompt: "Choose a display name:", required: true, name: "name" }],
+      on_finish: (data) => {
+        myName = (data.response.name || "").trim() || "Anonymous";
+      },
+    };
+
+    // 2) Lobby: publish our name + join time, then wait until enough named players are present.
+    const lobbyTrial = {
+      type: jsPsychMultiplayerSync,
+      push_data: () => ({ name: myName, joinedAt: Date.now() }),
+      // NB: the sync plugin's waiting-HTML parameter is `message`, not `prompt`.
+      message: `<p>Waiting for at least ${MIN_PLAYERS} players to join…</p>
+               <p>Open this page in another tab (keep the <code>?mp_session=</code> in the URL) to add a player.</p>`,
+      wait_for: (group) => namedPresent(group) >= MIN_PLAYERS,
+    };
+
+    // 3) Match: partition the group into pairs. It's a short barrier with no UI — it just resolves the
+    //    pairing and exposes it via jsPsychMultiplayerMatch.getMyMatch(). `expected_players` (read
+    //    dynamically from the lobby) makes it wait for exactly who's present; `leftover: "spectator"`
+    //    leaves an odd extra unmatched rather than erroring.
+    const matchTrial = {
+      type: jsPsychMultiplayerMatch,
+      group_size: 2,
+      expected_players: () => namedPresent(jsPsych.pluginAPI.getAll()),
+      leftover: "spectator",
+      message: "<p>Finding your match…</p>",
+    };
+
+    // 4a) Reveal who you were paired with (reads the match result), then play a round.
+    const revealTrial = {
+      type: jsPsychHtmlButtonResponse,
+      choices: ["Play the round"],
+      stimulus: () => {
+        const m = jsPsychMultiplayerMatch.getMyMatch();
+        const partners = (m.partners || []).map(nameOfId).join(", ") || "(none)";
+        return `<h2>You're matched!</h2>
+                <p>Your partner: <strong>${partners}</strong> — you are seat ${m.position} in the pair.</p>
+                <p>Play one round of Prisoner's Dilemma together.</p>`;
+      },
+    };
+
+    // 4b) The paired round. `data_key` is derived from the pair's members so each pair keeps a separate
+    //     ballot (two pairs don't count each other's moves); `expected_players` is the pair size, so the
+    //     barrier lifts once BOTH partners have chosen. `payoff` scores the round with the PD matrix.
+    const choiceTrial = {
+      type: jsPsychMultiplayerChoice,
+      choices: MOVES,
+      prompt: "<p>Prisoner's Dilemma — do you <strong>Cooperate</strong> or <strong>Defect</strong>?</p>",
+      data_key: () => "pd_" + [...jsPsychMultiplayerMatch.getMyMatch().members].sort().join("_"),
+      expected_players: () => jsPsychMultiplayerMatch.getMyMatch().members.length,
+      waiting_message: "<p>Your move is locked in — waiting for your partner…</p>",
+      player_label: nameOfId,
+      payoff: (choices, me) => {
+        const otherId = Object.keys(choices).find((id) => id !== me);
+        if (!otherId) return 0;
+        return PAYOFFS[choices[me].index][choices[otherId].index];
+      },
+      reveal: true,
+      reveal_prompt: "<h3>Both partners have chosen</h3>",
+      continue_label: "Continue",
+    };
+
+    // The paired game runs only for participants who were actually matched. A spectator (odd extra)
+    // skips it via the conditional_function below.
+    const gameNode = {
+      timeline: [revealTrial, choiceTrial],
+      conditional_function: () => !!jsPsychMultiplayerMatch.getMyMatch(),
+    };
+    const spectatorNode = {
+      timeline: [
+        {
+          type: jsPsychHtmlButtonResponse,
+          choices: ["Continue"],
+          stimulus:
+            "<h2>No partner this round</h2><p>There was an odd number of players, so you're sitting this one out.</p>",
+        },
+      ],
+      conditional_function: () => !jsPsychMultiplayerMatch.getMyMatch(),
+    };
+
+    // 5) Wrap-up screen: report the pairing + this player's payoff (if they played).
+    const doneTrial = {
+      type: jsPsychHtmlButtonResponse,
+      choices: ["Finish"],
+      stimulus: () => {
+        const c =
+          jsPsych.data.get().filter({ trial_type: "multiplayer-choice" }).values()[0] || null;
+        if (!c) {
+          return `<h2>Round over</h2><p>You spectated this round — no partner to play with.</p>`;
+        }
+        const me = localAdapter.participantId;
+        const byPlayer = c.choices_by_player || {};
+        const otherId = Object.keys(byPlayer).find((id) => id !== me);
+        const myMove = (byPlayer[me] || {}).label ?? "—";
+        const theirMove = otherId ? byPlayer[otherId].label : "—";
+        return `<h2>Round over</h2>
+                <p>You chose <strong>${myMove}</strong>; your partner chose <strong>${theirMove}</strong>.</p>
+                <p>Your payoff: <strong>${c.my_payoff ?? "—"}</strong> point(s).</p>`;
+      },
+    };
+
+    // Connect the backend, then run. Everything above is backend-agnostic — swapping the adapter on
+    // the line below is the only change needed to move from local two-tab testing to JATOS.
+    jsPsych.pluginAPI.connect(localAdapter).then(() => {
+      jsPsych
+        .run([nameTrial, lobbyTrial, matchTrial, gameNode, spectatorNode, doneTrial])
+        .then(() => {
+          jsPsych.getDisplayElement().innerHTML = `
+            <h2>Demo complete</h2>
+            <p>You can close this browser tab now.</p>`;
+        });
+    });
+  </script>
+</html>
