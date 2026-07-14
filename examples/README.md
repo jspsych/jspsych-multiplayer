@@ -106,14 +106,21 @@ adapter.
 A **"pair up, then play"** demo: participants pick a display name, wait in a lobby, then get
 partitioned into **pairs** by deterministic consensus, are shown who they're matched with, and play
 one round of Prisoner's Dilemma with their partner. Like `chat-room.html` it runs on the local
-adapter, so it can be driven **entirely from two (or any even number of) browser tabs, no server**.
+adapter, so it can be driven **entirely from browser tabs, no server**.
+
+> **Designed for a fixed number of players.** `EXPECTED_PLAYERS` (top of the file) defaults to **4** —
+> so **open exactly 4 tabs** and you get **2 pairs**, each playing its own round. The first screen
+> states this up front. The count is a fixed integer, not a live head-count: `expected_players` must be
+> the *same exact value on every client* for the plugin to reach consensus, so all tabs partition the
+> identical set of players. A live "count whoever's here now" value lets tabs that reach the matching
+> step at different moments disagree on the group and compute divergent pairings.
 
 ### What it demonstrates
 
 | Package                                          | Role in the demo                                                                                                       |
 | ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------- |
 | `@jspsych-multiplayer/adapter-multiplayer-local` | The network backend — `localStorage` + cross-tab signalling. Connected once, before `jsPsych.run`. **Dev/demo only.** |
-| `@jspsych-multiplayer/plugin-multiplayer-sync`   | The lobby: one declarative barrier — push your name, wait until `MIN_PLAYERS` participants are present.                |
+| `@jspsych-multiplayer/plugin-multiplayer-sync`   | The lobby: one declarative barrier — push your name, wait until `EXPECTED_PLAYERS` participants are present.           |
 | `@jspsych-multiplayer/plugin-multiplayer-match`  | The matchmaker: partitions the group into pairs; exposes this client's partners via `getMyMatch()`.                   |
 | `@jspsych-multiplayer/plugin-multiplayer-choice` | The round: each pair plays a Prisoner's Dilemma, keyed **per pair**.                                                   |
 
@@ -138,7 +145,7 @@ timeline is backend-specific.
 ### Running it
 
 Same as [`chat-room.html`](#running-it) — build the packages, serve the repo, and open
-`examples/match-room.html` across two tabs (copy the `?mp_session=…` URL into the second):
+`examples/match-room.html` across **4 tabs** (copy the `?mp_session=…` URL into each new one):
 
 ```sh
 npm install && npm run build

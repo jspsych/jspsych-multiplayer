@@ -65,8 +65,12 @@
     // is same-origin, same-browser, same-machine — a development/demo tool, NOT for data collection.
     // ===============================================================================================
 
-    // Pairs, so open an EVEN number of tabs (2 is the simplest). An odd extra becomes a spectator.
-    const MIN_PLAYERS = 2;
+    // This demo is designed for a FIXED number of players. Match forms pairs, so with 4 players you
+    // get 2 pairs — the case that actually shows the partitioning off. `expected_players` MUST be the
+    // same exact integer on every client (that's how the plugin reaches consensus), so it's a constant
+    // here, NOT a live count of whoever happens to be present — a live count lets tabs that reach the
+    // matching step at different moments disagree on the group and compute divergent pairings.
+    const EXPECTED_PLAYERS = 4;
     const MOVES = ["Cooperate", "Defect"];
     // Classic Prisoner's Dilemma payoffs. PAYOFFS[myMove][theirMove]; index 0 = Cooperate, 1 = Defect.
     const PAYOFFS = [
@@ -92,9 +96,17 @@
 
     let myName = "";
 
-    // 1) Ask for a display name.
+    // 1) Ask for a display name. The preamble states up front how many players this demo needs, so
+    //    whoever opens it knows to open exactly that many tabs.
     const nameTrial = {
       type: jsPsychSurveyText,
+      preamble: `<div style="max-width:34em;margin:0 auto 1.2em;padding:0.8em 1em;border:1px solid #ccc;border-radius:8px;background:#f6f8fa;">
+                   👥 <strong>This demo is designed for ${EXPECTED_PLAYERS} players</strong> (${
+                     EXPECTED_PLAYERS / 2
+                   } pairs).
+                   To run it, open this page in <strong>exactly ${EXPECTED_PLAYERS} browser tabs</strong> —
+                   copy the URL (including <code>?mp_session=…</code>) into each new tab so they join the same session.
+                 </div>`,
       questions: [{ prompt: "Choose a display name:", required: true, name: "name" }],
       on_finish: (data) => {
         myName = (data.response.name || "").trim() || "Anonymous";
@@ -106,19 +118,20 @@
       type: jsPsychMultiplayerSync,
       push_data: () => ({ name: myName, joinedAt: Date.now() }),
       // NB: the sync plugin's waiting-HTML parameter is `message`, not `prompt`.
-      message: `<p>Waiting for at least ${MIN_PLAYERS} players to join…</p>
+      message: `<p>Waiting for ${EXPECTED_PLAYERS} players to join…</p>
                <p>Open this page in another tab (keep the <code>?mp_session=</code> in the URL) to add a player.</p>`,
-      wait_for: (group) => namedPresent(group) >= MIN_PLAYERS,
+      wait_for: (group) => namedPresent(group) >= EXPECTED_PLAYERS,
     };
 
     // 3) Match: partition the group into pairs. It's a short barrier with no UI — it just resolves the
-    //    pairing and exposes it via jsPsychMultiplayerMatch.getMyMatch(). `expected_players` (read
-    //    dynamically from the lobby) makes it wait for exactly who's present; `leftover: "spectator"`
-    //    leaves an odd extra unmatched rather than erroring.
+    //    pairing and exposes it via jsPsychMultiplayerMatch.getMyMatch(). `expected_players` is the
+    //    FIXED count (same integer on every client) so all tabs partition the identical set of players
+    //    and agree on who's paired with whom. `leftover: "spectator"` leaves an odd extra unmatched
+    //    rather than erroring (harmless here since EXPECTED_PLAYERS is even).
     const matchTrial = {
       type: jsPsychMultiplayerMatch,
       group_size: 2,
-      expected_players: () => namedPresent(jsPsych.pluginAPI.getAll()),
+      expected_players: EXPECTED_PLAYERS,
       leftover: "spectator",
       message: "<p>Finding your match…</p>",
     };
