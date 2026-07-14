@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
   <head>
-    <title>Multiplayer Ultimatum Game (local, two-tab) — jsPsych multiplayer</title>
+    <title>Multiplayer Ultimatum Game (Firebase) — jsPsych multiplayer</title>
     <!-- jsPsych core MUST carry the multiplayer API (jsPsych#3694), which is not yet in a release.
          Until it merges, load the PR's preview build from jsDelivr instead of the published `jspsych`.
          This URL is pinned to #3694 commit 01b8ee4 (preview SHA c43b3a1) — see examples/README.md
@@ -9,41 +9,88 @@
     <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@c43b3a1f285ef2d899cd43960c889a4a9d630dc9/packages/jspsych/dist/index.browser.min.js"></script>
     <script src="https://unpkg.com/@jspsych/plugin-html-button-response"></script>
     <script src="https://unpkg.com/@jspsych/plugin-html-keyboard-response"></script>
-    <!-- The three multiplayer packages. These resolve once the sibling packages are built in this
-         repo; once they are published, load them from a CDN instead, e.g.
-           <script src="https://unpkg.com/@jspsych-multiplayer/plugin-multiplayer-role"></script> -->
-    <script src="../packages/adapter-multiplayer-local/dist/index.browser.min.js"></script>
+    <!-- The two multiplayer PLUGINS are IIFE globals, loaded the same way as the other examples. The
+         Firebase ADAPTER is different: its browser build externalizes the firebase SDK, so it is
+         loaded as an ES module below (with an import map resolving the bare `firebase/*` specifiers to
+         Firebase's modular CDN). Once published, load the adapter from a CDN instead. -->
     <script src="../packages/plugin-multiplayer-role/dist/index.browser.min.js"></script>
     <script src="../packages/plugin-multiplayer-sync/dist/index.browser.min.js"></script>
     <link
       rel="stylesheet"
       href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@c43b3a1f285ef2d899cd43960c889a4a9d630dc9/packages/jspsych/css/jspsych.css"
     />
+    <!-- Resolve the adapter's bare `firebase/*` imports to Firebase's modular ESM CDN builds. -->
+    <script type="importmap">
+      {
+        "imports": {
+          "firebase/app": "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js",
+          "firebase/auth": "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js",
+          "firebase/database": "https://www.gstatic.com/firebasejs/10.14.1/firebase-database.js"
+        }
+      }
+    </script>
   </head>
 
   <body></body>
-  <script>
+  <script type="module">
     // ===============================================================================================
-    // Multiplayer Ultimatum Game (local, two-tab) — the same demo as ultimatum-game-jatos.html, wired to
-    // adapter-multiplayer-local instead of adapter-multiplayer-jatos, so it runs from two browser
-    // tabs on one machine with no server. See ultimatum-game-jatos.html for the full design notes on
-    // deterministic role assignment and the sync-barrier composition — this file only changes the
-    // network backend and the lobby/join-URL plumbing that the local adapter needs (see chat-room.html).
+    // Multiplayer Ultimatum Game (Firebase) — the same demo as ultimatum-game-jatos.html, wired to
+    // adapter-multiplayer-firebase so it runs across SEPARATE devices/browsers/machines with only a
+    // free Firebase project (no server to host). See ultimatum-game-jatos.html for the full design
+    // notes on deterministic role assignment and the sync-barrier composition — this file only changes
+    // the network backend and the join-URL plumbing (shared with ultimatum-game-local.html).
     //
     // Two players split a $10 pot. The PROPOSER offers the RESPONDER some amount; the RESPONDER
     // accepts (both keep the split) or rejects (both get nothing).
     //
-    // Dev/demo only: the local adapter is same-origin, same-browser, same-machine — not for data
-    // collection. Swap back to adapter-multiplayer-jatos (see ultimatum-game-jatos.html) for a real,
-    // cross-device study; nothing else in the timeline below is backend-specific.
+    // ── Running it ────────────────────────────────────────────────────────────────────────────────
+    // Option A — a real Firebase project (real cross-device data collection):
+    //   1. Create a project, enable Anonymous auth, create a Realtime Database, and paste the default
+    //      `auth != null` rules (see packages/adapter-multiplayer-firebase/README.md).
+    //   2. Paste your web app's config into FIREBASE_CONFIG below.
+    //   3. Serve this folder (`npx http-server .`) and open the page on two devices/tabs — share the
+    //      full URL (with its `?mp_session=…`) so both join the same session.
+    //
+    // Option B — the local Firebase Emulator (no account, no credentials):
+    //   1. `firebase emulators:start` (Realtime Database + Auth emulators).
+    //   2. Open this page with `?emulator` in the query string. It builds a database pointed at the
+    //      emulator and hands it to the adapter, so a two-tab run works entirely offline.
     // ===============================================================================================
 
-    const jsPsych = initJsPsych();
+    import { initializeApp } from "firebase/app";
+    import { connectAuthEmulator, getAuth } from "firebase/auth";
+    import { connectDatabaseEmulator, getDatabase } from "firebase/database";
+    import FirebaseAdapter from "../packages/adapter-multiplayer-firebase/dist/index.js";
 
-    // Hold the adapter instance directly (no jatos.onLoad wrapper needed for the local backend).
-    // persistParticipant keeps this tab's participant id in sessionStorage, so a mid-lobby refresh
-    // rejoins as the SAME participant instead of leaving a stale "ghost" slot.
-    const localAdapter = new jsPsychAdapterMultiplayerLocal({ persistParticipant: true });
+    // ⬇️ Option A: paste your Firebase web-app config here.
+    const FIREBASE_CONFIG = {
+      apiKey: "YOUR_API_KEY",
+      authDomain: "YOUR_PROJECT.firebaseapp.com",
+      databaseURL: "https://YOUR_PROJECT-default-rtdb.firebaseio.com",
+      projectId: "YOUR_PROJECT",
+    };
+
+    // Build the adapter: emulator path (inject a database) or real path (hand it the config).
+    const useEmulator = new URLSearchParams(location.search).has("emulator");
+    let adapter;
+    if (useEmulator) {
+      // Own the app ourselves so we can point auth + database at the local emulator before connecting.
+      // The `databaseURL` supplies the namespace (demo-jspsych); connectDatabaseEmulator then redirects
+      // all traffic to the local emulator, so no real project is contacted.
+      const app = initializeApp({
+        apiKey: "demo",
+        projectId: "demo-jspsych",
+        databaseURL: "https://demo-jspsych-default-rtdb.firebaseio.com",
+      });
+      connectAuthEmulator(getAuth(app), "http://127.0.0.1:9099", { disableWarnings: true });
+      const db = getDatabase(app);
+      connectDatabaseEmulator(db, "127.0.0.1", 9000);
+      adapter = new FirebaseAdapter({ database: db });
+    } else {
+      adapter = new FirebaseAdapter({ firebaseConfig: FIREBASE_CONFIG });
+    }
+
+    const jsPsych = initJsPsych();
 
     const POT = 10;
 
@@ -66,7 +113,7 @@
       push_data: { status: "ready" },
       wait_for: (group) => Object.keys(group).length >= 2,
       message: `<p>Waiting for another player to join…</p>
-               <p>Open this page in another tab (keep the <code>?mp_session=</code> in the URL) to add a player.</p>`,
+               <p>Open this page on another device or tab (keep the <code>?mp_session=</code> in the URL) to add a player.</p>`,
     };
 
     // ── Role assignment (deterministic consensus) ──────────────────────────────────────────────
@@ -263,11 +310,9 @@
     };
 
     // ── Final screen: tell the participant it's over and let them close the tab ────────────────
-    // Runs after every path (played the round, spectated, or timed out waiting for a group) so no
-    // one is left staring at a blank page. The download button is opt-in and doesn't end the trial
-    // — this is the local/dev adapter with no backend collecting data, so a click-triggered
-    // download is the only way to inspect a session's data, and making it opt-in (rather than an
-    // automatic download) keeps repeated test runs from littering the Downloads folder.
+    // Offers an opt-in JSON download for inspecting a demo run's data; in a real study the data also
+    // lives in your Firebase project. Making the download opt-in keeps repeated test runs from
+    // littering the Downloads folder.
     const doneScreen = {
       type: jsPsychHtmlKeyboardResponse,
       stimulus: `
@@ -282,9 +327,9 @@
       },
     };
 
-    // Connect the backend, then run. Everything above is backend-agnostic — swapping the adapter
-    // is the only change from ultimatum-game-jatos.html (plus the jatos.onLoad wrapper it no longer needs).
-    jsPsych.pluginAPI.connect(localAdapter).then(() => {
+    // Connect the backend, then run. Everything above is backend-agnostic — swapping the adapter is
+    // the only change from ultimatum-game-jatos.html (plus the jatos.onLoad wrapper it no longer needs).
+    jsPsych.pluginAPI.connect(adapter).then(() => {
       jsPsych.run([lobby, assignRoles, gameFull, noGroupScreen, gameTimeline, doneScreen]);
     });
   </script>
