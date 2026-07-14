@@ -11,11 +11,11 @@ drive **entirely from two browser tabs**, no server.
 
 ### What it demonstrates
 
-| Package                                          | Role in the demo                                                                                                        |
-| ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------- |
-| `@jspsych-multiplayer/adapter-multiplayer-local` | The network backend — `localStorage` + cross-tab signalling. Connected once, before `jsPsych.run`. **Dev/demo only.**   |
-| `@jspsych-multiplayer/plugin-multiplayer-sync`   | The lobby: one declarative barrier — push your name, wait until at least `MIN_PLAYERS` participants are present.         |
-| `@jspsych-multiplayer/plugin-multiplayer-chat`   | The room: a continuously-open trial that renders the merged transcript and lets this participant send messages.         |
+| Package                                          | Role in the demo                                                                                                      |
+| ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------- |
+| `@jspsych-multiplayer/adapter-multiplayer-local` | The network backend — `localStorage` + cross-tab signalling. Connected once, before `jsPsych.run`. **Dev/demo only.** |
+| `@jspsych-multiplayer/plugin-multiplayer-sync`   | The lobby: one declarative barrier — push your name, wait until at least `MIN_PLAYERS` participants are present.      |
+| `@jspsych-multiplayer/plugin-multiplayer-chat`   | The room: a continuously-open trial that renders the merged transcript and lets this participant send messages.       |
 
 Two small composition details are worth copying:
 
@@ -110,11 +110,11 @@ before the results screen. Like `chat-room.html` it runs on the local adapter, s
 
 ### What it demonstrates
 
-| Package                                            | Role in the demo                                                                                                            |
-| -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `@jspsych-multiplayer/adapter-multiplayer-local`   | The network backend — `localStorage` + cross-tab signalling. Connected once, before `jsPsych.run`. **Dev/demo only.**       |
-| `@jspsych-multiplayer/plugin-multiplayer-sync`     | Two declarative barriers: the lobby before the timer, and a "wait for everyone to finish" barrier after it.                 |
-| `@jspsych-multiplayer/plugin-multiplayer-countdown` | The shared timer: every client derives the same remaining time from the minimum start timestamp across all slots.          |
+| Package                                             | Role in the demo                                                                                                      |
+| --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `@jspsych-multiplayer/adapter-multiplayer-local`    | The network backend — `localStorage` + cross-tab signalling. Connected once, before `jsPsych.run`. **Dev/demo only.** |
+| `@jspsych-multiplayer/plugin-multiplayer-sync`      | Two declarative barriers: the lobby before the timer, and a "wait for everyone to finish" barrier after it.           |
+| `@jspsych-multiplayer/plugin-multiplayer-countdown` | The shared timer: every client derives the same remaining time from the minimum start timestamp across all slots.     |
 
 The composition detail worth copying is the **barrier sandwich**:
 
@@ -122,8 +122,44 @@ The composition detail worth copying is the **barrier sandwich**:
    same instant, so the timer is already converged when it appears (no visible downward step as later
    timestamps arrive).
 2. **A barrier after** it holds everyone at the line before the results screen, because the countdown
-   is *not itself a barrier* — clients end within clock skew + latency, not exactly together. The
+   is _not itself a barrier_ — clients end within clock skew + latency, not exactly together. The
    wrap-up screen reads back `own_started_at − started_at` to show this client's entry skew.
+
+### Running it
+
+Run it the same way as `chat-room.html`: build the packages, serve the repo over http(s), open the
+printed URL in one tab, then a second tab with the same `?mp_session=` in the URL. See
+`chat-room.html`'s "Running it" section above for the jsDelivr preview build and step-by-step details.
+
+## `draw-room.html`
+
+A real-time **collaborative drawing canvas**: participants pick a display name, wait in a lobby until
+enough have joined, then draw together on one shared canvas for a synced, time-boxed round. It is the
+highest-rate demo of the multiplayer API's `subscribe` primitive (continuous, throttled pushes while a
+stroke is active, vs. `chat-room.html`'s one push per message), and the flagship demo for the countdown
+plugin's **"render a synced timer during another trial"** use — the same core `public-goods-local.html`
+uses for its contribution window, drawn on top of a plugin (`plugin-multiplayer-draw`) instead of a
+core jsPsych plugin. Like `chat-room.html` it runs on the local adapter, so you can drive it **entirely
+from two browser tabs**, no server.
+
+### What it demonstrates
+
+| Package                                             | Role in the demo                                                                                                                 |
+| --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `@jspsych-multiplayer/adapter-multiplayer-local`    | The network backend — `localStorage` + cross-tab signalling. Connected once, before `jsPsych.run`. **Dev/demo only.**            |
+| `@jspsych-multiplayer/plugin-multiplayer-sync`      | The lobby: push your name, wait until at least `MIN_PLAYERS` are present.                                                        |
+| `@jspsych-multiplayer/plugin-multiplayer-draw`      | The shared canvas: pen/eraser, colors, brush sizes, and an undo that only ever removes this participant's own last stroke.       |
+| `@jspsych-multiplayer/plugin-multiplayer-countdown` | Used through its **exported statics** (`startedAtKey` / `resolveStartedAt` / `computeRemaining` / `formatTime`), not as a trial. |
+
+The composition detail worth copying: the draw plugin's own `duration` parameter is a per-client
+`setTimeout` with no cross-tab agreement on _when_ it started, so two tabs opened moments apart would
+see different end times. This demo skips that parameter entirely and instead renders the countdown
+plugin's consensus clock into the draw trial's `prompt` on `on_load`, using the same "read own slot →
+spread → push, keep-if-present" pattern the countdown plugin itself uses internally. When the synced
+clock reaches zero, the client auto-clicks its own "I'm done" button rather than ending the trial
+directly — the room closes for everyone through the same `end_when` "wait for everyone's `draw_done`
+flag" mechanism a manual click uses, so a clock-driven end and a manual end are indistinguishable to
+the rest of the group.
 
 ### Running it
 
@@ -134,24 +170,24 @@ printed URL in one tab, then a second tab with the same `?mp_session=` in the UR
 ## `public-goods-local.html`
 
 A **timed public-goods game**: two players each hold an endowment and, in a single time-boxed round,
-*simultaneously* decide how much to contribute to a common pool that is multiplied and split equally.
+_simultaneously_ decide how much to contribute to a common pool that is multiplied and split equally.
 It is the econ-game companion to `countdown-timer.html`, and the showcase for a **synchronized
 contribution deadline** — the contribution buttons are a plain `html-button-response`, with a shared
 countdown drawn on top of them.
 
 ### What it demonstrates
 
-| Package                                             | Role in the demo                                                                                                                             |
-| --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `@jspsych-multiplayer/adapter-multiplayer-local`    | The network backend — `localStorage` + cross-tab signalling. Connected once, before `jsPsych.run`. **Dev/demo only.**                          |
-| `@jspsych-multiplayer/plugin-multiplayer-sync`      | The lobby, and the "wait for both contributions" barrier, each one declarative push-then-wait.                                                |
-| `@jspsych-multiplayer/plugin-multiplayer-countdown` | Used through its **exported statics** (`startedAtKey` / `resolveStartedAt` / `computeRemaining` / `formatTime`), not as a trial.               |
+| Package                                             | Role in the demo                                                                                                                 |
+| --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `@jspsych-multiplayer/adapter-multiplayer-local`    | The network backend — `localStorage` + cross-tab signalling. Connected once, before `jsPsych.run`. **Dev/demo only.**            |
+| `@jspsych-multiplayer/plugin-multiplayer-sync`      | The lobby, and the "wait for both contributions" barrier, each one declarative push-then-wait.                                   |
+| `@jspsych-multiplayer/plugin-multiplayer-countdown` | Used through its **exported statics** (`startedAtKey` / `resolveStartedAt` / `computeRemaining` / `formatTime`), not as a trial. |
 
 This is the countdown plugin's flagship **"render a synced timer during another trial"** use — the
 same core the draw-room demo is meant to render from. The contribution trial resolves the group's
 consensus start (the minimum start timestamp across all slots) on a 100 ms interval and paints the
 same remaining time into both tabs, so the window closes together within skew + latency. A public-
-goods game fits the countdown because its pacing is *duration-bound* (everyone acts within one
+goods game fits the countdown because its pacing is _duration-bound_ (everyone acts within one
 window), unlike the turn-based ultimatum game.
 
 ### Running it
