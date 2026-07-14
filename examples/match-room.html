@@ -85,6 +85,11 @@
     // participant instead of leaving a stale "ghost" slot that would falsely satisfy the lobby.
     const localAdapter = new jsPsychAdapterMultiplayerLocal({ persistParticipant: true });
 
+    // The local adapter only removes this tab's slot on an explicit disconnect(); a tab that is just
+    // CLOSED would otherwise leave its named slot behind in localStorage as a "ghost" that later
+    // matches count as a real (but absent) player — corrupting pairings across runs. Clean up on close.
+    window.addEventListener("pagehide", () => localAdapter.disconnect());
+
     const namedPresent = (group) =>
       Object.values(group).filter((entry) => entry && entry.name).length;
 
@@ -181,8 +186,16 @@
         {
           type: jsPsychHtmlButtonResponse,
           choices: ["Continue"],
-          stimulus:
-            "<h2>No partner this round</h2><p>There was an odd number of players, so you're sitting this one out.</p>",
+          // getMyMatch() is undefined for TWO different reasons: a genuine spectator (an odd extra that
+          // the partition left out) or a match TIMEOUT (the group never reached EXPECTED_PLAYERS). Read
+          // the match trial's data to tell them apart, so a timeout isn't mislabelled as "odd number".
+          stimulus: () => {
+            const m =
+              jsPsych.data.get().filter({ trial_type: "multiplayer-match" }).values()[0] || {};
+            return m.timed_out
+              ? `<h2>No match</h2><p>Couldn't get all ${EXPECTED_PLAYERS} players matched in time — make sure exactly ${EXPECTED_PLAYERS} tabs joined the <em>same</em> session (the one <code>?mp_session=…</code>).</p>`
+              : `<h2>No partner this round</h2><p>There was an odd number of players, so you're sitting this one out.</p>`;
+          },
         },
       ],
       conditional_function: () => !jsPsychMultiplayerMatch.getMyMatch(),
