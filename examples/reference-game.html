@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Repeated Reference Game — sequential (local, two-tab) — jsPsych multiplayer</title>
+    <!-- jsPsych core MUST carry the multiplayer API (jsPsych#3694), which is not yet in a release.
+         Until it merges, load the PR's preview build from jsDelivr instead of the published `jspsych`.
+         SHA-pinned to #3694 commit 01b8ee4 (preview SHA c43b3a1) — see examples/README.md "Running
+         it" for how to re-pin if the demo misbehaves against a newer #3694. -->
+    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@c43b3a1f285ef2d899cd43960c889a4a9d630dc9/packages/jspsych/dist/index.browser.min.js"></script>
+    <script src="https://unpkg.com/@jspsych/plugin-survey-text"></script>
+    <script src="https://unpkg.com/@jspsych/plugin-html-button-response"></script>
+    <script src="https://unpkg.com/@jspsych/plugin-html-keyboard-response"></script>
+    <!-- The multiplayer packages. These resolve once the sibling packages are built in this repo
+         (`npm run build`); once published, load them from a CDN instead. Bump ?v= after a rebuild. -->
+    <script src="../packages/adapter-multiplayer-local/dist/index.browser.min.js?v=1"></script>
+    <script src="../packages/plugin-multiplayer-sync/dist/index.browser.min.js?v=1"></script>
+    <script src="../packages/plugin-multiplayer-role/dist/index.browser.min.js?v=1"></script>
+    <script src="../packages/plugin-multiplayer-reference-game/dist/index.browser.min.js?v=1"></script>
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@c43b3a1f285ef2d899cd43960c889a4a9d630dc9/packages/jspsych/css/jspsych.css"
+    />
+  </head>
+
+  <body></body>
+  <script>
+    // ===============================================================================================
+    // Repeated Reference Game — SEQUENTIAL preset (local, two-tab).
+    //
+    // Reproduces the "tangrams" repeated reference game (Hawkins, Frank & Goodman 2020, Cognitive
+    // Science 44, e12845). Two players are paired as a fixed DIRECTOR and MATCHER. Both see the same
+    // shapes, each in an independently scrambled layout; only the director sees which shape is the
+    // target. They talk over the built-in chat; the matcher clicks the shape they think is the target
+    // and both see feedback. Over several rounds each target recurs, so partners can build up shared
+    // ways of referring to the hard-to-name shapes.
+    //
+    // This is the SEQUENTIAL condition: ONE target per round (targets.length === 1), so the matcher's
+    // response is a single click. The full-board variant is the same plugin with more targets — see
+    // reference-game-match.html.
+    //
+    // It composes four packages so the experiment carries almost no networking of its own:
+    //   • adapter-multiplayer-local — localStorage + cross-tab signalling: runs by opening TWO TABS.
+    //   • plugin-multiplayer-sync   — the lobby barrier (wait for two players).
+    //   • plugin-multiplayer-role   — deterministic director/matcher assignment.
+    //   • plugin-multiplayer-reference-game — the game trial itself.
+    //
+    // Dev/demo only: the local adapter is same-origin, same-browser, same-machine — NOT for data
+    // collection. Swap in adapter-multiplayer-jatos for a real cross-device study; nothing else changes.
+    // ===============================================================================================
+
+    const MIN_PLAYERS = 2;
+
+    const jsPsych = initJsPsych();
+    const localAdapter = new jsPsychAdapterMultiplayerLocal({ persistParticipant: true });
+
+    // ── Twelve self-contained "tangram-like" silhouettes (no external assets) ──────────────────────
+    // Regular polygons (3–8 sides) and star polygons (3–8 points) — abstract and distinct, so naming
+    // them takes a few words, which is the whole point of a reference game.
+    function svgPolygon(points) {
+      return (
+        `<svg viewBox="0 0 100 100" width="100%" height="100%" aria-hidden="true">` +
+        `<polygon points="${points}" fill="#222" /></svg>`
+      );
+    }
+    function regular(n, rot) {
+      const pts = [];
+      for (let i = 0; i < n; i++) {
+        const a = rot + (i * 2 * Math.PI) / n;
+        pts.push(`${(50 + 42 * Math.cos(a)).toFixed(1)},${(50 + 42 * Math.sin(a)).toFixed(1)}`);
+      }
+      return svgPolygon(pts.join(" "));
+    }
+    function star(n, rot) {
+      const pts = [];
+      for (let i = 0; i < 2 * n; i++) {
+        const r = i % 2 === 0 ? 46 : 19;
+        const a = rot + (i * Math.PI) / n;
+        pts.push(`${(50 + r * Math.cos(a)).toFixed(1)},${(50 + r * Math.sin(a)).toFixed(1)}`);
+      }
+      return svgPolygon(pts.join(" "));
+    }
+    const SHAPES = [];
+    for (let n = 3; n <= 8; n++) SHAPES.push({ id: `poly${n}`, html: regular(n, -Math.PI / 2) });
+    for (let n = 3; n <= 8; n++) SHAPES.push({ id: `star${n}`, html: star(n, -Math.PI / 2) });
+
+    // ── Round schedule (identical in both tabs, so they agree on the target each round) ────────────
+    // A short demo schedule; note the deliberate repeats — the same shape recurs so partners can reuse
+    // (and shorten) the descriptions they coined earlier.
+    const SCHEDULE = [
+      { round: 0, targets: ["star5"] },
+      { round: 1, targets: ["poly3"] },
+      { round: 2, targets: ["star5"] }, // repeat of round 0's target
+      { round: 3, targets: ["poly7"] },
+      { round: 4, targets: ["star8"] },
+      { round: 5, targets: ["poly3"] }, // repeat of round 1's target
+    ];
+
+    let myName = "";
+    let myRole; // "director" | "matcher" | "spectator" (undefined if role assignment timed out)
+    let partnerId;
+
+    // 1) Display name.
+    const nameTrial = {
+      type: jsPsychSurveyText,
+      questions: [{ prompt: "Choose a display name:", required: true, name: "name" }],
+      on_finish: (data) => {
+        myName = (data.response.name || "").trim() || "Anonymous";
+      },
+    };
+
+    // 2) Lobby: publish name + join time, wait until two players are present.
+    const lobbyTrial = {
+      type: jsPsychMultiplayerSync,
+      push_data: () => ({ name: myName, joinedAt: Date.now() }),
+      message: `<p>Waiting for ${MIN_PLAYERS} players to join…</p>
+                <p>Open this page in another tab (keep the <code>?mp_session=</code> in the URL) to add a player.</p>`,
+      wait_for: (group) =>
+        Object.values(group).filter((entry) => entry && entry.name).length >= MIN_PLAYERS,
+    };
+
+    // 3) Assign director/matcher RANDOMLY (deterministic consensus: both tabs derive the same result
+    //    from a shared seed = hash of the sorted participant ids, so it isn't "whoever joined first").
+    //    Roles stay fixed for the whole game, matching the original study. Use "join_order" instead if
+    //    you want the first tab to always be the director (handy while testing).
+    const roleTrial = {
+      type: jsPsychMultiplayerRole,
+      roles: ["director", "matcher"],
+      strategy: "random",
+      overflow_role: "spectator",
+      ready: (group) =>
+        Object.keys(group).length >= MIN_PLAYERS &&
+        Object.values(group).every((entry) => entry && entry.joinedAt != null),
+      save_group: true,
+      message: "<p>Pairing you with your partner…</p>",
+      on_finish: () => {
+        myRole = jsPsychMultiplayerRole.getMyRole();
+        const byRole = jsPsychMultiplayerRole.participantsByRole();
+        partnerId = myRole === "director" ? byRole.matcher?.[0] : byRole.director?.[0];
+      },
+    };
+
+    // 4) A late third+ participant becomes a spectator.
+    const spectatorScreen = {
+      timeline: [
+        {
+          type: jsPsychHtmlKeyboardResponse,
+          stimulus: "<p>This game is already full. Thanks for your interest!</p>",
+          choices: "NO_KEYS",
+          trial_duration: 4000,
+          on_finish: () => jsPsych.pluginAPI.disconnect(),
+        },
+      ],
+      conditional_function: () => myRole === "spectator",
+    };
+
+    // 5) The repeated game: one reference-game trial per round.
+    const gameRound = {
+      type: jsPsychMultiplayerReferenceGame,
+      stimuli: SHAPES,
+      columns: 6,
+      role: () => jsPsychMultiplayerRole.getMyRole(),
+      partner_id: () => partnerId,
+      round: jsPsych.timelineVariable("round"),
+      targets: jsPsych.timelineVariable("targets"),
+      show_running_score: true,
+      round_timeout: 60000, // bound the round; ends it if the partner leaves
+      prompt: (role) =>
+        role === "director"
+          ? "<p><strong>You are the Director.</strong> Describe the highlighted shape so your partner can pick it out.</p>"
+          : "<p><strong>You are the Matcher.</strong> Click the shape your partner is describing.</p>",
+    };
+
+    const gameLoop = {
+      timeline: [gameRound],
+      timeline_variables: SCHEDULE,
+      // Only the two paired players play; spectators/timed-out clients skip it.
+      conditional_function: () => myRole === "director" || myRole === "matcher",
+    };
+
+    // 6) Wrap-up with an opt-in data download (local adapter has no backend collecting data).
+    const doneTrial = {
+      type: jsPsychHtmlKeyboardResponse,
+      stimulus: () => {
+        // Both roles record the round outcome (the director computes `correct` from the matcher's
+        // submission), so this summary reads the same on both screens. Count only rounds that were
+        // actually completed (ended_by "submit"), so an aborted/timed-out round isn't scored as wrong.
+        const completed = jsPsych.data
+          .get()
+          .filter({ trial_type: "multiplayer-reference-game", ended_by: "submit" });
+        const played = completed.count();
+        const correct = completed.filter({ correct: true }).count();
+        return `<h2>Game complete!</h2>
+                <p>Together you got <strong>${correct} of ${played}</strong> round${
+          played === 1 ? "" : "s"
+        } correct.</p>
+                <p>You may close this tab. <button id="dl">Download data (JSON)</button></p>`;
+      },
+      choices: "NO_KEYS",
+      on_load: () => {
+        document
+          .getElementById("dl")
+          ?.addEventListener("click", () =>
+            jsPsych.data.get().localSave("json", "reference-game-data.json")
+          );
+      },
+    };
+
+    jsPsych.pluginAPI.connect(localAdapter).then(() => {
+      jsPsych.run([nameTrial, lobbyTrial, roleTrial, spectatorScreen, gameLoop, doneTrial]);
+    });
+  </script>
+</html>

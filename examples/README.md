@@ -212,3 +212,33 @@ against a real JATOS deployment.
 Run it the same way as `chat-room.html`: build the packages, serve the repo over http(s), open the
 file in one tab, then copy the full URL (including `?mp_session=…`) into a second tab. See
 `chat-room.html`'s "Running it" section above for the jsDelivr preview build and step-by-step details.
+
+## `reference-game.html`
+
+A repeated **referential communication game** ("tangrams"; Hawkins, Frank & Goodman, 2020) built on
+`plugin-multiplayer-reference-game`. Two players are paired as a fixed **director** and **matcher**;
+both see the same twelve abstract shapes, each in an independently scrambled layout, and only the
+director sees which shape is the round's **target**. They talk over the built-in chat, the matcher
+**clicks** the target, and both see feedback — repeated over several rounds so the same targets recur.
+
+### What it demonstrates
+
+Composing four packages into one experiment with almost no bespoke networking:
+`adapter-multiplayer-local` (two-tab backend), `plugin-multiplayer-sync` (lobby),
+`plugin-multiplayer-role` (director/matcher), and `plugin-multiplayer-reference-game` (the game
+trial, one per round via `timeline_variables`). The shapes are inline SVG, so there are no external
+assets. This is the **sequential** condition (one target ⇒ a single click).
+
+### Running it
+
+Same as `chat-room.html`: build the packages, serve the repo over http(s), open the file in one tab,
+then copy the full URL (including `?mp_session=…`) into a second tab so a second player joins. The
+first tab becomes the director, the second the matcher.
+
+## `reference-game-match.html`
+
+The **same plugin** as `reference-game.html`, configured for the **full-board match** ("unconstrained")
+condition: every object is an ordered **target**, so the director's board shows numbered slot badges
+and the matcher reproduces that order by assigning each shape to a slot, then submitting for a score
+out of N. Shows that "sequential" and "unconstrained" are one plugin with `targets` turned from
+length-1 to length-N. Run it the same two-tab way.
