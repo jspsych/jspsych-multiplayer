@@ -55,7 +55,7 @@
     // each player's payoff from the classic PD matrix. It composes three packages:
     //   • adapter-multiplayer-local — the network backend. localStorage + cross-tab signalling, so the
     //                                 whole thing runs by OPENING TWO BROWSER TABS — no server.
-    //   • plugin-multiplayer-sync   — the lobby: push your name, wait until MIN_PLAYERS are present.
+    //   • plugin-multiplayer-sync   — the lobby: push your name, wait until EXPECTED_PLAYERS are present.
     //   • plugin-multiplayer-choice — the decision: everyone picks, the group barriers until all have
     //                                 chosen, then choices + payoffs are revealed. The `payoff` hook
     //                                 scores the round; here it implements the PD matrix.
@@ -66,8 +66,11 @@
     // is same-origin, same-browser, same-machine — a development/demo tool, NOT for data collection.
     // ===============================================================================================
 
-    // A two-player game.
-    const MIN_PLAYERS = 2;
+    // This demo is designed for a FIXED number of players (a Prisoner's Dilemma needs exactly 2).
+    // `expected_players` must be the same exact integer on every client, so it's a constant, NOT a
+    // live head-count of whoever is present — a live count lets tabs that reach the barrier at
+    // different moments wait for different totals and hang.
+    const EXPECTED_PLAYERS = 2;
 
     // The two moves. Index 0 = Cooperate, index 1 = Defect (used by the payoff matrix below).
     const MOVES = ["Cooperate", "Defect"];
@@ -87,6 +90,10 @@
     // participant instead of leaving a stale "ghost" slot that would falsely satisfy the lobby.
     const localAdapter = new jsPsychAdapterMultiplayerLocal({ persistParticipant: true });
 
+    // The local adapter only removes this tab's slot on an explicit disconnect(); a CLOSED tab would
+    // otherwise linger as a "ghost" slot that pollutes later runs. Clean up on close.
+    window.addEventListener("pagehide", () => localAdapter.disconnect());
+
     // Only participants who made it through the lobby (i.e. pushed a `name`) count as "present".
     const namedPresent = (group) =>
       Object.values(group).filter((entry) => entry && entry.name).length;
@@ -96,6 +103,11 @@
     // 1) Ask for a display name.
     const nameTrial = {
       type: jsPsychSurveyText,
+      preamble: `<div style="max-width:34em;margin:0 auto 1.2em;padding:0.8em 1em;border:1px solid #ccc;border-radius:8px;background:#f6f8fa;">
+                   👥 <strong>This demo is designed for ${EXPECTED_PLAYERS} players</strong>.
+                   Open this page in <strong>exactly ${EXPECTED_PLAYERS} browser tabs</strong> — copy the URL
+                   (including <code>?mp_session=…</code>) into each new tab so they join the same session.
+                 </div>`,
       questions: [{ prompt: "Choose a display name:", required: true, name: "name" }],
       on_finish: (data) => {
         myName = (data.response.name || "").trim() || "Anonymous";
@@ -107,9 +119,9 @@
       type: jsPsychMultiplayerSync,
       push_data: () => ({ name: myName, joinedAt: Date.now() }),
       // NB: the sync plugin's waiting-HTML parameter is `message`, not `prompt`.
-      message: `<p>Waiting for ${MIN_PLAYERS} players to join…</p>
+      message: `<p>Waiting for ${EXPECTED_PLAYERS} players to join…</p>
                <p>Open this page in another tab (keep the <code>?mp_session=</code> in the URL) to add a player.</p>`,
-      wait_for: (group) => namedPresent(group) >= MIN_PLAYERS,
+      wait_for: (group) => namedPresent(group) >= EXPECTED_PLAYERS,
     };
 
     // Map a participant id to the display name it pushed in the lobby; our own id reads "You".
@@ -127,7 +139,7 @@
       type: jsPsychMultiplayerChoice,
       choices: MOVES,
       prompt: "<p>Prisoner's Dilemma — do you <strong>Cooperate</strong> or <strong>Defect</strong>?</p>",
-      expected_players: () => namedPresent(jsPsych.pluginAPI.getAll()),
+      expected_players: EXPECTED_PLAYERS,
       waiting_message: "<p>Your move is locked in — waiting for the other player…</p>",
       player_label: labelFor,
       payoff: (choices, me) => {
