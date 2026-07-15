@@ -54,7 +54,11 @@ class MockApi implements MultiplayerApiLike {
         setTimeout(() => {
           if (!settled) {
             settled = true;
-            reject(new Error(`wait timed out after ${timeout}ms`));
+            // Mirrors the real MultiplayerTimeoutError: a named Error, since the plugin can't
+            // import that class (see multiplayer-api.ts) and matches on `error.name` instead.
+            const err = new Error(`wait timed out after ${timeout}ms`);
+            err.name = "MultiplayerTimeoutError";
+            reject(err);
           }
         }, timeout);
       }
@@ -211,26 +215,29 @@ describe("multiplayer-sync plugin", () => {
     expect(finished[0].group).toEqual(api.getAll()); // snapshot from getAll() on timeout
   });
 
-  it("records a non-timeout wait() rejection message in wait_error so failures are diagnosable", async () => {
-    // As of jsPsych#3694's current draft, wait() rejects only on timeout, so the plugin labels any
-    // rejection `timed_out: true` — but the original message must survive into the trial data.
+  it("propagates a non-timeout wait() rejection instead of mislabeling it a timeout", async () => {
+    // #3694 exports a typed MultiplayerTimeoutError so a genuine timeout can be told apart from
+    // another wait() failure. Anything else (a throwing wait_for, an adapter error) must fail the
+    // trial loudly rather than being recorded as `timed_out: true`, matching push-failure handling.
     const api = new MockApi("p1");
     jest.spyOn(api, "wait").mockRejectedValue(new Error("adapter disconnected"));
     const on_timeout = jest.fn();
     const { jsPsych, finished } = makeJsPsych(api);
     const plugin = new MultiplayerSyncPlugin(jsPsych as never);
 
-    await plugin.trial(display(), {
-      push_data: null,
-      wait_for: () => false,
-      message: "<p>Waiting…</p>",
-      timeout: 40,
-      on_timeout,
-      minimum_wait: 0,
-    } as never);
+    await expect(
+      plugin.trial(display(), {
+        push_data: null,
+        wait_for: () => false,
+        message: "<p>Waiting…</p>",
+        timeout: 40,
+        on_timeout,
+        minimum_wait: 0,
+      } as never)
+    ).rejects.toThrow(/adapter disconnected/);
 
-    expect(finished[0].timed_out).toBe(true);
-    expect(finished[0].wait_error).toBe("adapter disconnected");
+    expect(on_timeout).not.toHaveBeenCalled();
+    expect(finished.length).toBe(0);
   });
 
   it("holds the message for minimum_wait even when the timeout elapses first", async () => {

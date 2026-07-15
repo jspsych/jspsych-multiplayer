@@ -34,7 +34,7 @@ await jsPsych.run(timeline);
 | `group`     | object  | The full group session snapshot at the moment the condition was met (or the timeout fired). Read peers / assign roles from here in `on_finish`. |
 | `wait_time` | integer | Time spent waiting, in ms, from trial start until the trial ended.                                                                             |
 | `timed_out` | boolean | True if the trial ended because `timeout` elapsed rather than because `wait_for` was met.                                                       |
-| `wait_error` | string \| null | Message from the `wait()` rejection when the trial ended without `wait_for` being met (on a genuine timeout, the timeout message); `null` when the condition was satisfied. |
+| `wait_error` | string \| null | The timeout error message when `timeout` elapsed; `null` when the condition was satisfied. A non-timeout `wait()` failure (a throwing `wait_for`, an adapter error) is not recorded here — it fails the trial instead. |
 
 ## Writing robust `wait_for` predicates
 

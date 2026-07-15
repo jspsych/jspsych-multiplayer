@@ -71,9 +71,9 @@ const info = <const>{
       default: false,
     },
     /**
-     * Message from the `wait()` rejection when the trial ended without `wait_for` being met;
-     * null when the condition was satisfied. On a genuine timeout this is the timeout message, so
-     * non-timeout rejections (if the API ever produces them) remain diagnosable in the data.
+     * The `MultiplayerTimeoutError` message when `timeout` elapsed; null when the condition was
+     * satisfied. A non-timeout `wait()` rejection (a throwing `wait_for`, an adapter failure) is
+     * NOT captured here — it propagates and fails the trial instead of being recorded as a timeout.
      */
     wait_error: {
       type: ParameterType.STRING,
@@ -160,16 +160,22 @@ class MultiplayerSyncPlugin implements JsPsychPlugin<Info> {
 
       finish(group, false, null);
     } catch (e) {
-      // As of jsPsych#3694's current draft, api.wait() rejects only on timeout, so every rejection
-      // is labeled `timed_out: true` and routed to on_timeout. The rejection's message is stored in
-      // `wait_error` so a non-timeout failure would still be diagnosable from the data.
-      // TODO: revisit this seam when #3694 finalizes whether wait() can reject for other reasons.
+      // #3694 exports a typed MultiplayerTimeoutError so a genuine timeout can be told apart from a
+      // throwing `wait_for` predicate or another wait() failure. Match on `error.name` rather than
+      // `instanceof MultiplayerTimeoutError` — this plugin can't even import that class (the
+      // published `jspsych` doesn't carry it yet, see multiplayer-api.ts), and `name` is also what
+      // the class's own doc recommends, since instanceof breaks across duplicate module instances.
+      if (!(e instanceof Error && e.name === "MultiplayerTimeoutError")) {
+        // Not a timeout — a bug in `wait_for` or an adapter/backend failure. Surface it loudly
+        // instead of mislabeling it `timed_out: true`, matching the push-failure handling above.
+        throw e;
+      }
       if (typeof trial.on_timeout === "function") {
         trial.on_timeout(e);
       }
       // Honour minimum_wait here too, so a short timeout can't flash the waiting message.
       await holdMinimumWait();
-      finish(api.getAll(), true, e instanceof Error ? e.message : String(e));
+      finish(api.getAll(), true, e.message);
     }
   }
 }

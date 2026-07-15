@@ -43,7 +43,7 @@ await jsPsych.run(timeline);
 | `n_ready`    | integer        | Number of group members marked ready in the snapshot when the trial ended.                                                        |
 | `group`      | object         | The full group session snapshot when the group was ready (or the timeout fired). Read peers / assign roles from here in `on_finish`. |
 | `timed_out`  | boolean        | True if the trial ended because `timeout` elapsed rather than because everyone was ready.                                          |
-| `wait_error` | string \| null | Message from the `wait()` rejection when the trial ended without the group being ready (on a genuine timeout, the timeout message); `null` when everyone was ready. |
+| `wait_error` | string \| null | The timeout error message when `timeout` elapsed; `null` when everyone was ready. A non-timeout `wait()` failure (an adapter error) is not recorded here — it fails the trial instead. |
 
 ## Overwrite-per-participant semantics
 
