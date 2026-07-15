@@ -261,7 +261,7 @@
         const markDone = () => {
           const mine = jsPsych.pluginAPI.get(localAdapter.participantId) || {};
           if (mine.draw_done === true) return;
-          jsPsych.pluginAPI.push({ ...mine, draw_done: true });
+          jsPsych.pluginAPI.update({ draw_done: true });
           button.disabled = true;
           button.textContent = "Waiting for others…";
         };
@@ -280,7 +280,7 @@
         const already =
           typeof mineAtLoad[DRAW_START_KEY] === "number" && Number.isFinite(mineAtLoad[DRAW_START_KEY]);
         const ownStart = already ? mineAtLoad[DRAW_START_KEY] : Date.now();
-        if (!already) jsPsych.pluginAPI.push({ ...mineAtLoad, [DRAW_START_KEY]: ownStart });
+        if (!already) jsPsych.pluginAPI.update({ [DRAW_START_KEY]: ownStart });
 
         // Paint the shared clock and, once the synced remaining time hits zero, auto-click "I'm done"
         // on this client's behalf — every participant's clock converges to zero within skew + latency
