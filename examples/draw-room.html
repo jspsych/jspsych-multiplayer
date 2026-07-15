@@ -234,8 +234,7 @@
         button.className = "draw-room-done-button";
         button.textContent = "I'm done";
         button.addEventListener("click", () => {
-          const mine = jsPsych.pluginAPI.get(localAdapter.participantId) || {};
-          jsPsych.pluginAPI.push({ ...mine, draw_done: true });
+          jsPsych.pluginAPI.update({ draw_done: true });
           button.disabled = true;
           button.textContent = "Waiting for others…";
         });
