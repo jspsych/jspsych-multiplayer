@@ -91,7 +91,7 @@ type Info = typeof info;
  * coordinator and no extra round-trip.
  *
  * The trial runs as a short barrier: it pushes this client's round-scoped data, waits (via the
- * multiplayer API's `wait`/`communicate`) until the group is ready per the chosen strategy, computes
+ * multiplayer API's `wait`) until the group is ready per the chosen strategy, computes
  * the map over the resolved snapshot, exposes the role to downstream trials through the accessor
  * store, and saves the assignment to the data record. On timeout it fails loud (`role: null,
  * timed_out: true`) rather than hanging.
@@ -186,45 +186,59 @@ class MultiplayerRolePlugin implements JsPsychPlugin<Info> {
       seed: trial.seed ?? undefined,
     });
 
-    // communicate() pushes our payload, then waits for readiness. The two-argument `.then` is
-    // deliberate: the rejection handler catches ONLY communicate's rejection (a real timeout or
-    // backend/push failure) and routes it to the soft, fail-loud timeout path. A throw from
-    // assignRoles is a different animal — readiness has already certified the group complete, so a
-    // throw there means the assignment CONFIG is wrong (overflow with no overflow_role, role_from
-    // returning an undeclared role, a custom strategy that throws). Those must NOT be relabelled as a
-    // timeout; they propagate out of the returned promise so jsPsych halts the trial loudly. We assign
-    // over the RESOLVED snapshot, never a fresh getAll(), which would reopen the time-of-check gap.
-    return api.communicate(payload, isReady, trial.timeout ?? undefined).then(
-      (group) => {
-        const roleMap = assignRoles(group, {
-          roles: trial.roles as AssignOptions["roles"],
-          strategy: trial.strategy,
-          seed: trial.seed ?? undefined,
-          round: trial.round,
-          balanced: trial.balanced,
-          rankBy: trial.rank_by ?? undefined,
-          roleFrom: trial.role_from ?? undefined,
-          overflowRole: trial.overflow_role ?? undefined,
-        });
-        const mine = roleMap[me];
-        setMyAssignment(mine, roleMap); // update accessor store for downstream trials
-        this.jsPsych.finishTrial({
-          role: mine?.role ?? null,
-          role_map: roleMap,
-          // assigned_self is false only when an assignment ran but this participant is absent from the
-          // agreed map — i.e. a custom strategy treated them as a spectator. (Overflow participants ARE
-          // in the map, with overflow_role, so they read true.) It distinguishes that from a timeout,
-          // where role_map is null too.
-          assigned_self: mine != null,
-          timed_out: false,
-          ...(trial.save_group ? { group } : {}),
-        });
-      },
-      () => this.handleTimeout(trial) // ONLY communicate rejection (timeout / backend / push failure)
-    );
+    // Push our payload, then wait for readiness. The two-argument `.then` is deliberate: the
+    // rejection handler catches ONLY the push/wait chain's rejection and routes it to the soft,
+    // fail-loud timeout path — but only when that rejection is a genuine MultiplayerTimeoutError.
+    // A throw from assignRoles is a different animal — readiness has already certified the group
+    // complete, so a throw there means the assignment CONFIG is wrong (overflow with no
+    // overflow_role, role_from returning an undeclared role, a custom strategy that throws). Those
+    // must NOT be relabelled as a timeout; they propagate out of the returned promise so jsPsych
+    // halts the trial loudly. We assign over the RESOLVED snapshot, never a fresh getAll(), which
+    // would reopen the time-of-check gap.
+    return api
+      .push(payload)
+      .then(() => api.wait(isReady, trial.timeout ?? undefined))
+      .then(
+        (group) => {
+          const roleMap = assignRoles(group, {
+            roles: trial.roles as AssignOptions["roles"],
+            strategy: trial.strategy,
+            seed: trial.seed ?? undefined,
+            round: trial.round,
+            balanced: trial.balanced,
+            rankBy: trial.rank_by ?? undefined,
+            roleFrom: trial.role_from ?? undefined,
+            overflowRole: trial.overflow_role ?? undefined,
+          });
+          const mine = roleMap[me];
+          setMyAssignment(mine, roleMap); // update accessor store for downstream trials
+          this.jsPsych.finishTrial({
+            role: mine?.role ?? null,
+            role_map: roleMap,
+            // assigned_self is false only when an assignment ran but this participant is absent from the
+            // agreed map — i.e. a custom strategy treated them as a spectator. (Overflow participants ARE
+            // in the map, with overflow_role, so they read true.) It distinguishes that from a timeout,
+            // where role_map is null too.
+            assigned_self: mine != null,
+            timed_out: false,
+            ...(trial.save_group ? { group } : {}),
+          });
+        },
+        (error) => {
+          // Match on `error.name` rather than `instanceof MultiplayerTimeoutError` — this plugin
+          // can't import that class (the published `jspsych` doesn't carry it yet, see
+          // multiplayer-api.ts), and `name` also survives two loaded copies of jspsych.
+          if (!(error instanceof Error && error.name === "MultiplayerTimeoutError")) {
+            // Not a timeout — a push failure or an adapter/backend error. Surface it loudly instead
+            // of mislabeling it a timeout.
+            throw error;
+          }
+          return this.handleTimeout(trial);
+        }
+      );
   }
 
-  /** Readiness never reached within `timeout` (or a backend/push error). Fail loud, don't hang. */
+  /** Readiness never reached within `timeout` (a genuine MultiplayerTimeoutError). Fail loud, don't hang. */
   private handleTimeout(trial: TrialType<Info>) {
     setMyAssignment(undefined); // clear any stale assignment so getMyRole() reads as undefined
     try {
