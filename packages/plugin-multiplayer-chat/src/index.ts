@@ -338,7 +338,7 @@ class MultiplayerChatPlugin implements JsPsychPlugin<Info> {
       // on failure: pushes are fire-and-forget, so a later send may already have taken the next
       // number, and reusing a seq would forge a duplicate id that mergeMessages' dedup silently
       // drops. A skipped seq is harmless; a reused one loses data.
-      api.push({ ...mine, [dataKey]: nextMessages }).catch(() => {
+      api.update({ [dataKey]: nextMessages }).catch(() => {
         showSendError();
       });
     };
