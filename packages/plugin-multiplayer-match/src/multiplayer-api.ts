@@ -9,10 +9,9 @@
  * the single seam to re-verify once #3694 lands.
  *
  * Like `plugin-multiplayer-role`, matching is a barrier-then-compute trial: it pushes this client's
- * `joinedAt`/round data, waits (via `communicate` = push + `wait`) until the group is ready, then
- * partitions the resolved snapshot. It declares `participantId`/`get`/`push`/`getAll`/`wait`/
- * `communicate`. Mock-based tests implement this same interface, so the wrapper is exercised
- * end-to-end with no live group session.
+ * `joinedAt`/round data, then `wait`s until the group is ready, then partitions the resolved
+ * snapshot. It declares `participantId`/`get`/`push`/`getAll`/`wait`. Mock-based tests implement this
+ * same interface, so the wrapper is exercised end-to-end with no live group session.
  */
 
 /** A group-session snapshot: participantId -> that participant's pushed data. Matches the API's `GroupSessionData`. */
@@ -36,11 +35,4 @@ export interface MultiplayerApiLike {
    * reject if `timeout` ms elapse first. `undefined` timeout waits forever.
    */
   wait(condition: (data: GroupSessionData) => boolean, timeout?: number): Promise<GroupSessionData>;
-
-  /** Convenience: push `data`, then `wait(condition, timeout)`. One promise so one `.catch` covers both. */
-  communicate(
-    data: Record<string, unknown>,
-    condition: (data: GroupSessionData) => boolean,
-    timeout?: number
-  ): Promise<GroupSessionData>;
 }

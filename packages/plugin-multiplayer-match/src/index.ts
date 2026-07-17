@@ -105,8 +105,8 @@ const tryBool = (fn: () => boolean): boolean => {
  * primitive under every pairwise/small-group paradigm (trust game, ultimatum, dyadic negotiation),
  * and composes with `plugin-multiplayer-role` (assign roles *within* each group via `position`).
  *
- * The trial runs as a short barrier: it pushes this client's `joinedAt`/data, waits (via the
- * multiplayer API's `communicate`) until the group is ready, partitions the resolved snapshot,
+ * The trial runs as a short barrier: it pushes this client's `joinedAt`/data, then `wait`s until the
+ * group is ready, partitions the resolved snapshot,
  * exposes this client's partners to downstream trials through the accessor store, and saves the
  * assignment to the data record. On timeout it fails loud (`matched_self: false, timed_out: true`)
  * rather than hanging.
@@ -180,15 +180,20 @@ class MultiplayerMatchPlugin implements JsPsychPlugin<Info> {
 
     const isReady = this.makeReadiness(trial);
 
-    // communicate() pushes our payload, then waits for readiness. The two-argument `.then` is
-    // deliberate: the rejection handler catches ONLY communicate's rejection (a real timeout or
-    // backend/push failure) and routes it to the fail-loud timeout path. A throw from buildMatches is
-    // a different animal — readiness already certified the group, so a throw there means the CONFIG is
-    // wrong (a non-divisible group with leftover "error"); it must NOT be relabelled as a timeout, so
-    // it propagates out of the returned promise and jsPsych halts loudly. We partition the RESOLVED
-    // snapshot, never a fresh getAll(), which would reopen the time-of-check gap.
-    return api.communicate(payload, isReady, trial.timeout ?? undefined).then(
-      (group) => {
+    // Push our payload, then wait for readiness. (`communicate` was removed from the multiplayer API
+    // in jsPsych#3694; a push-then-wait chain is the replacement.) The two-argument `.then` is
+    // deliberate: the rejection handler catches only the push/wait rejection. It routes a genuine
+    // readiness timeout (`MultiplayerTimeoutError`) to the graceful timeout path, but rethrows any
+    // OTHER rejection (a backend/push failure) so it is never masqueraded as a timeout. A throw from
+    // buildMatches is a different animal again — readiness already certified the group, so a throw
+    // there means the CONFIG is wrong (a non-divisible group with leftover "error"); because it
+    // happens inside the resolve handler it propagates out of the returned promise and jsPsych halts
+    // loudly. We partition the RESOLVED snapshot, never a fresh getAll(), which would reopen the
+    // time-of-check gap.
+    return api
+      .push(payload)
+      .then(() => api.wait(isReady, trial.timeout ?? undefined))
+      .then((group) => {
         const matchMap = buildMatches(group, {
           groupSize: trial.group_size,
           strategy: trial.strategy as MatchOptions["strategy"],
@@ -213,12 +218,22 @@ class MultiplayerMatchPlugin implements JsPsychPlugin<Info> {
           timed_out: false,
           ...(trial.save_group ? { group } : {}),
         });
-      },
-      () => this.handleTimeout(trial) // ONLY communicate rejection (timeout / backend / push failure)
-    );
+      })
+      .catch((err) => {
+        // A genuine readiness timeout ends the trial gracefully (timed_out: true). Match on the error
+        // NAME, not `instanceof` — that survives two loaded copies of jspsych. Any other rejection (a
+        // backend/push failure) is a real fault: rethrow so jsPsych halts loudly instead of it being
+        // mislabelled a timeout. Note this .catch runs AFTER the resolve handler, so a buildMatches
+        // throw would also land here — but such a throw is a config bug that likewise must propagate,
+        // and it is not a MultiplayerTimeoutError, so it rethrows too.
+        if ((err as { name?: string })?.name === "MultiplayerTimeoutError") {
+          return this.handleTimeout(trial);
+        }
+        throw err;
+      });
   }
 
-  /** Build the readiness predicate for `communicate`'s wait. */
+  /** Build the readiness predicate for the `wait` barrier. */
   private makeReadiness(trial: TrialType<Info>): (s: GroupSessionData) => boolean {
     // Exact count converts a contract violation (overshoot) into a loud stall->timeout rather than a
     // silent subset partition. `null` resolves as soon as anyone is present (an upstream barrier trust).

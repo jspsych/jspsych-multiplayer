@@ -7,8 +7,8 @@ import MultiplayerMatchPlugin from ".";
 // ---------------------------------------------------------------------------------------------------
 // Mock multiplayer API implementing the same local interface the wrapper codes against (mirrors the
 // role plugin's mock). `push` overwrites this participant's entry; `wait` honours the fast-path and
-// re-checks whenever a later push/seed lands, rejecting if `timeout` ms elapse; `communicate` is
-// push-then-wait. Timeout tests use Jest fake timers.
+// re-checks whenever a later push/seed lands, rejecting with a `MultiplayerTimeoutError`-named error
+// (as the real API does) if `timeout` ms elapse. Timeout tests use Jest fake timers.
 // ---------------------------------------------------------------------------------------------------
 class MockApi implements MultiplayerApiLike {
   session: GroupSessionData = {};
@@ -50,20 +50,13 @@ class MockApi implements MultiplayerApiLike {
         setTimeout(() => {
           if (!settled) {
             settled = true;
-            reject(new Error(`wait timed out after ${timeout}ms`));
+            const err = new Error(`wait timed out after ${timeout}ms`);
+            err.name = "MultiplayerTimeoutError";
+            reject(err);
           }
         }, timeout);
       }
     });
-  }
-
-  async communicate(
-    data: Record<string, unknown>,
-    condition: (d: GroupSessionData) => boolean,
-    timeout?: number
-  ) {
-    await this.push(data);
-    return this.wait(condition, timeout);
   }
 }
 
@@ -264,7 +257,7 @@ describe("plugin-multiplayer-match — trial wrapper", () => {
         on_timeout,
       } as never);
 
-      await Promise.resolve(); // let communicate push + register the wait timer
+      await Promise.resolve(); // let push resolve + register the wait timer
       jest.advanceTimersByTime(1000);
       jest.useRealTimers();
       await done;
@@ -278,6 +271,24 @@ describe("plugin-multiplayer-match — trial wrapper", () => {
     } finally {
       jest.useRealTimers();
     }
+  });
+
+  it("propagates a non-timeout rejection (e.g. push failure) instead of masking it as a timeout", async () => {
+    const api = new MockApi("a");
+    api.push = () => Promise.reject(new Error("backend unavailable")); // not a MultiplayerTimeoutError
+    const on_timeout = jest.fn();
+    const { jsPsych, finished } = makeJsPsych(api);
+
+    const done = new MultiplayerMatchPlugin(jsPsych as never).trial(display(), {
+      ...base,
+      expected_players: 2,
+      timeout: 1000,
+      on_timeout,
+    } as never);
+
+    await expect(done).rejects.toThrow(/backend unavailable/);
+    expect(on_timeout).not.toHaveBeenCalled(); // NOT routed to the graceful timeout path
+    expect(finished).toHaveLength(0); // trial halts loudly rather than finishing timed_out
   });
 
   it("join_order readiness waits until every present participant has pushed joinedAt", async () => {
@@ -350,7 +361,6 @@ describe("plugin-multiplayer-match — real jsPsych pipeline (startTimeline smok
       push: api.push.bind(api),
       getAll: api.getAll.bind(api),
       wait: api.wait.bind(api),
-      communicate: api.communicate.bind(api),
     });
 
     const { getData, expectFinished } = await startTimeline(
