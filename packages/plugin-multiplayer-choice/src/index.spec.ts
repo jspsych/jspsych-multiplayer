@@ -8,7 +8,8 @@ import MultiplayerChoicePlugin from ".";
 // Mock multiplayer API implementing the local interface the plugin codes against. `push` overwrites
 // this participant's slot (mirroring the reference adapter's overwrite-per-participant semantics) and
 // notifies any waiter; `seed` simulates a peer's push. `wait` honours the fast-path and re-checks the
-// condition whenever a push/seed lands, rejecting if `timeout` ms elapse first. Tests use real timers
+// condition whenever a push/seed lands, rejecting with a `MultiplayerTimeoutError`-named error (as
+// the real API does) if `timeout` ms elapse first. Tests use real timers
 // with short timeouts, so no fake-timer plumbing is needed (matching the sync plugin's spec).
 // ---------------------------------------------------------------------------------------------------
 class MockApi implements MultiplayerApiLike {
@@ -51,7 +52,9 @@ class MockApi implements MultiplayerApiLike {
         setTimeout(() => {
           if (!settled) {
             settled = true;
-            reject(new Error(`wait timed out after ${timeout}ms`));
+            const err = new Error(`wait timed out after ${timeout}ms`);
+            err.name = "MultiplayerTimeoutError"; // mirror the real API's typed timeout rejection
+            reject(err);
           }
         }, timeout);
       }
@@ -339,6 +342,28 @@ describe("plugin-multiplayer-choice — reveal:false, timeout, payoff, and robus
     await expect(done).rejects.toThrow(/connection lost/);
     expect(on_timeout).not.toHaveBeenCalled(); // a push failure is not a timeout
     expect(finished).toHaveLength(0); // trial never finished
+  });
+
+  it("propagates a non-timeout wait() rejection instead of masking it as a timeout", async () => {
+    const api = new MockApi("p1");
+    api.seed("p2", { choice: { index: 0, label: "Cooperate" } });
+    // A wait() rejection that is NOT a MultiplayerTimeoutError (e.g. a throwing condition/backend fault).
+    jest.spyOn(api, "wait").mockRejectedValue(new Error("condition threw"));
+    const on_timeout = jest.fn();
+    const { jsPsych, finished } = makeJsPsych(api);
+    const el = display();
+
+    const done = new MultiplayerChoicePlugin(jsPsych as never).trial(el, {
+      ...base,
+      timeout: 1000,
+      on_timeout,
+    } as never);
+    await flush();
+    clickOption(el, 0);
+
+    await expect(done).rejects.toThrow(/condition threw/);
+    expect(on_timeout).not.toHaveBeenCalled(); // not a timeout -> no soft path
+    expect(finished).toHaveLength(0); // trial halts loudly
   });
 
   it("preserves other keys already in this client's slot (push REPLACES the slot)", async () => {
