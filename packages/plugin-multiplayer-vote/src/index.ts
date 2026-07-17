@@ -184,8 +184,13 @@ class MultiplayerVotePlugin implements JsPsychPlugin<Info> {
       // the barrier early nor is silently dropped from n_votes afterward.
       group = await api.wait((g) => countVoted(g, dataKey, labels.length) >= expected, timeout);
     } catch (e) {
-      // As with plugin-multiplayer-choice, wait() currently rejects only on timeout: proceed with a
-      // partial snapshot rather than hanging, flag timed_out, preserve the message, run on_timeout.
+      // Distinguish a genuine barrier timeout from any other wait() rejection. jsPsych#3694 rejects a
+      // timeout with a `MultiplayerTimeoutError` (matched by name, which survives two loaded copies of
+      // jspsych); a wait() can otherwise reject because the condition predicate threw or the backend
+      // failed. ONLY a timeout proceeds with a partial snapshot (flag timed_out, preserve the message,
+      // run on_timeout) — any other rejection is a real fault and rethrows so the trial halts loudly
+      // rather than masquerading as a timeout.
+      if ((e as { name?: string })?.name !== "MultiplayerTimeoutError") throw e;
       timedOut = true;
       waitError = e instanceof Error ? e.message : String(e);
       if (typeof trial.on_timeout === "function") trial.on_timeout(e);
