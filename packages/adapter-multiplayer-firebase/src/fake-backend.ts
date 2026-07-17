@@ -53,12 +53,18 @@ export class FakeRtdb {
     return any ? out : null;
   }
 
-  register(listener: SessionListener): Unsubscribe {
+  register(listener: SessionListener, deliverInitial = true): Unsubscribe {
     this.listeners.add(listener);
     // Real RTDB delivers an initial value event on registration; deliver it synchronously here so
-    // the adapter's await-first-snapshot resolves deterministically in tests.
-    listener.onData(this.snapshotOf(listener.path));
+    // the adapter's await-first-snapshot resolves deterministically in tests. `deliverInitial: false`
+    // models a registered-but-slow listener (see FakeBackend `deferInitialSnapshot`).
+    if (deliverInitial) listener.onData(this.snapshotOf(listener.path));
     return () => this.listeners.delete(listener);
+  }
+
+  /** Number of live session listeners — for asserting a listener was torn down. */
+  listenerCount(): number {
+    return this.listeners.size;
   }
 
   private fire(changedPath: string): void {
@@ -78,6 +84,13 @@ export interface FakeBackendOptions {
   denyReads?: boolean;
   /** onValue registers but never delivers a snapshot (simulates a silent hang → connect timeout). */
   neverSnapshot?: boolean;
+  /**
+   * onValue registers a LIVE session listener but withholds the initial snapshot (simulates a
+   * connected-but-slow backend → connect timeout). Unlike `neverSnapshot`, the listener is real, so a
+   * later rtdb change would fire it — which is exactly what lets a test catch a listener the adapter
+   * failed to tear down on the timeout reject.
+   */
+  deferInitialSnapshot?: boolean;
 }
 
 export class FakeBackend implements FirebaseBackend {
@@ -86,6 +99,7 @@ export class FakeBackend implements FirebaseBackend {
   private readonly uid: string;
   private readonly denyReads: boolean;
   private readonly neverSnapshot: boolean;
+  private readonly deferInitialSnapshot: boolean;
 
   /** Paths with an armed onDisconnect().remove(), consumed when the "server" fires it. */
   private readonly armed = new Set<string>();
@@ -99,6 +113,7 @@ export class FakeBackend implements FirebaseBackend {
     this.ownsApp = options.ownsApp ?? true;
     this.denyReads = options.denyReads ?? false;
     this.neverSnapshot = options.neverSnapshot ?? false;
+    this.deferInitialSnapshot = options.deferInitialSnapshot ?? false;
   }
 
   signIn(): Promise<string> {
@@ -129,7 +144,7 @@ export class FakeBackend implements FirebaseBackend {
     if (this.neverSnapshot) {
       return () => {};
     }
-    return this.rtdb.register({ path, onData, onError });
+    return this.rtdb.register({ path, onData, onError }, !this.deferInitialSnapshot);
   }
 
   onDisconnectRemove(path: string): Promise<void> {

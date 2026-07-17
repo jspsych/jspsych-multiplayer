@@ -38,6 +38,19 @@ describe("FirebaseAdapter — connect", () => {
     const adapter = makeAdapter(new FakeBackend({ neverSnapshot: true }));
     await expect(adapter.connect()).rejects.toThrow(/timed out/);
   });
+
+  it("tears the session listener down on a timeout, so a late snapshot can't mutate the mirror", async () => {
+    const backend = new FakeBackend({ deferInitialSnapshot: true });
+    const adapter = makeAdapter(backend);
+
+    await expect(adapter.connect()).rejects.toThrow(/timed out/);
+
+    // The listener the timed-out connect() registered must be gone...
+    expect(backend.rtdb.listenerCount()).toBe(0);
+    // ...so a peer writing after the timeout does not leak into the abandoned adapter's mirror.
+    backend.rtdb.set(slot("peer"), JSON.stringify({ hello: "world" }));
+    expect(adapter.getAll()).toEqual({});
+  });
 });
 
 describe("FirebaseAdapter — push / read", () => {

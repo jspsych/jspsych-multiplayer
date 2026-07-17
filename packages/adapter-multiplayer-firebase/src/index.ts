@@ -152,15 +152,23 @@ export default class FirebaseAdapter implements MultiplayerAdapter {
         clearTimeout(timer);
         fn();
       };
+      // On any failure, tear the session listener down before rejecting: connect() rejected means
+      // the caller treats this adapter as unconnected, so a still-live listener would keep mutating
+      // the mirror (and firing fan-outs) behind their back. A synchronously-cancelled listener (a
+      // rules denial in the real SDK) is already dead, so the unsubscribe is a harmless no-op there.
+      const fail = (error: Error) =>
+        finish(() => {
+          this.unsubscribeSession?.();
+          this.unsubscribeSession = null;
+          reject(error);
+        });
 
       const timer = setTimeout(() => {
-        finish(() =>
-          reject(
-            new Error(
-              `FirebaseAdapter: connect() timed out after ${this.connectTimeoutMs}ms waiting for the ` +
-                "first session snapshot. Check the database URL, network, and that your security " +
-                "rules grant read access to this session (see the README rules recipe)."
-            )
+        fail(
+          new Error(
+            `FirebaseAdapter: connect() timed out after ${this.connectTimeoutMs}ms waiting for the ` +
+              "first session snapshot. Check the database URL, network, and that your security " +
+              "rules grant read access to this session (see the README rules recipe)."
           )
         );
       }, this.connectTimeoutMs);
@@ -174,13 +182,11 @@ export default class FirebaseAdapter implements MultiplayerAdapter {
           this.scheduleNotify();
         },
         (error) => {
-          finish(() =>
-            reject(
-              new Error(
-                "FirebaseAdapter: the session listener was cancelled — this is almost always a " +
-                  "security-rules denial. Grant read access to this session (see the README rules " +
-                  `recipe). Underlying error: ${error.message}`
-              )
+          fail(
+            new Error(
+              "FirebaseAdapter: the session listener was cancelled — this is almost always a " +
+                "security-rules denial. Grant read access to this session (see the README rules " +
+                `recipe). Underlying error: ${error.message}`
             )
           );
         }
@@ -203,8 +209,9 @@ export default class FirebaseAdapter implements MultiplayerAdapter {
       throw new Error("FirebaseAdapter: push() called before connect(); call connect() first.");
     }
     this.lastOwnData = data;
-    // Store JSON-encoded so the payload round-trips EXACTLY — RTDB would otherwise drop `undefined`,
-    // prune empty arrays/objects, and coerce arrays to objects. The mirror updates from the echoed
+    // Store JSON-encoded so the payload survives RTDB's JSON coercion — raw, RTDB prunes empty
+    // arrays/objects and coerces arrays to objects; the string round-trips those unchanged. (`undefined`
+    // is still dropped, but JSON can't represent it either way.) The mirror updates from the echoed
     // onValue, not here (RTDB fires the local listener optimistically, so our own getAll() reflects
     // the write immediately after this resolves).
     await this.backend.set(this.slotPath(), JSON.stringify(data));
