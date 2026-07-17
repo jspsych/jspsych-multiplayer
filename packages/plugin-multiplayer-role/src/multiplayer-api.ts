@@ -32,8 +32,10 @@ export interface MultiplayerApiLike {
 
   /**
    * Resolve with the group snapshot once `condition` returns true (fast-path if already true);
-   * reject with a `MultiplayerTimeoutError` if `timeout` ms elapse first (a throwing `condition`
-   * rejects with that error instead). `undefined` timeout waits forever.
+   * reject with a `MultiplayerTimeoutError` if `timeout` ms elapse first. A throwing `condition`
+   * is treated as a programming error, not a timeout: the promise rejects with the error the
+   * predicate threw (whose `name` is therefore NOT `MultiplayerTimeoutError`). `undefined`
+   * timeout waits forever.
    */
   wait(condition: (data: GroupSessionData) => boolean, timeout?: number): Promise<GroupSessionData>;
 }
