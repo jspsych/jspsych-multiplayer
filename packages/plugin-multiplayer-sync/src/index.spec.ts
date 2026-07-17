@@ -240,6 +240,32 @@ describe("multiplayer-sync plugin", () => {
     expect(finished.length).toBe(0);
   });
 
+  it("still finishes gracefully when getAll() throws on the timeout path (adapter torn down)", async () => {
+    // On a genuine timeout the adapter may already be torn down, so getAll() throws
+    // ("connect() must be called…"). That must not escape and reject the trial — it falls back to
+    // an empty snapshot so the timeout still finishes as data. Mirrors the ready plugin's guard.
+    const api = new MockApi("p1");
+    jest.spyOn(api, "getAll").mockImplementation(() => {
+      throw new Error("connect() must be called before using multiplayer methods");
+    });
+    const { jsPsych, finished } = makeJsPsych(api);
+    const plugin = new MultiplayerSyncPlugin(jsPsych as never);
+
+    await expect(
+      plugin.trial(display(), {
+        push_data: null,
+        wait_for: () => false, // never satisfied → MockApi wait() rejects with a MultiplayerTimeoutError
+        message: "<p>Waiting…</p>",
+        timeout: 40,
+        minimum_wait: 0,
+      } as never)
+    ).resolves.toBeUndefined();
+
+    expect(finished[0].timed_out).toBe(true);
+    expect(finished[0].wait_error).toMatch(/timed out/); // original error preserved, not masked
+    expect(finished[0].group).toEqual({}); // empty fallback snapshot
+  });
+
   it("holds the message for minimum_wait even when the timeout elapses first", async () => {
     const api = new MockApi("p1");
     const { jsPsych, finished } = makeJsPsych(api);

@@ -143,6 +143,19 @@ class MultiplayerSyncPlugin implements JsPsychPlugin<Info> {
       }
     };
 
+    /**
+     * Read the latest group snapshot without letting a failure mask the outcome. On the timeout
+     * path the adapter may already be torn down, so a throwing getAll() must not escape and prevent
+     * the trial from finishing — fall back to an empty snapshot instead.
+     */
+    const safeGetAll = (): GroupSessionData => {
+      try {
+        return api.getAll();
+      } catch {
+        return {};
+      }
+    };
+
     // Push BEFORE the wait try/catch: a push failure is an infrastructure error, not a timeout, and
     // must surface loudly (rejecting the trial) rather than being relabeled as `timed_out: true`.
     if (trial.push_data != null) {
@@ -175,7 +188,7 @@ class MultiplayerSyncPlugin implements JsPsychPlugin<Info> {
       }
       // Honour minimum_wait here too, so a short timeout can't flash the waiting message.
       await holdMinimumWait();
-      finish(api.getAll(), true, e.message);
+      finish(safeGetAll(), true, e.message);
     }
   }
 }
