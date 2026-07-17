@@ -10,9 +10,8 @@
  *
  * Like `plugin-multiplayer-role`, the end-of-game scoreboard is a barrier-then-render trial: it
  * pushes this client's score once (`push`), then waits (`wait`) until the group is ready — kept as
- * two calls rather than the `communicate` convenience so a push failure is distinguishable from a
- * barrier timeout — then computes and renders the final board. It declares `push`/`get`/`getAll`/
- * `wait` (and `communicate`, part of the same barrier surface) — but not `subscribe`, which the
+ * two separate calls so a push failure is distinguishable from a barrier timeout — then computes and
+ * renders the final board. It declares `push`/`get`/`getAll`/`wait` — but not `subscribe`, which the
  * *live* scoreboard variant will need.
  *
  * Mock-based tests implement this same interface, so the plugin is exercised end-to-end with no live
@@ -44,11 +43,4 @@ export interface MultiplayerApiLike {
    * reject if `timeout` ms elapse first. `undefined` timeout waits forever.
    */
   wait(condition: (data: GroupSessionData) => boolean, timeout?: number): Promise<GroupSessionData>;
-
-  /** Convenience: push `data`, then `wait(condition, timeout)`. One promise so one `.catch` covers both. */
-  communicate(
-    data: Record<string, unknown>,
-    condition: (data: GroupSessionData) => boolean,
-    timeout?: number
-  ): Promise<GroupSessionData>;
 }

@@ -211,10 +211,10 @@ class MultiplayerScoreboardPlugin implements JsPsychPlugin<Info> {
   }
 
   /**
-   * Push this client's score, then wait for the barrier. Push and wait are kept SEPARATE (rather than
-   * the `communicate` convenience) so a push/backend failure is distinguishable from a genuine barrier
-   * timeout: only a `wait` rejection is a timeout (`timed_out: true` + `on_timeout`); a push failure
-   * surfaces as `error` on an otherwise-normal board and never fires `on_timeout`.
+   * Push this client's score, then wait for the barrier. Push and wait are kept SEPARATE so a
+   * push/backend failure is distinguishable from a genuine barrier timeout: only our own timer firing
+   * is a timeout (`timed_out: true` + `on_timeout`); a push failure — or a `wait` rejection — surfaces
+   * as `error` on an otherwise-normal board and never fires `on_timeout`.
    */
   private async gather(
     display_element: HTMLElement,

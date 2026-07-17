@@ -58,15 +58,6 @@ class MockApi implements MultiplayerApiLike {
       }
     });
   }
-
-  async communicate(
-    data: Record<string, unknown>,
-    condition: (d: GroupSessionData) => boolean,
-    timeout?: number
-  ) {
-    await this.push(data);
-    return this.wait(condition, timeout);
-  }
 }
 
 /** Minimal jsPsych double exposing `pluginAPI` (the mock) and capturing `finishTrial` data. */
@@ -516,7 +507,6 @@ describe("plugin-multiplayer-scoreboard — real jsPsych pipeline (startTimeline
       get: api.get.bind(api),
       getAll: api.getAll.bind(api),
       wait: api.wait.bind(api),
-      communicate: api.communicate.bind(api),
     });
 
     const { getData, expectFinished, finished, displayElement } = await startTimeline(
