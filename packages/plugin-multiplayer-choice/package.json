@@ -1,7 +1,10 @@
 {
   "name": "@jspsych-multiplayer/plugin-multiplayer-choice",
   "version": "0.1.0",
-  "description": "jsPsych plugin: simultaneous group decision — everyone picks an option, barrier until all have chosen, then reveal",
+  "description": "jsPsych plugin: simultaneous group decision — everyone picks an option, barrier until all have chosen, then reveal who chose what or an anonymous tally",
+  "author": {
+    "name": "Mandy Liao"
+  },
   "type": "module",
   "main": "dist/index.cjs",
   "exports": {

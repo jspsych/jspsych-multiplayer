@@ -107,18 +107,32 @@ const base = {
   timeout: null,
   on_timeout: null,
   reveal: true,
+  reveal_mode: "players",
   reveal_prompt: null,
   continue_label: "Continue",
   reveal_duration: null,
   player_label: null,
   payoff: null,
+  record_choices_by_player: true,
 };
+
+/** Tally-reveal rows as `{ text, isWinner, isTied, isMine }`. */
+function tallyRows(el: HTMLElement) {
+  return [...el.querySelectorAll(".jspsych-multiplayer-choice-tally-item")].map((li) => ({
+    text: li.textContent?.replace(/\s+/g, " ").trim(),
+    isWinner: li.classList.contains("is-winner"),
+    isTied: li.classList.contains("is-tied"),
+    isMine: li.classList.contains("is-mine"),
+  }));
+}
 
 // ---------------------------------------------------------------------------------------------------
 describe("plugin-multiplayer-choice — package surface", () => {
   it("exposes the pure core helpers as statics", () => {
     expect(typeof MultiplayerChoicePlugin.collectChoices).toBe("function");
     expect(typeof MultiplayerChoicePlugin.countChosen).toBe("function");
+    expect(typeof MultiplayerChoicePlugin.tally).toBe("function");
+    expect(typeof MultiplayerChoicePlugin.plurality).toBe("function");
   });
 });
 
@@ -152,6 +166,18 @@ describe("plugin-multiplayer-choice — guards", () => {
         expected_players: 0,
       } as never)
     ).rejects.toThrow(/expected_players/i);
+  });
+
+  it("throws on an invalid `reveal_mode` rather than silently coercing it", async () => {
+    // A typo'd mode would silently flip the reveal's anonymity semantics — fail loud instead.
+    const api = new MockApi("p1");
+    const { jsPsych } = makeJsPsych(api);
+    await expect(
+      new MultiplayerChoicePlugin(jsPsych as never).trial(display(), {
+        ...base,
+        reveal_mode: "anonymous",
+      } as never)
+    ).rejects.toThrow(/reveal_mode/i);
   });
 });
 
@@ -506,6 +532,165 @@ describe("plugin-multiplayer-choice — rendering", () => {
 
     expect(warn).toHaveBeenCalledWith(expect.stringMatching(/no way to advance/));
     warn.mockRestore();
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------
+describe("plugin-multiplayer-choice — tally mode (anonymous poll)", () => {
+  const pollBase = {
+    ...base,
+    choices: ["Red", "Green", "Blue"],
+    expected_players: 3,
+    reveal_mode: "tally",
+  };
+
+  it("reveals the aggregate tally + winner (never the roster) and records the aggregate data", async () => {
+    const api = new MockApi("p1");
+    api.seed("p2", { choice: { index: 2, label: "Blue" } }); // peers already chose
+    api.seed("p3", { choice: { index: 2, label: "Blue" } });
+    const { jsPsych, finished } = makeJsPsych(api);
+    const el = display();
+
+    const done = new MultiplayerChoicePlugin(jsPsych as never).trial(el, { ...pollBase } as never);
+    await flush();
+    clickOption(el, 0); // pick "Red"
+    await flush(); // push + barrier (fast path, 3 == 3) + reveal render
+
+    // Tally reveal: one row per option, Blue winning with 2, my own row flagged — and NO roster.
+    const rows = tallyRows(el);
+    expect(rows).toHaveLength(3);
+    expect(rows[2].isWinner).toBe(true); // Blue
+    expect(rows[0].isMine).toBe(true); // Red = my pick
+    expect(el.textContent).toContain("Winner");
+    expect(el.querySelector(".jspsych-multiplayer-choice-reveal-item")).toBeNull(); // no attributed list
+    expect(
+      el.querySelector(".jspsych-multiplayer-choice-reveal")?.classList.contains("is-tally")
+    ).toBe(true);
+
+    clickContinue(el);
+    await done;
+
+    const data = finished[0];
+    expect(data.choice).toBe("Red");
+    expect(data.n_players).toBe(3);
+    expect(data.is_tie).toBe(false);
+    expect(data.winner).toEqual({ index: 2, label: "Blue", count: 2 });
+    expect(data.tally).toEqual([
+      { index: 0, label: "Red", count: 1 },
+      { index: 1, label: "Green", count: 0 },
+      { index: 2, label: "Blue", count: 2 },
+    ]);
+    // The attributed map is still recorded by default (output anonymity is opt-in).
+    expect(data.choices_by_player).toEqual({
+      p1: { index: 0, label: "Red" },
+      p2: { index: 2, label: "Blue" },
+      p3: { index: 2, label: "Blue" },
+    });
+  });
+
+  it("with record_choices_by_player:false, no peer id reaches the reveal DOM or the recorded data", async () => {
+    const api = new MockApi("alice");
+    api.seed("bob", { choice: { index: 0, label: "Red" } });
+    api.seed("carol", { choice: { index: 1, label: "Green" } });
+    const { jsPsych, finished } = makeJsPsych(api);
+    const el = display();
+
+    const done = new MultiplayerChoicePlugin(jsPsych as never).trial(el, {
+      ...pollBase,
+      record_choices_by_player: false,
+    } as never);
+    await flush();
+    clickOption(el, 0);
+    await flush();
+
+    expect(el.innerHTML).not.toContain("bob");
+    expect(el.innerHTML).not.toContain("carol");
+    clickContinue(el);
+    await done;
+    expect(finished[0].choices_by_player).toBeNull();
+    expect(JSON.stringify(finished[0])).not.toContain("bob");
+    expect(JSON.stringify(finished[0])).not.toContain("carol");
+  });
+
+  it("reports a tie in the data and reveal when the top options are level", async () => {
+    const api = new MockApi("p1");
+    api.seed("p2", { choice: { index: 1, label: "Green" } });
+    const { jsPsych, finished } = makeJsPsych(api);
+    const el = display();
+
+    const done = new MultiplayerChoicePlugin(jsPsych as never).trial(el, {
+      ...pollBase,
+      expected_players: 2,
+    } as never);
+    await flush();
+    clickOption(el, 0); // Red — now Red 1, Green 1 → tie
+    await flush();
+
+    expect(el.textContent).toContain("Tie");
+    expect(tallyRows(el).filter((r) => r.isTied)).toHaveLength(2);
+    clickContinue(el);
+    await done;
+
+    expect(finished[0].is_tie).toBe(true);
+    expect(finished[0].winner).toBeNull();
+    expect(finished[0].tied_options).toEqual([
+      { index: 0, label: "Red", count: 1 },
+      { index: 1, label: "Green", count: 1 },
+    ]);
+  });
+
+  it("does not let a stale, out-of-range choice lift the barrier or inflate n_players", async () => {
+    // p3's slot holds a leftover pick for index 5 — e.g. a previous choice trial with more options
+    // reused the default data_key. It is not a valid pick for THIS 3-option trial, so it must count
+    // toward neither the barrier nor the tally (the barrier count and n_players stay in agreement).
+    const api = new MockApi("p1");
+    api.seed("p2", { choice: { index: 0, label: "Red" } });
+    api.seed("p3", { choice: { index: 5, label: "stale" } }); // out of range for choices.length === 3
+    const on_timeout = jest.fn();
+    const { jsPsych, finished } = makeJsPsych(api);
+    const el = display();
+
+    const done = new MultiplayerChoicePlugin(jsPsych as never).trial(el, {
+      ...pollBase,
+      timeout: 40,
+      on_timeout,
+      reveal: false,
+    } as never);
+    await flush();
+    clickOption(el, 0); // p1 picks Red — only p1 and p2 are valid → 2 < expected 3, barrier holds
+    await done; // resolves only when the 40ms barrier timeout fires (the group is never completed)
+
+    expect(on_timeout).toHaveBeenCalledTimes(1);
+    expect(finished[0].timed_out).toBe(true);
+    expect(finished[0].n_players).toBe(2); // p1 + p2 only; the out-of-range pick is excluded
+    expect(finished[0].tally).toEqual([
+      { index: 0, label: "Red", count: 2 },
+      { index: 1, label: "Green", count: 0 },
+      { index: 2, label: "Blue", count: 0 },
+    ]);
+  });
+
+  it("shows the payoff line on the tally reveal too", async () => {
+    const api = new MockApi("p1");
+    api.seed("p2", { choice: { index: 0, label: "Red" } });
+    api.seed("p3", { choice: { index: 0, label: "Red" } });
+    const { jsPsych, finished } = makeJsPsych(api);
+    const el = display();
+
+    const done = new MultiplayerChoicePlugin(jsPsych as never).trial(el, {
+      ...pollBase,
+      payoff: () => 7,
+    } as never);
+    await flush();
+    clickOption(el, 1);
+    await flush();
+
+    expect(el.querySelector(".jspsych-multiplayer-choice-reveal-payoff")?.textContent).toContain(
+      "7"
+    );
+    clickContinue(el);
+    await done;
+    expect(finished[0].my_payoff).toBe(7);
   });
 });
 

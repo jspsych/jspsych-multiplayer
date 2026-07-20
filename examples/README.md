@@ -105,9 +105,10 @@ adapter.
 
 A two-player **Prisoner's Dilemma**: participants pick a display name, wait in a lobby until two
 players have joined, then **simultaneously** choose *Cooperate* or *Defect*. The trial barriers until
-both have chosen, then reveals **both** choices (choice is attributed, unlike the anonymous vote) and
-each player's payoff. Like `chat-room.html` it runs on the local adapter, so it can be driven
-**entirely from two browser tabs, no server**.
+both have chosen, then reveals **both** choices (attributed — the plugin's default
+`reveal_mode: "players"`; contrast with the anonymous tally in `poll-room.html`) and each player's
+payoff. Like `chat-room.html` it runs on the local adapter, so it can be driven **entirely from two
+browser tabs, no server**.
 
 ### What it demonstrates
 
@@ -142,6 +143,29 @@ Same as [`chat-room.html`](#running-it) — build the packages, serve the repo, 
 npm install && npm run build
 npx http-server .
 ```
+
+## `poll-room.html`
+
+An **anonymous group poll** built from the same choice plugin as `choice-room.html`, switched to
+`reveal_mode: "tally"`: participants pick a display name, wait in a lobby, then vote for a movie
+genre. The trial barriers until everyone has voted, then reveals only the **per-option counts and the
+plurality winner** (or a tie) — never who voted for what — and `record_choices_by_player: false`
+keeps the participant → pick map out of the recorded data too. Note this is **output-level**
+anonymity: peers' raw picks still exist in the shared session state (see the plugin README's
+Anonymity section). Runs on the local adapter across two browser tabs, no server.
+
+### What it demonstrates
+
+| Package                                          | Role in the demo                                                                                                      |
+| ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------- |
+| `@jspsych-multiplayer/adapter-multiplayer-local` | The network backend — `localStorage` + cross-tab signalling. Connected once, before `jsPsych.run`. **Dev/demo only.** |
+| `@jspsych-multiplayer/plugin-multiplayer-sync`   | The lobby: one declarative barrier — push your name, wait until `EXPECTED_PLAYERS` participants are present.           |
+| `@jspsych-multiplayer/plugin-multiplayer-choice` | The ballot in tally mode: everyone picks, the group barriers, then the anonymous tally + winner reveal.                |
+
+### Running it
+
+Same as [`choice-room.html`](#running-it-1) — build the packages, serve the repo, and open
+`examples/poll-room.html` across two tabs (copy the `?mp_session=…` URL into the second).
 
 ## `ultimatum-game.html`
 

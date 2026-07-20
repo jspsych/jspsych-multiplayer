@@ -48,7 +48,24 @@
       },
     };
 
-    // 3. Branch on the outcome using the saved data in a normal on_finish / conditional_function.
-    jsPsych.run([prisonersDilemma]);
+    // 3. An anonymous group poll (tally mode). Every player picks; the trial waits until all four
+    //    have chosen, then reveals only the per-option counts and the plurality winner — never who
+    //    chose what. `record_choices_by_player: false` keeps the recorded data anonymous too.
+    const nextGame = {
+      type: jsPsychMultiplayerChoice,
+      prompt: "<p>Which game should the group play next? Majority wins.</p>",
+      choices: ["Trust", "Ultimatum", "Public goods"],
+      expected_players: 4,
+      reveal_mode: "tally",
+      record_choices_by_player: false,
+      reveal_prompt: "<h3>The votes are in</h3>",
+      on_finish: (data) => {
+        // winner is null on a tie — decide however you like (here: keep a default and branch later).
+        data.next_game = data.winner ? data.winner.label : "Public goods";
+      },
+    };
+
+    // 4. Branch on the outcome using the saved data in a normal on_finish / conditional_function.
+    jsPsych.run([prisonersDilemma, nextGame]);
   </script>
 </html>
