@@ -1,7 +1,11 @@
 import { startTimeline } from "@jspsych/test-utils";
 import { initJsPsych } from "jspsych";
 
-import { GroupSessionData, MultiplayerApiLike } from "./multiplayer-api";
+import {
+  GroupSessionData,
+  MULTIPLAYER_TIMEOUT_ERROR_NAME,
+  MultiplayerApiLike,
+} from "./multiplayer-api";
 import MultiplayerRolePlugin from ".";
 
 // ---------------------------------------------------------------------------------------------------
@@ -56,7 +60,7 @@ class MockApi implements MultiplayerApiLike {
             // Mirrors the real MultiplayerTimeoutError: a named Error, since the plugin can't
             // import that class (see multiplayer-api.ts) and matches on `error.name` instead.
             const err = new Error(`wait timed out after ${timeout}ms`);
-            err.name = "MultiplayerTimeoutError";
+            err.name = MULTIPLAYER_TIMEOUT_ERROR_NAME;
             reject(err);
           }
         }, timeout);

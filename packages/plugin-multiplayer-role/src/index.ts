@@ -1,7 +1,7 @@
 import { JsPsych, JsPsychPlugin, ParameterType, TrialType } from "jspsych";
 
 import { version } from "../package.json";
-import { MultiplayerApiLike } from "./multiplayer-api";
+import { MultiplayerApiLike, isMultiplayerTimeoutError } from "./multiplayer-api";
 import { makeReadiness } from "./readiness";
 import { AssignOptions, assignRoles } from "./roles";
 import {
@@ -225,10 +225,9 @@ class MultiplayerRolePlugin implements JsPsychPlugin<Info> {
           });
         },
         (error) => {
-          // Match on `error.name` rather than `instanceof MultiplayerTimeoutError` — this plugin
-          // can't import that class (the published `jspsych` doesn't carry it yet, see
-          // multiplayer-api.ts), and `name` also survives two loaded copies of jspsych.
-          if (!(error instanceof Error && error.name === "MultiplayerTimeoutError")) {
+          // A genuine timeout only — the name-based match lives in isMultiplayerTimeoutError
+          // (multiplayer-api.ts); the class itself isn't importable here.
+          if (!isMultiplayerTimeoutError(error)) {
             // Not a timeout — a push failure or an adapter/backend error. Surface it loudly instead
             // of mislabeling it a timeout.
             throw error;

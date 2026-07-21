@@ -1,7 +1,7 @@
 import { JsPsych, JsPsychPlugin, ParameterType, TrialType } from "jspsych";
 
 import { version } from "../package.json";
-import { GroupSessionData, MultiplayerApiLike } from "./multiplayer-api";
+import { GroupSessionData, MultiplayerApiLike, isMultiplayerTimeoutError } from "./multiplayer-api";
 
 const info = <const>{
   name: "multiplayer-sync",
@@ -174,11 +174,9 @@ class MultiplayerSyncPlugin implements JsPsychPlugin<Info> {
       finish(group, false, null);
     } catch (e) {
       // #3694 exports a typed MultiplayerTimeoutError so a genuine timeout can be told apart from a
-      // throwing `wait_for` predicate or another wait() failure. Match on `error.name` rather than
-      // `instanceof MultiplayerTimeoutError` — this plugin can't even import that class (the
-      // published `jspsych` doesn't carry it yet, see multiplayer-api.ts), and `name` is also what
-      // the class's own doc recommends, since instanceof breaks across duplicate module instances.
-      if (!(e instanceof Error && e.name === "MultiplayerTimeoutError")) {
+      // throwing `wait_for` predicate or another wait() failure. The name-based match lives in
+      // isMultiplayerTimeoutError (multiplayer-api.ts) — the class itself isn't importable here.
+      if (!isMultiplayerTimeoutError(e)) {
         // Not a timeout — a bug in `wait_for` or an adapter/backend failure. Surface it loudly
         // instead of mislabeling it `timed_out: true`, matching the push-failure handling above.
         throw e;
