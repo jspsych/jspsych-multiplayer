@@ -32,7 +32,7 @@ Two small composition details are worth copying:
 
 The demo connects `adapter-multiplayer-local` because it needs no infrastructure. To run a real,
 cross-device study, change the one adapter line to `adapter-multiplayer-jatos` (and load `jatos.js` /
-wrap `jsPsych.run` in `jatos.onLoad`, as in `ultimatum-game.html`). Nothing else in the timeline is
+wrap `jsPsych.run` in `jatos.onLoad`, as in `ultimatum-game-jatos.html`). Nothing else in the timeline is
 backend-specific — the lobby and chat trials are identical either way.
 
 ### Running it
@@ -131,7 +131,7 @@ Two composition details worth copying:
 ### Swapping in a real backend
 
 Change the one adapter line from `adapter-multiplayer-local` to `adapter-multiplayer-jatos` (and load
-`jatos.js` / wrap `jsPsych.run` in `jatos.onLoad`, as in `ultimatum-game.html`). Nothing else in the
+`jatos.js` / wrap `jsPsych.run` in `jatos.onLoad`, as in `ultimatum-game-jatos.html`). Nothing else in the
 timeline is backend-specific.
 
 ### Running it
@@ -293,7 +293,7 @@ ranking core (via `pluginAPI.subscribe`) as peers report, rather than revealing 
 ### Swapping in a real backend
 
 Change the one adapter line from `adapter-multiplayer-local` to `adapter-multiplayer-jatos` (and load
-`jatos.js` / wrap `jsPsych.run` in `jatos.onLoad`, as in `ultimatum-game.html`). Nothing else in the
+`jatos.js` / wrap `jsPsych.run` in `jatos.onLoad`, as in `ultimatum-game-jatos.html`). Nothing else in the
 timeline is backend-specific.
 
 ### Running it
@@ -376,7 +376,7 @@ resolves "who is with whom". This demo shows its value by *using* that result, w
 ### Swapping in a real backend
 
 Change the one adapter line from `adapter-multiplayer-local` to `adapter-multiplayer-jatos` (and load
-`jatos.js` / wrap `jsPsych.run` in `jatos.onLoad`, as in `ultimatum-game.html`). Nothing else in the
+`jatos.js` / wrap `jsPsych.run` in `jatos.onLoad`, as in `ultimatum-game-jatos.html`). Nothing else in the
 timeline is backend-specific.
 
 ### Running it
@@ -389,7 +389,7 @@ npm install && npm run build
 npx http-server .
 ```
 
-## `ultimatum-game.html`
+## `ultimatum-game-jatos.html`
 
 A turn-based **ultimatum game** (Güth, Schmittberger & Schwarze, 1982): two players split a $10 pot.
 The **proposer** offers the **responder** some amount; the responder accepts (both keep the split) or
@@ -460,7 +460,7 @@ a `trial_duration` below `PARTNER_TIMEOUT_MS`, so a slow-but-present player is f
 choice before they can ever be read as absent. This demo leaves that off by default — it imposes an
 auto-advance and a forced decision, which is a behavioral choice better made deliberately than baked in.
 
-### Running it (`ultimatum-game.html`)
+### Running it (`ultimatum-game-jatos.html`)
 
 This example is **illustrative** — it cannot run from a single browser tab today. It requires:
 
@@ -486,13 +486,13 @@ Behavior & Organization_, 3(4), 367–388.
 
 ## `ultimatum-game-local.html`
 
-The same game as `ultimatum-game.html`, wired to `adapter-multiplayer-local` instead of
+The same game as `ultimatum-game-jatos.html`, wired to `adapter-multiplayer-local` instead of
 `adapter-multiplayer-jatos` (and without the `jatos.onLoad` wrapper), so it runs from **two browser
 tabs on one machine, no server** — the same local-adapter setup `chat-room.html` uses. Everything
 else in the timeline (role assignment, sync barriers, outcome screens) is identical to
-`ultimatum-game.html`; see that section above for the full design notes.
+`ultimatum-game-jatos.html`; see that section above for the full design notes.
 
-Use this file for iterating on the game logic itself. Use `ultimatum-game.html` when you want to test
+Use this file for iterating on the game logic itself. Use `ultimatum-game-jatos.html` when you want to test
 against a real JATOS deployment.
 
 ### Running it
@@ -500,6 +500,33 @@ against a real JATOS deployment.
 Run it the same way as `chat-room.html`: build the packages, serve the repo over http(s), open the
 file in one tab, then copy the full URL (including `?mp_session=…`) into a second tab. See
 `chat-room.html`'s "Running it" section above for the jsDelivr preview build and step-by-step details.
+
+## `ultimatum-game-firebase.html`
+
+The same game as `ultimatum-game-jatos.html`, wired to `adapter-multiplayer-firebase`, so it runs
+across **separate devices, browsers, and machines** with only a free Firebase project — real
+cross-device multiplayer, no server to host. Everything in the timeline is identical to the other two
+variants; only the network backend changes.
+
+Unlike the other examples, the Firebase adapter is loaded as an **ES module** (its browser build
+externalizes the Firebase SDK), so the page uses an `<script type="importmap">` that resolves the
+adapter's `firebase/*` imports to Firebase's modular CDN. The two multiplayer plugins and jsPsych core
+are still ordinary IIFE `<script>` tags.
+
+### Running it
+
+Two ways, both documented in the file's header comment:
+
+- **A real Firebase project** (real data collection): create a project, enable Anonymous auth, create a
+  Realtime Database, paste the recommended session-locked rules and your web-app config (see
+  [`adapter-multiplayer-firebase`'s README](../packages/adapter-multiplayer-firebase/README.md)), then
+  serve the repo and open the page on two devices/tabs sharing the `?mp_session=…` URL.
+- **The local Firebase Emulator** (no account, no credentials): `firebase emulators:start` (database +
+  auth), then open the page with `?emulator` in the query string — it points the adapter at the
+  emulator so a two-tab run works entirely offline.
+
+The adapter itself is verified end-to-end against the RTDB + Auth emulators (anonymous sign-in, the
+onValue mirror, cross-client visibility, exact JSON round-trip, and slot cleanup on disconnect).
 
 ## `reference-game.html`
 

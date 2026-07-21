@@ -434,7 +434,7 @@ extra bookkeeping in the experiment code.
 The local adapter is same-origin, same-browser, same-machine — a development and demo tool, **not**
 a data-collection backend. Deploying the experiment for real participants means swapping the
 backend, and this is where the architecture pays off. Compare the local version against
-[`examples/ultimatum-game.html`](../examples/ultimatum-game.html), the JATOS variant: the *entire*
+[`examples/ultimatum-game-jatos.html`](../examples/ultimatum-game-jatos.html), the JATOS variant: the *entire*
 diff in experiment logic is the connection code.
 
 ```js

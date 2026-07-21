@@ -1,0 +1,20 @@
+{
+  "rules": {
+    "mp-sessions": {
+      "$session": {
+        ".read": "auth != null && root.child('mp-sessions-memberships').child(auth.uid).val() === $session",
+        "$slot": {
+          ".write": "auth != null && $slot === auth.uid && root.child('mp-sessions-memberships').child(auth.uid).val() === $session",
+          ".validate": "newData.isString() && newData.val().length < 131072"
+        }
+      }
+    },
+    "mp-sessions-memberships": {
+      "$uid": {
+        ".read": "auth != null && $uid === auth.uid",
+        ".write": "auth != null && $uid === auth.uid && (!data.exists() || data.val() === newData.val())",
+        ".validate": "newData.isString() && newData.val().length < 256"
+      }
+    }
+  }
+}
