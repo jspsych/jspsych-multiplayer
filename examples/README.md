@@ -263,6 +263,81 @@ Run it the same way as `chat-room.html`: build the packages, serve the repo over
 printed URL in one tab, then a second tab with the same `?mp_session=` in the URL. See
 `chat-room.html`'s "Running it" section above for the jsDelivr preview build and step-by-step details.
 
+## `scoreboard-room.html`
+
+An **end-of-game scoreboard**: participants pick a display name, wait in a lobby, each answers a short
+quiz for points, then hit a board that **waits (a barrier) until everyone has reported** and reveals
+the final ranking all at once — so no one sees a partial board. Like `chat-room.html` it runs on the
+local adapter, so it can be driven **entirely from two browser tabs, no server**.
+
+### What it demonstrates
+
+| Package                                              | Role in the demo                                                                                                       |
+| ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `@jspsych-multiplayer/adapter-multiplayer-local`     | The network backend — `localStorage` + cross-tab signalling. Connected once, before `jsPsych.run`. **Dev/demo only.** |
+| `@jspsych-multiplayer/plugin-multiplayer-sync`       | The lobby: one declarative barrier — push your name, wait until `MIN_PLAYERS` participants are present.                |
+| `@jspsych-multiplayer/plugin-multiplayer-scoreboard` | The end board: pushes this client's final score, barriers on `group_size` reporters, then reveals the ranking.        |
+
+Two composition details worth copying:
+
+1. **`score` is auto-computed from prior data, never typed in.** Each quiz question tags its trial with
+   `points` in `on_finish`; the board's `score: () => jsPsych.data.get().select("points").sum()` sums
+   them at trial start.
+2. **`group_size` makes it a barrier.** It waits until that many players have reported before
+   revealing, so everyone sees a complete ranking at once. The demo reads it dynamically from the
+   players who made it through the lobby.
+
+Contrast with `live-scoreboard-room.html`, which renders the standings **live** from the same pure
+ranking core (via `pluginAPI.subscribe`) as peers report, rather than revealing once at the end.
+
+### Swapping in a real backend
+
+Change the one adapter line from `adapter-multiplayer-local` to `adapter-multiplayer-jatos` (and load
+`jatos.js` / wrap `jsPsych.run` in `jatos.onLoad`, as in `ultimatum-game.html`). Nothing else in the
+timeline is backend-specific.
+
+### Running it
+
+Same as [`chat-room.html`](#running-it) — build the packages, serve the repo, and open
+`examples/scoreboard-room.html` across two tabs (copy the `?mp_session=…` URL into the second):
+
+```sh
+npm install && npm run build
+npx http-server .
+```
+
+## `live-scoreboard-room.html`
+
+The **live** counterpart to `scoreboard-room.html`: the same name → lobby → quiz game, but a
+standings panel stays on screen through the whole quiz and **fills in and re-ranks in real time** as
+each player's running score arrives — no barrier, no one-shot reveal. There is no separate plugin for
+this: the panel is rendered directly from `plugin-multiplayer-scoreboard`'s exported pure core
+(`buildLeaderboard`) inside a `jsPsych.pluginAPI.subscribe` callback, the same
+"use the statics during another trial" pattern as `public-goods-local.html`'s countdown overlay.
+
+### What it demonstrates
+
+| Package                                              | Role in the demo                                                                                                       |
+| ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `@jspsych-multiplayer/adapter-multiplayer-local`     | The network backend — `localStorage` + cross-tab signalling. Connected once, before `jsPsych.run`. **Dev/demo only.** |
+| `@jspsych-multiplayer/plugin-multiplayer-sync`       | The lobby: one declarative barrier — push your name, wait until `EXPECTED_PLAYERS` participants are present.           |
+| `@jspsych-multiplayer/plugin-multiplayer-scoreboard` | Used through its **exported statics** (`buildLeaderboard`), not as a trial — the panel re-ranks every update.          |
+
+Two composition details worth copying:
+
+1. **Each answer pushes the running total.** Every quiz question's `on_finish` reads this client's own
+   slot, spreads it, and pushes `score: { score: total, label: name }` — so peers' panels update the
+   moment anyone answers, and the lobby-pushed `name` survives (`push` replaces the whole slot).
+2. **The panel lives outside the jsPsych display element.** jsPsych wipes the display every trial, so
+   the standings panel is appended to `document.body` and driven by one `subscribe` registration —
+   registered after `connect()`, unsubscribed when the game ends. Peer labels are escaped before
+   rendering (they are peer-pushed text).
+
+### Running it
+
+Same as [`scoreboard-room.html`](#running-it) — build the packages, serve the repo, and open
+`examples/live-scoreboard-room.html` across two tabs (copy the `?mp_session=…` URL into the second).
+
 ## `ultimatum-game.html`
 
 A turn-based **ultimatum game** (Güth, Schmittberger & Schwarze, 1982): two players split a $10 pot.

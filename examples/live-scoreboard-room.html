@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Multiplayer Live Scoreboard Room — jsPsych multiplayer</title>
+    <!-- jsPsych core MUST carry the multiplayer API (jsPsych#3694), which is not yet in a release.
+         Until it merges, load the PR's preview build from jsDelivr instead of the published `jspsych`.
+         This URL is pinned to the same #3694 preview SHA as the other examples. A SHA-pinned URL keeps
+         loading indefinitely (it never 404s); what goes stale is the #3694 API it was pinned against,
+         so if the demo misbehaves against a newer #3694, re-pin — see examples/README.md "Running it". -->
+    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@7b1d96a0576032d15bd0d7c434f01b2d614f3a85/packages/jspsych/dist/index.browser.min.js"></script>
+    <script src="https://unpkg.com/@jspsych/plugin-survey-text"></script>
+    <script src="https://unpkg.com/@jspsych/plugin-html-button-response"></script>
+    <!-- The multiplayer packages resolve from the sibling packages' built dist/ in this repo (run
+         `npm install && npm run build` from the repo root first — dist/ is gitignored). Once they are
+         published, load them from a CDN instead, e.g.
+           <script src="https://unpkg.com/@jspsych-multiplayer/plugin-multiplayer-scoreboard"></script> -->
+    <!-- The `?v=` query is a cache-buster: bump it after rebuilding the packages so the browser is
+         forced to re-fetch the new bundle instead of serving a stale cached copy. -->
+    <script src="../packages/adapter-multiplayer-local/dist/index.browser.min.js?v=1"></script>
+    <script src="../packages/plugin-multiplayer-sync/dist/index.browser.min.js?v=1"></script>
+    <script src="../packages/plugin-multiplayer-scoreboard/dist/index.browser.min.js?v=1"></script>
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@7b1d96a0576032d15bd0d7c434f01b2d614f3a85/packages/jspsych/css/jspsych.css"
+    />
+    <style>
+      /* The live standings panel lives OUTSIDE the jsPsych display element (jsPsych wipes the display
+         every trial), so it needs its own styling. */
+      #live-scoreboard {
+        position: fixed;
+        top: 16px;
+        right: 16px;
+        width: 15em;
+        padding: 0.8em 1em;
+        border: 1px solid #ccc;
+        border-radius: 8px;
+        background: #f6f8fa;
+        text-align: left;
+        font-size: 0.95em;
+        z-index: 10;
+      }
+      #live-scoreboard h3 {
+        margin: 0 0 0.4em;
+        font-size: 1em;
+      }
+      #live-scoreboard ol {
+        margin: 0;
+        padding-left: 1.4em;
+      }
+      #live-scoreboard li.is-self {
+        font-weight: 700;
+        background: #fff3bf;
+      }
+      #live-scoreboard .waiting {
+        color: #868e96;
+      }
+    </style>
+  </head>
+
+  <body></body>
+  <script>
+    // ===============================================================================================
+    // Multiplayer Live Scoreboard Room — a demo for the jsPsych multiplayer packages.
+    //
+    // The LIVE counterpart to scoreboard-room.html: the same name → lobby → quiz game, but a standings
+    // panel stays on screen through the whole quiz and re-ranks in real time as each player's running
+    // score arrives — no barrier, no one-shot reveal. There is no separate plugin for this: the panel
+    // is rendered from plugin-multiplayer-scoreboard's exported pure core (buildLeaderboard) inside a
+    // jsPsych.pluginAPI.subscribe callback — the "use the statics during another trial" pattern, like
+    // public-goods-local.html's countdown overlay. It composes:
+    //   • adapter-multiplayer-local     — the network backend. localStorage + cross-tab signalling, so
+    //                                     the whole thing runs by OPENING TWO BROWSER TABS — no server.
+    //   • plugin-multiplayer-sync       — the lobby: push your name, wait until EXPECTED_PLAYERS present.
+    //   • plugin-multiplayer-scoreboard — used through its statics (buildLeaderboard), not as a trial.
+    //
+    // Contrast with scoreboard-room.html, which holds the ranking behind a barrier and reveals it once
+    // at the end so no one ever sees a partial board.
+    //
+    // -----------------------------------------------------------------------------------------------
+    // ILLUSTRATIVE example. Like chat-room.html it needs no server, but connecting ANY adapter still
+    // requires the multiplayer API from jsPsych#3694, which is not yet in a release. The local adapter
+    // is same-origin, same-browser, same-machine — a development/demo tool, NOT for data collection.
+    // ===============================================================================================
+
+    // This demo is designed for a FIXED number of players; the lobby waits for exactly this many.
+    const EXPECTED_PLAYERS = 2;
+
+    // A tiny trivia quiz. Each correct answer is worth POINTS_PER_CORRECT; the running total is pushed
+    // after every answer so peers' panels update mid-game.
+    const POINTS_PER_CORRECT = 10;
+    const QUIZ = [
+      { q: "What is 2 + 2?", options: ["3", "4", "5"], correct: 1 },
+      { q: "Capital of France?", options: ["London", "Paris", "Berlin"], correct: 1 },
+      { q: "On a clear day, the sky is…", options: ["Green", "Blue", "Red"], correct: 1 },
+    ];
+
+    const jsPsych = initJsPsych();
+
+    // Connecting the adapter is the only network setup the timeline needs. persistParticipant keeps
+    // this tab's participant id in sessionStorage, so a mid-lobby refresh rejoins as the SAME
+    // participant instead of leaving a stale "ghost" slot that would falsely satisfy the lobby.
+    const localAdapter = new jsPsychAdapterMultiplayerLocal({ persistParticipant: true });
+
+    // The local adapter only removes this tab's slot on an explicit disconnect(); a CLOSED tab would
+    // otherwise linger as a "ghost" slot that pollutes later runs. Clean up on close.
+    window.addEventListener("pagehide", () => localAdapter.disconnect());
+
+    const namedPresent = (group) =>
+      Object.values(group).filter((entry) => entry && entry.name).length;
+
+    let myName = "";
+
+    // --- The live standings panel -----------------------------------------------------------------
+    // Escape peer-pushed text (display names) before rendering — never innerHTML raw peer strings.
+    const escapeHtml = (value) =>
+      String(value)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+
+    let unsubscribe = null;
+
+    // Render the current standings from a group snapshot using the plugin's pure ranking core. Every
+    // client computes the identical board from the same snapshot (deterministic tie-breaks), so the
+    // two tabs always agree on the order.
+    const renderBoard = (group) => {
+      const panel = document.getElementById("live-scoreboard");
+      if (!panel) return;
+      const rows = jsPsychMultiplayerScoreboard.buildLeaderboard(group, {
+        dataKey: "score",
+        self: jsPsych.pluginAPI.participantId,
+        sort: "desc",
+      });
+      const items = rows
+        .map(
+          (row) =>
+            `<li class="${row.isSelf ? "is-self" : ""}" value="${row.rank}">
+               ${escapeHtml(row.label)} — ${row.score} pts</li>`
+        )
+        .join("");
+      panel.innerHTML = `<h3>🏆 Standings</h3>${
+        items ? `<ol>${items}</ol>` : `<p class="waiting">Waiting for scores…</p>`
+      }`;
+    };
+
+    const showPanel = () => {
+      const panel = document.createElement("div");
+      panel.id = "live-scoreboard";
+      document.body.appendChild(panel);
+      // subscribe replays the current snapshot on registration, so the panel paints immediately.
+      unsubscribe = jsPsych.pluginAPI.subscribe(renderBoard);
+    };
+
+    const removePanel = () => {
+      unsubscribe?.();
+      unsubscribe = null;
+      document.getElementById("live-scoreboard")?.remove();
+    };
+
+    // Push this client's running total into its own slot. Read-own → spread → push, because `push`
+    // REPLACES the whole slot and the lobby's `name` must survive. `score` uses the ScoreEntry shape
+    // ({ score, label }) that buildLeaderboard reads.
+    const pushScore = () => {
+      const api = jsPsych.pluginAPI;
+      const mine = api.get(api.participantId) ?? {};
+      const total = jsPsych.data.get().select("points").sum();
+      api
+        .push({ ...mine, score: { score: total, label: myName } })
+        .catch((err) => console.error("live-scoreboard-room: score push failed", err));
+    };
+
+    // --- Timeline ---------------------------------------------------------------------------------
+
+    // 1) Ask for a display name.
+    const nameTrial = {
+      type: jsPsychSurveyText,
+      preamble: `<div style="max-width:34em;margin:0 auto 1.2em;padding:0.8em 1em;border:1px solid #ccc;border-radius:8px;background:#f6f8fa;">
+                   👥 <strong>This demo is designed for ${EXPECTED_PLAYERS} players</strong>.
+                   Open this page in <strong>exactly ${EXPECTED_PLAYERS} browser tabs</strong> — copy the URL
+                   (including <code>?mp_session=…</code>) into each new tab so they join the same session.
+                 </div>`,
+      questions: [{ prompt: "Choose a display name:", required: true, name: "name" }],
+      on_finish: (data) => {
+        myName = (data.response.name || "").trim() || "Anonymous";
+      },
+    };
+
+    // 2) Lobby: publish our name + a zero score, then wait for the group. Seeding score: 0 here means
+    //    the panel shows every player from the moment the game starts, not only after their first
+    //    answer.
+    const lobbyTrial = {
+      type: jsPsychMultiplayerSync,
+      push_data: () => ({
+        name: myName,
+        joinedAt: Date.now(),
+        score: { score: 0, label: myName },
+      }),
+      // NB: the sync plugin's waiting-HTML parameter is `message`, not `prompt`.
+      message: `<p>Waiting for ${EXPECTED_PLAYERS} players to join…</p>
+               <p>Open this page in another tab (keep the <code>?mp_session=</code> in the URL) to add a player.</p>`,
+      wait_for: (group) => namedPresent(group) >= EXPECTED_PLAYERS,
+      // The lobby is done → the game is on. Show the live panel from here on.
+      on_finish: () => showPanel(),
+    };
+
+    // 3) The quiz. Each question tags its trial with `points`, then pushes the new running total so
+    //    every panel (this tab's and the peers') re-ranks immediately.
+    const quizTrials = QUIZ.map((item) => ({
+      type: jsPsychHtmlButtonResponse,
+      stimulus: `<p style="font-size:1.2em">${item.q}</p>`,
+      choices: item.options,
+      on_finish: (data) => {
+        data.points = data.response === item.correct ? POINTS_PER_CORRECT : 0;
+        pushScore();
+      },
+    }));
+
+    // 4) Wrap-up screen: the panel is still live beside this screen, so a player who finishes first
+    //    can watch the others' scores keep moving. No barrier — that's the point of this variant; see
+    //    scoreboard-room.html for the everyone-at-once reveal.
+    const doneTrial = {
+      type: jsPsychHtmlButtonResponse,
+      choices: ["Finish"],
+      stimulus: () => {
+        const myScore = jsPsych.data.get().select("points").sum();
+        return `<h2>You're done!</h2>
+                <p>Your final score: <strong>${myScore}</strong> points.</p>
+                <p>The standings panel keeps updating while the other players finish.</p>`;
+      },
+    };
+
+    // Connect the backend, then run. Everything above is backend-agnostic — swapping the adapter on
+    // the line below is the only change needed to move from local two-tab testing to JATOS.
+    jsPsych.pluginAPI.connect(localAdapter).then(() => {
+      jsPsych.run([nameTrial, lobbyTrial, ...quizTrials, doneTrial]).then(() => {
+        removePanel();
+        jsPsych.getDisplayElement().innerHTML = `
+          <h2>Demo complete</h2>
+          <p>You can close this browser tab now.</p>`;
+      });
+    });
+  </script>
+</html>
