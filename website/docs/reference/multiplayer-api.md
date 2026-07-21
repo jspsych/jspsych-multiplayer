@@ -67,8 +67,12 @@ Registers `callback` for live updates; returns a function that cancels it. The c
 state is **replayed immediately on registration**, so a component mounting mid-session
 renders at once instead of waiting for the next change.
 
-All subscriptions are tracked centrally and cancelled at experiment end, so a forgotten
-unsubscribe cannot leave a ghost listener running.
+Every subscription is tracked internally, but **nothing in jsPsych's lifecycle cancels them
+automatically**. They are released only when the experiment calls `disconnect()` (which
+cancels them for you) or `cancelAllSubscriptions()` directly. A subscription that is never
+unsubscribed and never disconnected leaks its listener — so a continuous plugin should
+release its handle when its trial ends, and an experiment should `disconnect()` when it
+finishes.
 
 ```js
 const unsubscribe = jsPsych.multiplayer.subscribe((group) => {
@@ -90,9 +94,14 @@ Resolves with the group session once `condition(group)` returns true.
 reduce to. `plugin-multiplayer-sync` packages that pair as one declarative trial, and is
 usually the better choice for experiment code than calling these directly.
 
+### `cancelAllSubscriptions(): void`
+
+Releases every subscription registered through `subscribe()`. Nothing calls this
+automatically; call it at experiment end if the experiment does not `disconnect()`.
+
 ### `disconnect(): Promise<void>`
 
-Leaves the group session.
+Leaves the group session, cancelling all active subscriptions first.
 
 ## The adapter contract
 

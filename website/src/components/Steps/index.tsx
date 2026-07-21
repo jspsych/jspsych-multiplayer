@@ -8,7 +8,13 @@ import styles from './styles.module.css';
  * the jspsych/metadata website.
  */
 export function Steps({children}: {children: ReactNode}): ReactNode {
-  return <ol className={styles.steps}>{children}</ol>;
+  // `role="list"` is required because `list-style: none` strips list semantics in
+  // Safari/VoiceOver, which would silently drop the "step 3 of 8" announcement.
+  return (
+    <ol className={styles.steps} role="list">
+      {children}
+    </ol>
+  );
 }
 
 export function Step({

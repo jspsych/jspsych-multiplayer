@@ -79,6 +79,7 @@ Once connected, `jsPsych.multiplayer` offers:
 | `get(participantId)` | Read one participant's slot. |
 | `getAll()` | Snapshot of the whole group session. |
 | `subscribe(cb)` | Live updates; returns an unsubscribe function. Replays current state on registration. |
+| `cancelAllSubscriptions()` | Release every active subscription. Not called automatically — see the reference. |
 | `wait(condition, timeout?)` | Promise that resolves once a predicate over the group session holds. |
 | `participantId` | The calling client's stable ID within the session. |
 | `disconnect()` | Leave the session. |

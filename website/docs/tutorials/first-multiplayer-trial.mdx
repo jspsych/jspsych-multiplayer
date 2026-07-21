@@ -29,6 +29,8 @@ changes.
 Because the API is still under review, details on this site can change before release.
 :::
 
+## Build it
+
 <Steps>
 
 <Step title="Create the file">
@@ -148,26 +150,34 @@ held. If other clients depend on a field pushed earlier, include it again. See t
 <Step title="Show what the partner said">
 
 The barrier stores the group snapshot it resolved over in its trial data, so reading the
-partner's value needs no extra network call:
+partner's value needs no extra network call — capture it in the barrier's `on_finish`:
 
 ```js
+let partnerChoice;
+
+// add to `barrier`, above:
+//   on_finish: (data) => {
+//     const me = jsPsych.multiplayer.participantId;
+//     const partner = Object.entries(data.group).find(([id]) => id !== me);
+//     partnerChoice = partner?.[1].choice;
+//   },
+
 const resultTrial = {
   type: jsPsychHtmlKeyboardResponse,
-  stimulus: () => {
-    const group = jsPsych.multiplayer.getAll();
-    const me = jsPsych.multiplayer.participantId;
-    const partner = Object.entries(group).find(([id]) => id !== me);
-    return `<p>You picked <strong>${myChoice}</strong>.<br>
-            Your partner picked <strong>${partner[1].choice}</strong>.</p>
-            <p>Press any key to finish.</p>`;
-  },
+  stimulus: () => `<p>You picked <strong>${myChoice}</strong>.<br>
+                   Your partner picked <strong>${partnerChoice}</strong>.</p>
+                   <p>Press any key to finish.</p>`,
 };
 
 const timeline = [chooseTrial, barrier, resultTrial];
 ```
 
-`getAll()` is a synchronous snapshot of the group session; `participantId` is this client's
-own ID, so everything that is not it is a partner.
+`data.group` is the snapshot the barrier resolved over; `participantId` is this client's own
+ID, so the entry that is not it is the partner. The `?.` matters: `wait_for` guarantees a
+partner exists here, but loosen that predicate later and an unguarded lookup crashes.
+
+If a value is needed outside a trial that already carries a snapshot,
+`jsPsych.multiplayer.getAll()` returns one synchronously.
 
 </Step>
 

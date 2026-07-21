@@ -6,13 +6,22 @@ on:
     paths:
       - "website/**"
       - ".github/workflows/publish-docs.yml"
+  # Build (but do not deploy) on PRs touching the site, so a broken docs build is
+  # caught in review rather than after merge.
+  pull_request:
+    paths:
+      - "website/**"
+      - ".github/workflows/publish-docs.yml"
   workflow_dispatch:
+
+env:
+  HUSKY: 0
 
 permissions:
   contents: read
 
 concurrency:
-  group: publish-docs
+  group: publish-docs-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -22,23 +31,33 @@ jobs:
       run:
         working-directory: website
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
+      # fetch-depth: 0 because `showLastUpdateTime` reads each page's last commit
+      # from git history; a shallow clone dates every page to the same commit.
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          node-version: 20
+          fetch-depth: 0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22.x
           cache: npm
           cache-dependency-path: website/package-lock.json
 
-      - run: npm ci
-      - run: npm run build
+      - name: Install dependencies
+        run: npm ci
 
-      - uses: actions/upload-pages-artifact@v3
+      - name: Build site
+        run: npm run build
+
+      - name: Upload Pages artifact
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3.0.1
         with:
           path: website/build
 
   deploy:
     needs: build
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       pages: write
@@ -48,4 +67,4 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4.0.5
