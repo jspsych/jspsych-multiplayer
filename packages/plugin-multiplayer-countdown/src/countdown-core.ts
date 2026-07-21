@@ -15,7 +15,7 @@
  * order-independent, so every client converges on the same value with no coordination, and no single
  * participant dropping out can break the clock. As more (or lower) timestamps arrive, the min can
  * only decrease — displayed remaining time only ticks *down* while the group converges, never up.
- * See the design doc (`docs/countdown-plugin-design.md`) for the clock-skew failure analysis.
+ * See the README's "Limitations" section for the clock-skew failure analysis.
  */
 
 /** A group-session snapshot: participantId -> that participant's pushed data. */
