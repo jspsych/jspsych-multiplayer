@@ -22,7 +22,7 @@ await jsPsych.pluginAPI.connect(new JatosAdapter());
 await jsPsych.run(timeline);
 ```
 
-Once connected, multiplayer plugins and the raw `jsPsych.pluginAPI` (`push`, `wait`, `get`, `getAll`, `subscribe`, `communicate`) work against the JATOS group session.
+Once connected, multiplayer plugins and the raw `jsPsych.pluginAPI` (`push`, `wait`, `get`, `getAll`, `subscribe`, `update`) work against the JATOS group session.
 
 ## How it works
 

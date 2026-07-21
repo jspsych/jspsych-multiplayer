@@ -1,7 +1,7 @@
 import { JsPsych, JsPsychPlugin, ParameterType, TrialType } from "jspsych";
 
 import { version } from "../package.json";
-import { GroupSessionData, MultiplayerApiLike } from "./multiplayer-api";
+import { GroupSessionData, MultiplayerApiLike, isMultiplayerTimeoutError } from "./multiplayer-api";
 
 const info = <const>{
   name: "multiplayer-sync",
@@ -71,9 +71,9 @@ const info = <const>{
       default: false,
     },
     /**
-     * Message from the `wait()` rejection when the trial ended without `wait_for` being met;
-     * null when the condition was satisfied. On a genuine timeout this is the timeout message, so
-     * non-timeout rejections (if the API ever produces them) remain diagnosable in the data.
+     * The `MultiplayerTimeoutError` message when `timeout` elapsed; null when the condition was
+     * satisfied. A non-timeout `wait()` rejection (a throwing `wait_for`, an adapter failure) is
+     * NOT captured here — it propagates and fails the trial instead of being recorded as a timeout.
      */
     wait_error: {
       type: ParameterType.STRING,
@@ -143,6 +143,19 @@ class MultiplayerSyncPlugin implements JsPsychPlugin<Info> {
       }
     };
 
+    /**
+     * Read the latest group snapshot without letting a failure mask the outcome. On the timeout
+     * path the adapter may already be torn down, so a throwing getAll() must not escape and prevent
+     * the trial from finishing — fall back to an empty snapshot instead.
+     */
+    const safeGetAll = (): GroupSessionData => {
+      try {
+        return api.getAll();
+      } catch {
+        return {};
+      }
+    };
+
     // Push BEFORE the wait try/catch: a push failure is an infrastructure error, not a timeout, and
     // must surface loudly (rejecting the trial) rather than being relabeled as `timed_out: true`.
     if (trial.push_data != null) {
@@ -160,16 +173,20 @@ class MultiplayerSyncPlugin implements JsPsychPlugin<Info> {
 
       finish(group, false, null);
     } catch (e) {
-      // As of jsPsych#3694's current draft, api.wait() rejects only on timeout, so every rejection
-      // is labeled `timed_out: true` and routed to on_timeout. The rejection's message is stored in
-      // `wait_error` so a non-timeout failure would still be diagnosable from the data.
-      // TODO: revisit this seam when #3694 finalizes whether wait() can reject for other reasons.
+      // #3694 exports a typed MultiplayerTimeoutError so a genuine timeout can be told apart from a
+      // throwing `wait_for` predicate or another wait() failure. The name-based match lives in
+      // isMultiplayerTimeoutError (multiplayer-api.ts) — the class itself isn't importable here.
+      if (!isMultiplayerTimeoutError(e)) {
+        // Not a timeout — a bug in `wait_for` or an adapter/backend failure. Surface it loudly
+        // instead of mislabeling it `timed_out: true`, matching the push-failure handling above.
+        throw e;
+      }
       if (typeof trial.on_timeout === "function") {
         trial.on_timeout(e);
       }
       // Honour minimum_wait here too, so a short timeout can't flash the waiting message.
       await holdMinimumWait();
-      finish(api.getAll(), true, e instanceof Error ? e.message : String(e));
+      finish(safeGetAll(), true, e.message);
     }
   }
 }

@@ -1,7 +1,11 @@
 import { startTimeline } from "@jspsych/test-utils";
 import { initJsPsych } from "jspsych";
 
-import { GroupSessionData, MultiplayerApiLike } from "./multiplayer-api";
+import {
+  GroupSessionData,
+  MULTIPLAYER_TIMEOUT_ERROR_NAME,
+  MultiplayerApiLike,
+} from "./multiplayer-api";
 import MultiplayerReadyPlugin from ".";
 
 // ---------------------------------------------------------------------------------------------------
@@ -49,7 +53,11 @@ class MockApi implements MultiplayerApiLike {
         setTimeout(() => {
           if (!settled) {
             settled = true;
-            reject(new Error(`wait timed out after ${timeout}ms`));
+            // Mirrors the real MultiplayerTimeoutError: a named Error, since the plugin can't
+            // import that class (see multiplayer-api.ts) and matches on `error.name` instead.
+            const err = new Error(`wait timed out after ${timeout}ms`);
+            err.name = MULTIPLAYER_TIMEOUT_ERROR_NAME;
+            reject(err);
           }
         }, timeout);
       }
@@ -307,9 +315,13 @@ describe("multiplayer-ready plugin", () => {
     expect(finished[0].n_ready).toBe(1); // only p1 ever became ready
   });
 
-  it("records a non-timeout wait() rejection message in wait_error", async () => {
+  it("propagates a non-timeout wait() rejection instead of mislabeling it a timeout", async () => {
+    // #3694 exports a typed MultiplayerTimeoutError so a genuine timeout can be told apart from
+    // another wait() failure (e.g. an adapter/backend error). Anything else must fail the trial
+    // loudly rather than being recorded as `timed_out: true`, matching push-failure handling.
     const api = new MockApi("p1");
     jest.spyOn(api, "wait").mockRejectedValue(new Error("adapter disconnected"));
+    const on_timeout = jest.fn();
     const { jsPsych, finished } = makeJsPsych(api);
     const plugin = new MultiplayerReadyPlugin(jsPsych as never);
     const el = display();
@@ -321,18 +333,26 @@ describe("multiplayer-ready plugin", () => {
       waiting_message: "<p>Waiting…</p>",
       push_data: null,
       timeout: 40,
+      on_timeout,
     } as never);
 
     clickReady(el);
-    await done;
+    await expect(done).rejects.toThrow(/adapter disconnected/);
 
-    expect(finished[0].timed_out).toBe(true);
-    expect(finished[0].wait_error).toBe("adapter disconnected");
+    expect(on_timeout).not.toHaveBeenCalled();
+    expect(finished).toHaveLength(0);
   });
 
   it("still finishes gracefully when getAll() throws on the rejection path (adapter torn down)", async () => {
     const api = new MockApi("p1");
-    jest.spyOn(api, "wait").mockRejectedValue(new Error("adapter disconnected"));
+    jest.spyOn(api, "wait").mockImplementation(
+      () =>
+        new Promise((_resolve, reject) => {
+          const err = new Error("wait timed out after 40ms");
+          err.name = MULTIPLAYER_TIMEOUT_ERROR_NAME;
+          setTimeout(() => reject(err), 40);
+        })
+    );
     jest.spyOn(api, "getAll").mockImplementation(() => {
       throw new Error("connect() must be called before using multiplayer methods");
     });
@@ -355,7 +375,7 @@ describe("multiplayer-ready plugin", () => {
 
     expect(finished).toHaveLength(1);
     expect(finished[0].timed_out).toBe(true);
-    expect(finished[0].wait_error).toBe("adapter disconnected"); // original error preserved, not masked
+    expect(finished[0].wait_error).toMatch(/timed out/); // original error preserved, not masked
     expect(finished[0].group).toEqual({});
     expect(finished[0].n_ready).toBe(0);
   });
