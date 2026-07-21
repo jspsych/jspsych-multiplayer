@@ -37,6 +37,13 @@ export interface MultiplayerApiLike {
    */
   push(data: Record<string, unknown>): Promise<void>;
 
+  /**
+   * Shallow-merge `data` into this participant's own slot, then push the result. Equivalent to
+   * `push({ ...get(participantId), ...data })` — use this instead of hand-rolling that
+   * get-then-spread-then-push sequence for a top-level-key overwrite.
+   */
+  update(data: Record<string, unknown>): Promise<void>;
+
   /** Read the full current group session (all participants). */
   getAll(): GroupSessionData;
 

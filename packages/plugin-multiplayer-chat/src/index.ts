@@ -322,8 +322,9 @@ class MultiplayerChatPlugin implements JsPsychPlugin<Info> {
       }
       input.value = "";
 
-      // Read our OWN slot and push the whole thing back with only the chat key changed: `push`
-      // REPLACES the slot, so spreading preserves any other data we've pushed (a role, an offer, …).
+      // Read our OWN slot to derive the next message list. The push back below goes through
+      // `update`, which merges only the chat key into the slot (leaving any role/offer/… intact)
+      // rather than replacing it.
       const mine = api.get(me) ?? {};
       const own = mergeMessages({ [me]: mine }, dataKey).filter((m) => m.senderId === me);
       const nextMessages = appendOwnMessage(own, text, me, nextSeq++, Date.now());
@@ -338,7 +339,7 @@ class MultiplayerChatPlugin implements JsPsychPlugin<Info> {
       // on failure: pushes are fire-and-forget, so a later send may already have taken the next
       // number, and reusing a seq would forge a duplicate id that mergeMessages' dedup silently
       // drops. A skipped seq is harmless; a reused one loses data.
-      api.push({ ...mine, [dataKey]: nextMessages }).catch(() => {
+      api.update({ [dataKey]: nextMessages }).catch(() => {
         showSendError();
       });
     };
