@@ -11,8 +11,9 @@
  * Like `plugin-multiplayer-role`, the end-of-game scoreboard is a barrier-then-render trial: it
  * pushes this client's score once (`push`), then waits (`wait`) until the group is ready — kept as
  * two separate calls so a push failure is distinguishable from a barrier timeout — then computes and
- * renders the final board. It declares `push`/`get`/`getAll`/`wait` — but not `subscribe`, which the
- * *live* scoreboard variant will need.
+ * renders the final board. It declares `push`/`get`/`getAll`/`wait` — but not `subscribe`; the live
+ * standings demo (examples/live-scoreboard-room.html) renders from the pure core plus
+ * `pluginAPI.subscribe` directly, without going through this interface.
  *
  * Mock-based tests implement this same interface, so the plugin is exercised end-to-end with no live
  * group session.

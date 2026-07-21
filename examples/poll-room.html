@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Multiplayer Poll Room — jsPsych multiplayer</title>
+    <!-- jsPsych core MUST carry the multiplayer API (jsPsych#3694), which is not yet in a release.
+         Until it merges, load the PR's preview build from jsDelivr instead of the published `jspsych`.
+         This URL is pinned to the same #3694 preview SHA as choice-room.html / chat-room.html. A
+         SHA-pinned URL keeps loading indefinitely (it never 404s); what goes stale is the #3694 API it
+         was pinned against, so if the demo misbehaves against a newer #3694, re-pin — see
+         examples/README.md "Running it". -->
+    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@c43b3a1f285ef2d899cd43960c889a4a9d630dc9/packages/jspsych/dist/index.browser.min.js"></script>
+    <script src="https://unpkg.com/@jspsych/plugin-survey-text"></script>
+    <script src="https://unpkg.com/@jspsych/plugin-html-button-response"></script>
+    <!-- The multiplayer packages resolve from the sibling packages' built dist/ in this repo (run
+         `npm install && npm run build` from the repo root first — dist/ is gitignored). Once they are
+         published, load them from a CDN instead, e.g.
+           <script src="https://unpkg.com/@jspsych-multiplayer/plugin-multiplayer-choice"></script> -->
+    <!-- The `?v=` query is a cache-buster: bump it after rebuilding the packages so the browser is
+         forced to re-fetch the new bundle instead of serving a stale cached copy. -->
+    <script src="../packages/adapter-multiplayer-local/dist/index.browser.min.js?v=1"></script>
+    <script src="../packages/plugin-multiplayer-sync/dist/index.browser.min.js?v=1"></script>
+    <script src="../packages/plugin-multiplayer-choice/dist/index.browser.min.js?v=1"></script>
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@c43b3a1f285ef2d899cd43960c889a4a9d630dc9/packages/jspsych/css/jspsych.css"
+    />
+    <style>
+      /* The choice plugin ships its own scoped stylesheet for the tally reveal; this demo only adds a
+         little spacing so the option buttons in the polling phase aren't cramped. */
+      .jspsych-multiplayer-choice-options {
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        justify-content: center;
+        margin-top: 12px;
+      }
+      .jspsych-multiplayer-choice-prompt {
+        font-size: 1.1em;
+      }
+      .poll-room-outcome {
+        margin-top: 12px;
+      }
+    </style>
+  </head>
+
+  <body></body>
+  <script>
+    // ===============================================================================================
+    // Multiplayer Poll Room — a demo for the jsPsych multiplayer packages.
+    //
+    // Participants pick a display name, wait in a lobby until enough people have joined, then cast an
+    // ANONYMOUS pick among the same options. The trial waits (a barrier) until the whole group has
+    // chosen, then reveals the aggregate tally and the plurality winner — the choice plugin's
+    // `reveal_mode: "tally"`. Contrast with choice-room.html, which uses the same plugin's default
+    // `"players"` mode to reveal attributed choices + payoffs. It composes three packages:
+    //   • adapter-multiplayer-local — the network backend. localStorage + cross-tab signalling, so the
+    //                                 whole thing runs by OPENING TWO BROWSER TABS — no server.
+    //   • plugin-multiplayer-sync   — the lobby: push your name, wait until EXPECTED_PLAYERS are present.
+    //   • plugin-multiplayer-choice — the ballot: everyone picks, the group barriers until all picks
+    //                                 are in, then the anonymous tally + winner are revealed.
+    //
+    // -----------------------------------------------------------------------------------------------
+    // ILLUSTRATIVE example. Like chat-room.html / choice-room.html it needs no server, but connecting
+    // ANY adapter still requires the multiplayer API from jsPsych#3694, which is not yet in a release.
+    // The local adapter is same-origin, same-browser, same-machine — a development/demo tool, NOT for
+    // data collection.
+    // ===============================================================================================
+
+    // This demo is designed for a FIXED number of players. `expected_players` must be the same exact
+    // integer on every client (that's how the barrier agrees on when everyone has chosen), so it's
+    // a constant, NOT a live head-count of whoever is present — a live count lets tabs that reach the
+    // ballot at different moments wait for different totals and hang.
+    const EXPECTED_PLAYERS = 2;
+
+    // The options everyone picks among. HTML is allowed (experimenter-authored), like jsPsych's
+    // html-button-response `choices`.
+    const BALLOT = ["Comedy", "Horror", "Sci-Fi", "Documentary"];
+
+    const jsPsych = initJsPsych();
+
+    // Connecting the adapter is the only network setup the timeline needs. persistParticipant keeps
+    // this tab's participant id in sessionStorage, so a mid-lobby refresh rejoins as the SAME
+    // participant instead of leaving a stale "ghost" slot that would falsely satisfy the lobby.
+    const localAdapter = new jsPsychAdapterMultiplayerLocal({ persistParticipant: true });
+
+    // The local adapter only removes this tab's slot on an explicit disconnect(); a CLOSED tab would
+    // otherwise linger as a "ghost" slot that pollutes later runs. Clean up on close.
+    window.addEventListener("pagehide", () => localAdapter.disconnect());
+
+    // Only participants who made it through the lobby (i.e. pushed a `name`) count as "present".
+    const namedPresent = (group) =>
+      Object.values(group).filter((entry) => entry && entry.name).length;
+
+    let myName = "";
+
+    // 1) Ask for a display name.
+    const nameTrial = {
+      type: jsPsychSurveyText,
+      preamble: `<div style="max-width:34em;margin:0 auto 1.2em;padding:0.8em 1em;border:1px solid #ccc;border-radius:8px;background:#f6f8fa;">
+                   👥 <strong>This demo is designed for ${EXPECTED_PLAYERS} players</strong>.
+                   Open this page in <strong>exactly ${EXPECTED_PLAYERS} browser tabs</strong> — copy the URL
+                   (including <code>?mp_session=…</code>) into each new tab so they join the same session.
+                 </div>`,
+      questions: [{ prompt: "Choose a display name:", required: true, name: "name" }],
+      on_finish: (data) => {
+        myName = (data.response.name || "").trim() || "Anonymous";
+      },
+    };
+
+    // 2) Lobby: publish our name + join time, then wait until enough named players are present.
+    const lobbyTrial = {
+      type: jsPsychMultiplayerSync,
+      push_data: () => ({ name: myName, joinedAt: Date.now() }),
+      // NB: the sync plugin's waiting-HTML parameter is `message`, not `prompt`.
+      message: `<p>Waiting for ${EXPECTED_PLAYERS} players to join…</p>
+               <p>Open this page in another tab (keep the <code>?mp_session=</code> in the URL) to add a player.</p>`,
+      wait_for: (group) => namedPresent(group) >= EXPECTED_PLAYERS,
+    };
+
+    // 3) The ballot. `reveal_mode: "tally"` reveals per-option counts + the plurality winner, never a
+    //    participant → pick mapping, and `record_choices_by_player: false` keeps the attributed map out
+    //    of the recorded data too. (Output-level anonymity: peers' raw picks still exist in the shared
+    //    session state — see the plugin README's Anonymity note.) `expected_players` is the fixed
+    //    number of players the barrier waits for before revealing (the same integer on every client).
+    const pollTrial = {
+      type: jsPsychMultiplayerChoice,
+      choices: BALLOT,
+      prompt: "<p>Movie night! Vote for the genre the group should watch:</p>",
+      expected_players: EXPECTED_PLAYERS,
+      reveal_mode: "tally",
+      record_choices_by_player: false,
+      waiting_message: "<p>Your vote is in — waiting for the other players…</p>",
+      reveal: true,
+      reveal_prompt: "<h3>The votes are in</h3>",
+      continue_label: "Continue",
+    };
+
+    // 4) Wrap-up screen: report the anonymous outcome from the poll trial's data.
+    const doneTrial = {
+      type: jsPsychHtmlButtonResponse,
+      choices: ["Finish"],
+      stimulus: () => {
+        const poll =
+          jsPsych.data.get().filter({ trial_type: "multiplayer-choice" }).values()[0] || {};
+        let outcome;
+        if (poll.winner) {
+          outcome = `The group chose <strong>${poll.winner.label}</strong> (${poll.winner.count} of ${poll.n_players} votes).`;
+        } else if (poll.is_tie) {
+          const names = (poll.tied_options || []).map((o) => o.label).join(", ");
+          outcome = `It was a tie between <strong>${names}</strong>.`;
+        } else {
+          outcome = "No votes were counted.";
+        }
+        return `<h2>Thanks for voting!</h2>
+                <p class="poll-room-outcome">${outcome}</p>
+                <p>You voted for <strong>${poll.choice ?? "—"}</strong>.</p>`;
+      },
+    };
+
+    // Connect the backend, then run. Everything above is backend-agnostic — swapping the adapter on
+    // the line below is the only change needed to move from local two-tab testing to JATOS.
+    //
+    // jsPsych.run() resolves once the timeline (including the "Finish" click on doneTrial) is fully
+    // done; replace the display with an explicit "you can close this now" message so clicking Finish
+    // doesn't just leave a blank screen.
+    jsPsych.pluginAPI.connect(localAdapter).then(() => {
+      jsPsych.run([nameTrial, lobbyTrial, pollTrial, doneTrial]).then(() => {
+        jsPsych.getDisplayElement().innerHTML = `
+          <h2>Demo complete</h2>
+          <p>You can close this browser tab now.</p>`;
+      });
+    });
+  </script>
+</html>

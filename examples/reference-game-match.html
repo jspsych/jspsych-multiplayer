@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Repeated Reference Game — full-board match (local, two-tab) — jsPsych multiplayer</title>
+    <!-- jsPsych core MUST carry the multiplayer API (jsPsych#3694). SHA-pinned to the #3694 preview
+         build (see examples/README.md "Running it" to re-pin). -->
+    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@7b1d96a0576032d15bd0d7c434f01b2d614f3a85/packages/jspsych/dist/index.browser.min.js"></script>
+    <script src="https://unpkg.com/@jspsych/plugin-survey-text"></script>
+    <script src="https://unpkg.com/@jspsych/plugin-html-keyboard-response"></script>
+    <script src="../packages/adapter-multiplayer-local/dist/index.browser.min.js?v=1"></script>
+    <script src="../packages/plugin-multiplayer-sync/dist/index.browser.min.js?v=1"></script>
+    <script src="../packages/plugin-multiplayer-role/dist/index.browser.min.js?v=1"></script>
+    <script src="../packages/plugin-multiplayer-reference-game/dist/index.browser.min.js?v=1"></script>
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@7b1d96a0576032d15bd0d7c434f01b2d614f3a85/packages/jspsych/css/jspsych.css"
+    />
+  </head>
+
+  <body></body>
+  <script>
+    // ===============================================================================================
+    // Repeated Reference Game — FULL-BOARD MATCH preset (Hawkins' "unconstrained" condition).
+    //
+    // Same plugin as reference-game.html, but here EVERY object is a target (targets.length ===
+    // stimuli.length) and they carry an ORDER. The director's board shows the shapes with numbered
+    // slot badges; the matcher reproduces that order on their own (scrambled) board by clicking a
+    // numbered slot and then the shape that belongs in it, then submits for a score out of N.
+    //
+    // "Sequential" (one click) and "full-board match" are the SAME plugin with `targets` turned from
+    // length-1 to length-N — see reference-game.html for the single-target version.
+    //
+    // Six objects keep the demo quick to complete in two tabs; a real study can use any N.
+    // Dev/demo only (local adapter, two tabs on one machine).
+    // ===============================================================================================
+
+    const MIN_PLAYERS = 2;
+    const N = 6;
+
+    const jsPsych = initJsPsych();
+    const localAdapter = new jsPsychAdapterMultiplayerLocal({ persistParticipant: true });
+
+    function svgPolygon(points) {
+      return (
+        `<svg viewBox="0 0 100 100" width="100%" height="100%" aria-hidden="true">` +
+        `<polygon points="${points}" fill="#222" /></svg>`
+      );
+    }
+    function regular(n, rot) {
+      const pts = [];
+      for (let i = 0; i < n; i++) {
+        const a = rot + (i * 2 * Math.PI) / n;
+        pts.push(`${(50 + 42 * Math.cos(a)).toFixed(1)},${(50 + 42 * Math.sin(a)).toFixed(1)}`);
+      }
+      return svgPolygon(pts.join(" "));
+    }
+    // Six distinct silhouettes (regular polygons, 3–8 sides).
+    const SHAPES = [];
+    for (let n = 3; n <= 8; n++) SHAPES.push({ id: `poly${n}`, html: regular(n, -Math.PI / 2) });
+    const ALL_IDS = SHAPES.map((s) => s.id);
+
+    // Round schedule: each round the director's board is a different ORDER of all six shapes, which the
+    // matcher must reproduce. Hardcoded so both tabs agree. (Score is out of N per round.)
+    const SCHEDULE = [
+      { round: 0, targets: ["poly5", "poly3", "poly8", "poly4", "poly7", "poly6"] },
+      { round: 1, targets: ["poly7", "poly6", "poly3", "poly8", "poly4", "poly5"] },
+      { round: 2, targets: ["poly4", "poly8", "poly5", "poly6", "poly3", "poly7"] },
+    ];
+
+    let myName = "";
+    let myRole;
+    let partnerId;
+
+    const nameTrial = {
+      type: jsPsychSurveyText,
+      questions: [{ prompt: "Choose a display name:", required: true, name: "name" }],
+      on_finish: (data) => {
+        myName = (data.response.name || "").trim() || "Anonymous";
+      },
+    };
+
+    const lobbyTrial = {
+      type: jsPsychMultiplayerSync,
+      push_data: () => ({ name: myName, joinedAt: Date.now() }),
+      message: `<p>Waiting for ${MIN_PLAYERS} players to join…</p>
+                <p>Open this page in another tab (keep the <code>?mp_session=</code> in the URL) to add a player.</p>`,
+      wait_for: (group) =>
+        Object.values(group).filter((entry) => entry && entry.name).length >= MIN_PLAYERS,
+    };
+
+    // Assign director/matcher RANDOMLY by deterministic consensus (shared seed from the sorted
+    // participant ids), fixed for the whole game — not "whoever joined first". Swap to "join_order"
+    // if you'd rather the first tab always be the director while testing.
+    const roleTrial = {
+      type: jsPsychMultiplayerRole,
+      roles: ["director", "matcher"],
+      strategy: "random",
+      overflow_role: "spectator",
+      ready: (group) =>
+        Object.keys(group).length >= MIN_PLAYERS &&
+        Object.values(group).every((entry) => entry && entry.joinedAt != null),
+      save_group: true,
+      message: "<p>Pairing you with your partner…</p>",
+      on_finish: () => {
+        myRole = jsPsychMultiplayerRole.getMyRole();
+        const byRole = jsPsychMultiplayerRole.participantsByRole();
+        partnerId = myRole === "director" ? byRole.matcher?.[0] : byRole.director?.[0];
+      },
+    };
+
+    const spectatorScreen = {
+      timeline: [
+        {
+          type: jsPsychHtmlKeyboardResponse,
+          stimulus: "<p>This game is already full. Thanks for your interest!</p>",
+          choices: "NO_KEYS",
+          trial_duration: 4000,
+          on_finish: () => jsPsych.pluginAPI.disconnect(),
+        },
+      ],
+      conditional_function: () => myRole === "spectator",
+    };
+
+    const gameRound = {
+      type: jsPsychMultiplayerReferenceGame,
+      stimuli: SHAPES,
+      columns: 3,
+      role: () => jsPsychMultiplayerRole.getMyRole(),
+      partner_id: () => partnerId,
+      round: jsPsych.timelineVariable("round"),
+      targets: jsPsych.timelineVariable("targets"), // all N ids, ordered — full-board match
+      ordered: true,
+      submit_label: "Submit board",
+      show_running_score: true,
+      round_timeout: 90000,
+      prompt: (role) =>
+        role === "director"
+          ? "<p><strong>You are the Director.</strong> Describe your shapes in badge order (1, 2, 3, …) so your partner can arrange theirs the same way.</p>"
+          : "<p><strong>You are the Matcher.</strong> For each numbered slot, click the slot and then the shape your partner says goes there. Fill every slot, then submit.</p>",
+    };
+
+    const gameLoop = {
+      timeline: [gameRound],
+      timeline_variables: SCHEDULE,
+      conditional_function: () => myRole === "director" || myRole === "matcher",
+    };
+
+    const doneTrial = {
+      type: jsPsychHtmlKeyboardResponse,
+      stimulus: () => {
+        // Both roles record `n_correct` each round (the director scores the matcher's submitted
+        // board), so this total shows on both screens. Count only completed rounds (ended_by "submit")
+        // so the denominator matches what was actually scored — a timed-out round isn't counted as 0/N.
+        const completed = jsPsych.data
+          .get()
+          .filter({ trial_type: "multiplayer-reference-game", ended_by: "submit" });
+        const played = completed.count();
+        const total = completed.select("n_correct").sum();
+        return `<h2>Game complete!</h2>
+                <p>Together you scored <strong>${total} / ${played * N}</strong> across ${played} round${
+          played === 1 ? "" : "s"
+        }.</p>
+                <p>You may close this tab. <button id="dl">Download data (JSON)</button></p>`;
+      },
+      choices: "NO_KEYS",
+      on_load: () => {
+        document
+          .getElementById("dl")
+          ?.addEventListener("click", () =>
+            jsPsych.data.get().localSave("json", "reference-game-match-data.json")
+          );
+      },
+    };
+
+    jsPsych.pluginAPI.connect(localAdapter).then(() => {
+      jsPsych.run([nameTrial, lobbyTrial, roleTrial, spectatorScreen, gameLoop, doneTrial]);
+    });
+  </script>
+</html>

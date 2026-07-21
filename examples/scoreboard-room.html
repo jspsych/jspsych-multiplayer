@@ -7,7 +7,7 @@
          This URL is pinned to the same #3694 preview SHA as chat-room.html. A SHA-pinned URL keeps
          loading indefinitely (it never 404s); what goes stale is the #3694 API it was pinned against,
          so if the demo misbehaves against a newer #3694, re-pin — see examples/README.md "Running it". -->
-    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@c43b3a1f285ef2d899cd43960c889a4a9d630dc9/packages/jspsych/dist/index.browser.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@7b1d96a0576032d15bd0d7c434f01b2d614f3a85/packages/jspsych/dist/index.browser.min.js"></script>
     <script src="https://unpkg.com/@jspsych/plugin-survey-text"></script>
     <script src="https://unpkg.com/@jspsych/plugin-html-button-response"></script>
     <!-- The multiplayer packages resolve from the sibling packages' built dist/ in this repo (run
@@ -21,7 +21,7 @@
     <script src="../packages/plugin-multiplayer-scoreboard/dist/index.browser.min.js?v=1"></script>
     <link
       rel="stylesheet"
-      href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@c43b3a1f285ef2d899cd43960c889a4a9d630dc9/packages/jspsych/css/jspsych.css"
+      href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@7b1d96a0576032d15bd0d7c434f01b2d614f3a85/packages/jspsych/css/jspsych.css"
     />
   </head>
 
@@ -40,8 +40,8 @@
     //                                     `group_size` reporters, then every client independently ranks
     //                                     the same snapshot and shows it with a Continue button.
     //
-    // Contrast with plugin-multiplayer-live-scoreboard (see live-scoreboard-room.html), which stays
-    // open and fills in live as peers report. This one is a one-shot reveal at the end of the game.
+    // Contrast with live-scoreboard-room.html, which renders the standings live (from the same pure
+    // ranking core, via subscribe) as peers report. This one is a one-shot reveal at the end.
     //
     // -----------------------------------------------------------------------------------------------
     // ILLUSTRATIVE example. Like chat-room.html it needs no server, but connecting ANY adapter still
