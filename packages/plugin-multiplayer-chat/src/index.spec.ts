@@ -44,6 +44,10 @@ class MockApi implements MultiplayerApiLike {
     if (this.echoPushes) this.fire();
   }
 
+  update(data: Record<string, unknown>) {
+    return this.push({ ...(this.session[this.participantId] ?? {}), ...data });
+  }
+
   subscribe(cb: (g: GroupSessionData) => void): Unsubscribe {
     this.subs.add(cb);
     cb(this.getAll()); // replay-on-registration, like core
@@ -431,6 +435,7 @@ describe("multiplayer-chat plugin", () => {
       participantId: api.participantId,
       get: api.get.bind(api),
       push: api.push.bind(api),
+      update: api.update.bind(api),
       getAll: api.getAll.bind(api),
       subscribe: api.subscribe.bind(api),
     });

@@ -33,6 +33,10 @@ class MockApi implements MultiplayerApiLike {
     this.fire();
   }
 
+  update(data: Record<string, unknown>) {
+    return this.push({ ...(this.session[this.participantId] ?? {}), ...data });
+  }
+
   subscribe(cb: (g: GroupSessionData) => void): Unsubscribe {
     this.subs.add(cb);
     cb(this.getAll());
@@ -749,6 +753,7 @@ describe("multiplayer-draw plugin", () => {
       participantId: api.participantId,
       get: api.get.bind(api),
       push: api.push.bind(api),
+      update: api.update.bind(api),
       getAll: api.getAll.bind(api),
       subscribe: api.subscribe.bind(api),
     });

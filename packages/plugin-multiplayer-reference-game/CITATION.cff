@@ -1,0 +1,24 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite the paper whose task it implements as below."
+authors:
+- family-names: "Liao"
+  given-names: "Mandy"
+title: "jsPsychMultiplayerReferenceGame"
+version: 0.1.0
+url: "https://github.com/jspsych/jspsych-multiplayer/tree/main/packages/plugin-multiplayer-reference-game"
+preferred-citation:
+  type: article
+  title: "Characterizing the Dynamics of Learning in Repeated Reference Games"
+  authors:
+  - family-names: "Hawkins"
+    given-names: "Robert D."
+  - family-names: "Frank"
+    given-names: "Michael C."
+  - family-names: "Goodman"
+    given-names: "Noah D."
+  journal: "Cognitive Science"
+  volume: 44
+  issue: 6
+  year: 2020
+  start: "e12845"
+  doi: "10.1111/cogs.12845"

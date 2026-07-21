@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Multiplayer Public Goods Game (local, two-tab) — jsPsych multiplayer</title>
+    <!-- jsPsych core MUST carry the multiplayer API (jsPsych#3694), which is not yet in a release.
+         Until it merges, load the PR's preview build from jsDelivr instead of the published `jspsych`.
+         This URL is pinned to #3694 commit 01b8ee4 (preview SHA c43b3a1) — see examples/README.md
+         "Running it" for how to find/re-pin the current preview link. -->
+    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@7b1d96a0576032d15bd0d7c434f01b2d614f3a85/packages/jspsych/dist/index.browser.min.js"></script>
+    <script src="https://unpkg.com/@jspsych/plugin-html-button-response"></script>
+    <script src="https://unpkg.com/@jspsych/plugin-html-keyboard-response"></script>
+    <!-- The multiplayer packages. These resolve once the sibling packages are built in this repo;
+         once they are published, load them from a CDN instead, e.g.
+           <script src="https://unpkg.com/@jspsych-multiplayer/plugin-multiplayer-countdown"></script> -->
+    <script src="../packages/adapter-multiplayer-local/dist/index.browser.min.js"></script>
+    <script src="../packages/plugin-multiplayer-sync/dist/index.browser.min.js"></script>
+    <script src="../packages/plugin-multiplayer-countdown/dist/index.browser.min.js"></script>
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@7b1d96a0576032d15bd0d7c434f01b2d614f3a85/packages/jspsych/css/jspsych.css"
+    />
+  </head>
+
+  <body></body>
+  <script>
+    // ===============================================================================================
+    // Multiplayer Public Goods Game (local, two-tab) — a demo for the jsPsych multiplayer packages,
+    // and the showcase for a SYNCHRONIZED CONTRIBUTION DEADLINE built on plugin-multiplayer-countdown.
+    //
+    // Two players each start with an endowment of tokens. In a single timed round they SIMULTANEOUSLY
+    // decide how much to contribute to a common pool. The pool is multiplied and split equally, so the
+    // group does best if everyone contributes, but each individual is tempted to free-ride. The
+    // contribution phase is time-boxed by a countdown that ticks the SAME on both screens — the natural
+    // fit for the countdown plugin, whose pacing is duration-bound (unlike a turn-based game such as
+    // the ultimatum demo, where one player acts while the other waits).
+    //
+    // It composes three packages so the experiment carries almost no networking of its own:
+    //   • adapter-multiplayer-local  — the network backend. localStorage + cross-tab signalling, so
+    //                                  the whole thing runs by OPENING TWO BROWSER TABS — no server.
+    //                                  (Swap in adapter-multiplayer-jatos for a real deployment;
+    //                                  nothing else in the timeline changes.)
+    //   • plugin-multiplayer-sync    — the lobby, and the "wait for both contributions" barrier, are
+    //                                  each one declarative push-then-wait.
+    //   • plugin-multiplayer-countdown — used here NOT as a trial but through its exported statics
+    //                                  (startedAtKey / resolveStartedAt / computeRemaining / formatTime).
+    //                                  This is the plugin's flagship "render a synced timer DURING
+    //                                  another trial" use: the contribution buttons are a normal
+    //                                  html-button-response, and we draw the shared deadline into it.
+    // -----------------------------------------------------------------------------------------------
+    // ILLUSTRATIVE example. Unlike the JATOS demos it needs no server, but it still cannot run from a
+    // released jsPsych today: connecting ANY adapter requires the multiplayer API from jsPsych#3694,
+    // which is not yet in a release. Once a #3694 build is in place, this runs for real in two tabs of
+    // one browser (see examples/README.md → "Running it"). The local adapter is same-origin,
+    // same-browser, same-machine — a development/demo tool, NOT for data collection.
+    // ===============================================================================================
+
+    const ENDOWMENT = 10; // tokens each player starts the round with
+    const MULTIPLIER = 1.6; // the pool is multiplied by this before being split equally
+    const N_PLAYERS = 2; // this demo is sized for two tabs
+    const CONTRIB_MS = 20 * 1000; // length of the timed contribution window
+
+    // The consensus key the synced contribution timer resolves its start from. We reuse the countdown
+    // plugin's own key helper so the demo and the plugin agree on the slot layout byte-for-byte.
+    const START_KEY = jsPsychMultiplayerCountdown.startedAtKey("pg_contribution");
+
+    const jsPsych = initJsPsych();
+
+    // persistParticipant keeps this tab's participant id in sessionStorage, so a mid-round refresh
+    // rejoins as the SAME participant (and, because we keep an already-present start timestamp rather
+    // than overwriting it, resumes the same shared deadline) instead of leaving a stale "ghost" slot.
+    const localAdapter = new jsPsychAdapterMultiplayerLocal({ persistParticipant: true });
+
+    let myContribution = null; // this player's chosen contribution, 0..ENDOWMENT (null = timed out → 0)
+    let contribInterval = null; // the contribution clock's repaint interval, cleared on trial end
+
+    // ── Lobby ──────────────────────────────────────────────────────────────────────────────────
+    // Announce we're here and hold until both players are present. Aligning the START of the
+    // contribution phase behind this barrier is what keeps the two deadlines converged.
+    const lobby = {
+      type: jsPsychMultiplayerSync,
+      push_data: { status: "ready" },
+      wait_for: (group) => Object.keys(group).length >= N_PLAYERS,
+      message: `<p>Waiting for another player to join…</p>
+               <p>Open this page in another tab (keep the <code>?mp_session=</code> in the URL) to add a player.</p>`,
+    };
+
+    // ── Contribution phase (timed, simultaneous) ────────────────────────────────────────────────
+    // A normal button-response for the DECISION, with a shared countdown drawn on top of it via the
+    // countdown plugin's statics. Every client resolves the same start (the minimum start timestamp
+    // across all slots), so both tabs show the same remaining time and the window closes together
+    // within clock skew + latency. `trial_duration` is the hard per-client cutoff; the visible clock
+    // is the group-synced one. (This is the same skew tradeoff the countdown README documents: the
+    // displayed deadline is consensus, the moment a given client is actually forced off is its own.)
+    const contribution = {
+      type: jsPsychHtmlButtonResponse,
+      stimulus: `
+        <p>You have <strong>${ENDOWMENT} tokens</strong>.</p>
+        <p>How many will you contribute to the group pool? Whatever the group contributes is multiplied
+           by <strong>${MULTIPLIER}×</strong> and split equally. You keep any tokens you don't contribute.</p>
+        <p style="font-size:1.4em">Time left to decide: <span id="pg-clock">—</span></p>
+      `,
+      choices: Array.from({ length: ENDOWMENT + 1 }, (_, index) => String(index)),
+      trial_duration: CONTRIB_MS,
+      response_ends_trial: true,
+      on_load: () => {
+        // Register this client's start (read own slot → spread → push, keep-if-present) exactly as the
+        // countdown plugin does, so a refresh resumes the same deadline and we never clobber the
+        // `status` the lobby pushed. push is fire-and-forget; the timer falls back to our own start
+        // until (possibly lower) peer timestamps arrive.
+        const me = jsPsych.pluginAPI.participantId;
+        const mine = jsPsych.pluginAPI.get(me) ?? {};
+        const already = typeof mine[START_KEY] === "number" && Number.isFinite(mine[START_KEY]);
+        const ownStart = already ? mine[START_KEY] : Date.now();
+        if (!already) jsPsych.pluginAPI.push({ ...mine, [START_KEY]: ownStart });
+
+        const clockEl = document.getElementById("pg-clock");
+        const paint = () => {
+          const startedAt =
+            jsPsychMultiplayerCountdown.resolveStartedAt(jsPsych.pluginAPI.getAll(), START_KEY) ??
+            ownStart;
+          const remaining = jsPsychMultiplayerCountdown.computeRemaining(
+            startedAt,
+            CONTRIB_MS,
+            Date.now()
+          );
+          clockEl.textContent = jsPsychMultiplayerCountdown.formatTime(remaining);
+        };
+        paint();
+        contribInterval = setInterval(paint, 100);
+      },
+      on_finish: (data) => {
+        // Stop the clock (the trial ended via a click or the trial_duration cutoff), then record the
+        // choice. response is the clicked button index (== token amount); null if the window closed first.
+        if (contribInterval != null) clearInterval(contribInterval);
+        myContribution = data.response == null ? 0 : data.response;
+      },
+    };
+
+    // ── Publish + barrier ───────────────────────────────────────────────────────────────────────
+    // Push our contribution (preserving the start timestamp already in our slot) and hold until both
+    // players have submitted, so neither reveal screen renders a half-finished round.
+    const submitAndWait = {
+      type: jsPsychMultiplayerSync,
+      push_data: () => {
+        const me = jsPsych.pluginAPI.participantId;
+        const mine = jsPsych.pluginAPI.get(me) ?? {};
+        return { ...mine, contribution: myContribution };
+      },
+      wait_for: (group) =>
+        Object.values(group).filter((entry) => entry && entry.contribution != null).length >=
+        N_PLAYERS,
+      message: () => `<p>You contributed <strong>${myContribution}</strong>. Waiting for the other player…</p>`,
+    };
+
+    // ── Reveal ────────────────────────────────────────────────────────────────────────────────
+    const reveal = {
+      type: jsPsychHtmlKeyboardResponse,
+      stimulus: () => {
+        const me = jsPsych.pluginAPI.participantId;
+        const group = jsPsych.pluginAPI.getAll();
+        const contributions = Object.values(group).map((e) => e.contribution ?? 0);
+        const pool = contributions.reduce((a, b) => a + b, 0);
+        const share = (pool * MULTIPLIER) / N_PLAYERS;
+        const myContrib = group[me]?.contribution ?? 0;
+        const myPayoff = ENDOWMENT - myContrib + share;
+        return `
+          <h2>Round result</h2>
+          <p>The group contributed <strong>${pool}</strong> of ${ENDOWMENT * N_PLAYERS} tokens.</p>
+          <p>Pool × ${MULTIPLIER} = ${(pool * MULTIPLIER).toFixed(1)}, split ${N_PLAYERS} ways →
+             <strong>${share.toFixed(1)}</strong> back to each player.</p>
+          <p>You kept ${ENDOWMENT - myContrib} and contributed ${myContrib}.</p>
+          <p>Your payoff: <strong>${myPayoff.toFixed(1)} tokens</strong>.</p>
+        `;
+      },
+      choices: [" "],
+      prompt: "<p>Press space to finish.</p>",
+    };
+
+    // ── Final screen ────────────────────────────────────────────────────────────────────────────
+    // Opt-in data download (this is the local/dev adapter with no backend collecting data; making the
+    // download a click keeps repeated test runs from littering the Downloads folder).
+    const doneScreen = {
+      type: jsPsychHtmlKeyboardResponse,
+      stimulus: `
+        <p>The session has ended. You may close this tab.</p>
+        <p><button id="download-data-btn">Download data (JSON)</button></p>
+      `,
+      choices: "NO_KEYS",
+      on_load: () => {
+        document.getElementById("download-data-btn").addEventListener("click", () => {
+          jsPsych.data.get().localSave("json", "public-goods-data.json");
+        });
+      },
+    };
+
+    // Connect the backend, then run. Everything above is backend-agnostic — swapping the adapter is
+    // the only change needed to move from local two-tab testing to a networked deployment.
+    jsPsych.pluginAPI.connect(localAdapter).then(() => {
+      jsPsych.run([lobby, contribution, submitAndWait, reveal, doneScreen]);
+    });
+  </script>
+</html>

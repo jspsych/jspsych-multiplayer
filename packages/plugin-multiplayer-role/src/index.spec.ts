@@ -1,7 +1,11 @@
 import { startTimeline } from "@jspsych/test-utils";
 import { initJsPsych } from "jspsych";
 
-import { GroupSessionData, MultiplayerApiLike } from "./multiplayer-api";
+import {
+  GroupSessionData,
+  MULTIPLAYER_TIMEOUT_ERROR_NAME,
+  MultiplayerApiLike,
+} from "./multiplayer-api";
 import MultiplayerRolePlugin from ".";
 
 // ---------------------------------------------------------------------------------------------------
@@ -53,20 +57,15 @@ class MockApi implements MultiplayerApiLike {
         setTimeout(() => {
           if (!settled) {
             settled = true;
-            reject(new Error(`wait timed out after ${timeout}ms`));
+            // Mirrors the real MultiplayerTimeoutError: a named Error, since the plugin can't
+            // import that class (see multiplayer-api.ts) and matches on `error.name` instead.
+            const err = new Error(`wait timed out after ${timeout}ms`);
+            err.name = MULTIPLAYER_TIMEOUT_ERROR_NAME;
+            reject(err);
           }
         }, timeout);
       }
     });
-  }
-
-  async communicate(
-    data: Record<string, unknown>,
-    condition: (d: GroupSessionData) => boolean,
-    timeout?: number
-  ) {
-    await this.push(data);
-    return this.wait(condition, timeout);
   }
 }
 
@@ -340,6 +339,31 @@ describe("plugin-multiplayer-role — trial wrapper", () => {
     expect(finished).toHaveLength(0); // trial did not finish as timed_out
   });
 
+  it("propagates a non-timeout wait() rejection instead of mislabeling it a timeout", async () => {
+    // Only a rejection named "MultiplayerTimeoutError" is a genuine timeout. Anything else (a
+    // throwing wait_for, an adapter/backend error) must fail the trial loudly instead of being
+    // routed through handleTimeout.
+    const api = new MockApi("p1");
+    jest.spyOn(api, "wait").mockRejectedValue(new Error("adapter disconnected"));
+    const onTimeout = jest.fn();
+    const { jsPsych, finished } = makeJsPsych(api);
+    const plugin = new MultiplayerRolePlugin(jsPsych as never);
+
+    const result = plugin.trial(display(), {
+      roles: ["a", "b"],
+      strategy: "join_order",
+      group_size: 2,
+      round: 0,
+      push_data: {},
+      timeout: 30000,
+      on_timeout: onTimeout,
+    } as never) as Promise<void>;
+
+    await expect(result).rejects.toThrow(/adapter disconnected/);
+    expect(onTimeout).not.toHaveBeenCalled();
+    expect(finished).toHaveLength(0);
+  });
+
   it("group_size exact-count gating: stalls at N-1, resolves when the Nth arrives", async () => {
     const api = new MockApi("p1");
     const { jsPsych, finished } = makeJsPsych(api);
@@ -466,7 +490,6 @@ describe("plugin-multiplayer-role — real jsPsych pipeline (startTimeline smoke
       get: api.get.bind(api),
       getAll: api.getAll.bind(api),
       wait: api.wait.bind(api),
-      communicate: api.communicate.bind(api),
     });
 
     // jsPsych's parameter pipeline warns when a FUNCTION-typed parameter receives a string — the

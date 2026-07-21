@@ -32,7 +32,7 @@ Two small composition details are worth copying:
 
 The demo connects `adapter-multiplayer-local` because it needs no infrastructure. To run a real,
 cross-device study, change the one adapter line to `adapter-multiplayer-jatos` (and load `jatos.js` /
-wrap `jsPsych.run` in `jatos.onLoad`, as in `ultimatum-game-jatos.html`). Nothing else in the timeline is
+wrap `jsPsych.run` in `jatos.onLoad`, as in `ultimatum-game.html`). Nothing else in the timeline is
 backend-specific — the lobby and chat trials are identical either way.
 
 ### Running it
@@ -101,7 +101,295 @@ Because the local adapter is same-origin, same-browser, same-machine, this is a 
 tool only — not for data collection. For real, multi-participant data use JATOS or another networked
 adapter.
 
-## `ultimatum-game-jatos.html`
+## `choice-room.html`
+
+A two-player **Prisoner's Dilemma**: participants pick a display name, wait in a lobby until two
+players have joined, then **simultaneously** choose *Cooperate* or *Defect*. The trial barriers until
+both have chosen, then reveals **both** choices (attributed — the plugin's default
+`reveal_mode: "players"`; contrast with the anonymous tally in `poll-room.html`) and each player's
+payoff. Like `chat-room.html` it runs on the local adapter, so it can be driven **entirely from two
+browser tabs, no server**.
+
+### What it demonstrates
+
+| Package                                          | Role in the demo                                                                                                       |
+| ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------- |
+| `@jspsych-multiplayer/adapter-multiplayer-local` | The network backend — `localStorage` + cross-tab signalling. Connected once, before `jsPsych.run`. **Dev/demo only.** |
+| `@jspsych-multiplayer/plugin-multiplayer-sync`   | The lobby: one declarative barrier — push your name, wait until `MIN_PLAYERS` participants are present.                |
+| `@jspsych-multiplayer/plugin-multiplayer-choice` | The decision: everyone picks, the group barriers until all have chosen, then the attributed choices + payoffs reveal. |
+
+Two composition details worth copying:
+
+1. **`player_label` turns ids into lobby names on the reveal.** The lobby pushes each participant's
+   `name`; the choice trial's `player_label` reads it back (`jsPsych.pluginAPI.get(id).name`) so the
+   reveal reads "Alice: Cooperate" rather than a raw id, and labels this client "You".
+2. **The `payoff` hook scores the round.** It receives `{ participantId: { index, label } }` for
+   everyone plus this client's id, and returns this client's points — here, a lookup into the classic
+   PD matrix. With no hook, choice stays a pure decision primitive and you derive payoffs from
+   `choices_by_player` in `on_finish` instead.
+
+### Swapping in a real backend
+
+Change the one adapter line from `adapter-multiplayer-local` to `adapter-multiplayer-jatos` (and load
+`jatos.js` / wrap `jsPsych.run` in `jatos.onLoad`, as in `ultimatum-game.html`). Nothing else in the
+timeline is backend-specific.
+
+### Running it
+
+Same as [`chat-room.html`](#running-it) — build the packages, serve the repo, and open
+`examples/choice-room.html` across two tabs (copy the `?mp_session=…` URL into the second):
+
+```sh
+npm install && npm run build
+npx http-server .
+```
+
+## `poll-room.html`
+
+An **anonymous group poll** built from the same choice plugin as `choice-room.html`, switched to
+`reveal_mode: "tally"`: participants pick a display name, wait in a lobby, then vote for a movie
+genre. The trial barriers until everyone has voted, then reveals only the **per-option counts and the
+plurality winner** (or a tie) — never who voted for what — and `record_choices_by_player: false`
+keeps the participant → pick map out of the recorded data too. Note this is **output-level**
+anonymity: peers' raw picks still exist in the shared session state (see the plugin README's
+Anonymity section). Runs on the local adapter across two browser tabs, no server.
+
+### What it demonstrates
+
+| Package                                          | Role in the demo                                                                                                      |
+| ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------- |
+| `@jspsych-multiplayer/adapter-multiplayer-local` | The network backend — `localStorage` + cross-tab signalling. Connected once, before `jsPsych.run`. **Dev/demo only.** |
+| `@jspsych-multiplayer/plugin-multiplayer-sync`   | The lobby: one declarative barrier — push your name, wait until `EXPECTED_PLAYERS` participants are present.           |
+| `@jspsych-multiplayer/plugin-multiplayer-choice` | The ballot in tally mode: everyone picks, the group barriers, then the anonymous tally + winner reveal.                |
+
+### Running it
+
+Same as [`choice-room.html`](#running-it-1) — build the packages, serve the repo, and open
+`examples/poll-room.html` across two tabs (copy the `?mp_session=…` URL into the second).
+
+## `countdown-timer.html`
+
+A **synchronized group timer**: participants wait in a lobby until enough have joined, then see the
+same countdown ending at (approximately) the same moment for everyone, followed by a hard barrier
+before the results screen. Like `chat-room.html` it runs on the local adapter, so you can drive it
+**entirely from two browser tabs**, no server.
+
+### What it demonstrates
+
+| Package                                             | Role in the demo                                                                                                      |
+| --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `@jspsych-multiplayer/adapter-multiplayer-local`    | The network backend — `localStorage` + cross-tab signalling. Connected once, before `jsPsych.run`. **Dev/demo only.** |
+| `@jspsych-multiplayer/plugin-multiplayer-sync`      | Two declarative barriers: the lobby before the timer, and a "wait for everyone to finish" barrier after it.           |
+| `@jspsych-multiplayer/plugin-multiplayer-countdown` | The shared timer: every client derives the same remaining time from the minimum start timestamp across all slots.     |
+
+The composition detail worth copying is the **barrier sandwich**:
+
+1. **A barrier before** the countdown makes every client resolve the consensus start at nearly the
+   same instant, so the timer is already converged when it appears (no visible downward step as later
+   timestamps arrive).
+2. **A barrier after** it holds everyone at the line before the results screen, because the countdown
+   is _not itself a barrier_ — clients end within clock skew + latency, not exactly together. The
+   wrap-up screen reads back `own_started_at − started_at` to show this client's entry skew.
+
+### Running it
+
+Run it the same way as `chat-room.html`: build the packages, serve the repo over http(s), open the
+printed URL in one tab, then a second tab with the same `?mp_session=` in the URL. See
+`chat-room.html`'s "Running it" section above for the jsDelivr preview build and step-by-step details.
+
+## `public-goods-local.html`
+
+A **timed public-goods game**: two players each hold an endowment and, in a single time-boxed round,
+_simultaneously_ decide how much to contribute to a common pool that is multiplied and split equally.
+It is the econ-game companion to `countdown-timer.html`, and the showcase for a **synchronized
+contribution deadline** — the contribution buttons are a plain `html-button-response`, with a shared
+countdown drawn on top of them.
+
+### What it demonstrates
+
+| Package                                             | Role in the demo                                                                                                                 |
+| --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `@jspsych-multiplayer/adapter-multiplayer-local`    | The network backend — `localStorage` + cross-tab signalling. Connected once, before `jsPsych.run`. **Dev/demo only.**            |
+| `@jspsych-multiplayer/plugin-multiplayer-sync`      | The lobby, and the "wait for both contributions" barrier, each one declarative push-then-wait.                                   |
+| `@jspsych-multiplayer/plugin-multiplayer-countdown` | Used through its **exported statics** (`startedAtKey` / `resolveStartedAt` / `computeRemaining` / `formatTime`), not as a trial. |
+
+This is the countdown plugin's flagship **"render a synced timer during another trial"** use. The contribution trial resolves the group's
+consensus start (the minimum start timestamp across all slots) on a 100 ms interval and paints the
+same remaining time into both tabs, so the window closes together within skew + latency. A public-
+goods game fits the countdown because its pacing is _duration-bound_ (everyone acts within one
+window), unlike the turn-based ultimatum game.
+
+### Running it
+
+Run it the same way as `chat-room.html`: build the packages, serve the repo over http(s), open the
+printed URL in one tab, then a second tab with the same `?mp_session=` in the URL. See
+`chat-room.html`'s "Running it" section above for the jsDelivr preview build and step-by-step details.
+
+## `draw-room.html`
+
+A real-time **collaborative drawing canvas**: participants wait in a lobby until enough have joined,
+then draw together on one shared canvas for a synced, time-boxed round. Unlike `chat-room.html`,
+participants are never asked for a display name — strokes aren't attributed by name anywhere in the
+UI, so the roster labels players by join order ("Player 1", "Player 2", …) instead. It is the
+highest-rate demo of the multiplayer API's `subscribe` primitive (continuous, throttled pushes while a
+stroke is active, vs. `chat-room.html`'s one push per message), and the flagship demo for the countdown
+plugin's **"render a synced timer during another trial"** use — the same core `public-goods-local.html`
+uses for its contribution window, drawn on top of a plugin (`plugin-multiplayer-draw`) instead of a
+core jsPsych plugin. Like `chat-room.html` it runs on the local adapter, so you can drive it **entirely
+from two browser tabs**, no server.
+
+### What it demonstrates
+
+| Package                                             | Role in the demo                                                                                                                 |
+| --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `@jspsych-multiplayer/adapter-multiplayer-local`    | The network backend — `localStorage` + cross-tab signalling. Connected once, before `jsPsych.run`. **Dev/demo only.**            |
+| `@jspsych-multiplayer/plugin-multiplayer-sync`      | The lobby: push a join timestamp, wait until at least `MIN_PLAYERS` are present.                                                 |
+| `@jspsych-multiplayer/plugin-multiplayer-draw`      | The shared canvas: pen/eraser, colors, brush sizes, and an undo that only ever removes this participant's own last stroke.       |
+| `@jspsych-multiplayer/plugin-multiplayer-countdown` | Used through its **exported statics** (`startedAtKey` / `resolveStartedAt` / `computeRemaining` / `formatTime`), not as a trial. |
+
+The composition detail worth copying: the draw plugin's own `duration` parameter is a per-client
+`setTimeout` with no cross-tab agreement on _when_ it started, so two tabs opened moments apart would
+see different end times. This demo skips that parameter entirely and instead renders the countdown
+plugin's consensus clock into the draw trial's `prompt` on `on_load`, using the same "read own slot →
+spread → push, keep-if-present" pattern the countdown plugin itself uses internally. When the synced
+clock reaches zero, the client auto-clicks its own "I'm done" button rather than ending the trial
+directly — the room closes for everyone through the same `end_when` "wait for everyone's `draw_done`
+flag" mechanism a manual click uses, so a clock-driven end and a manual end are indistinguishable to
+the rest of the group.
+
+### Running it
+
+Run it the same way as `chat-room.html`: build the packages, serve the repo over http(s), open the
+printed URL in one tab, then a second tab with the same `?mp_session=` in the URL. See
+`chat-room.html`'s "Running it" section above for the jsDelivr preview build and step-by-step details.
+
+## `scoreboard-room.html`
+
+An **end-of-game scoreboard**: participants pick a display name, wait in a lobby, each answers a short
+quiz for points, then hit a board that **waits (a barrier) until everyone has reported** and reveals
+the final ranking all at once — so no one sees a partial board. Like `chat-room.html` it runs on the
+local adapter, so it can be driven **entirely from two browser tabs, no server**.
+
+### What it demonstrates
+
+| Package                                              | Role in the demo                                                                                                       |
+| ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `@jspsych-multiplayer/adapter-multiplayer-local`     | The network backend — `localStorage` + cross-tab signalling. Connected once, before `jsPsych.run`. **Dev/demo only.** |
+| `@jspsych-multiplayer/plugin-multiplayer-sync`       | The lobby: one declarative barrier — push your name, wait until `MIN_PLAYERS` participants are present.                |
+| `@jspsych-multiplayer/plugin-multiplayer-scoreboard` | The end board: pushes this client's final score, barriers on `group_size` reporters, then reveals the ranking.        |
+
+Two composition details worth copying:
+
+1. **`score` is auto-computed from prior data, never typed in.** Each quiz question tags its trial with
+   `points` in `on_finish`; the board's `score: () => jsPsych.data.get().select("points").sum()` sums
+   them at trial start.
+2. **`group_size` makes it a barrier.** It waits until that many players have reported before
+   revealing, so everyone sees a complete ranking at once. The demo reads it dynamically from the
+   players who made it through the lobby.
+
+Contrast with `live-scoreboard-room.html`, which renders the standings **live** from the same pure
+ranking core (via `pluginAPI.subscribe`) as peers report, rather than revealing once at the end.
+
+### Swapping in a real backend
+
+Change the one adapter line from `adapter-multiplayer-local` to `adapter-multiplayer-jatos` (and load
+`jatos.js` / wrap `jsPsych.run` in `jatos.onLoad`, as in `ultimatum-game.html`). Nothing else in the
+timeline is backend-specific.
+
+### Running it
+
+Same as [`chat-room.html`](#running-it) — build the packages, serve the repo, and open
+`examples/scoreboard-room.html` across two tabs (copy the `?mp_session=…` URL into the second):
+
+```sh
+npm install && npm run build
+npx http-server .
+```
+
+## `live-scoreboard-room.html`
+
+The **live** counterpart to `scoreboard-room.html`: the same name → lobby → quiz game, but a
+standings panel stays on screen through the whole quiz and **fills in and re-ranks in real time** as
+each player's running score arrives — no barrier, no one-shot reveal. There is no separate plugin for
+this: the panel is rendered directly from `plugin-multiplayer-scoreboard`'s exported pure core
+(`buildLeaderboard`) inside a `jsPsych.pluginAPI.subscribe` callback, the same
+"use the statics during another trial" pattern as `public-goods-local.html`'s countdown overlay.
+
+### What it demonstrates
+
+| Package                                              | Role in the demo                                                                                                       |
+| ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `@jspsych-multiplayer/adapter-multiplayer-local`     | The network backend — `localStorage` + cross-tab signalling. Connected once, before `jsPsych.run`. **Dev/demo only.** |
+| `@jspsych-multiplayer/plugin-multiplayer-sync`       | The lobby: one declarative barrier — push your name, wait until `EXPECTED_PLAYERS` participants are present.           |
+| `@jspsych-multiplayer/plugin-multiplayer-scoreboard` | Used through its **exported statics** (`buildLeaderboard`), not as a trial — the panel re-ranks every update.          |
+
+Two composition details worth copying:
+
+1. **Each answer pushes the running total.** Every quiz question's `on_finish` reads this client's own
+   slot, spreads it, and pushes `score: { score: total, label: name }` — so peers' panels update the
+   moment anyone answers, and the lobby-pushed `name` survives (`push` replaces the whole slot).
+2. **The panel lives outside the jsPsych display element.** jsPsych wipes the display every trial, so
+   the standings panel is appended to `document.body` and driven by one `subscribe` registration —
+   registered after `connect()`, unsubscribed when the game ends. Peer labels are escaped before
+   rendering (they are peer-pushed text).
+
+### Running it
+
+Same as [`scoreboard-room.html`](#running-it) — build the packages, serve the repo, and open
+`examples/live-scoreboard-room.html` across two tabs (copy the `?mp_session=…` URL into the second).
+
+## `match-room.html`
+
+A **"pair up, then play"** demo: participants pick a display name, wait in a lobby, then get
+partitioned into **pairs** by deterministic consensus, are shown who they're matched with, and play
+one round of Prisoner's Dilemma with their partner. Like `chat-room.html` it runs on the local
+adapter, so it can be driven **entirely from browser tabs, no server**.
+
+> **Designed for a fixed number of players.** `EXPECTED_PLAYERS` (top of the file) defaults to **4** —
+> so **open exactly 4 tabs** and you get **2 pairs**, each playing its own round. The first screen
+> states this up front. The count is a fixed integer, not a live head-count: `expected_players` must be
+> the *same exact value on every client* for the plugin to reach consensus, so all tabs partition the
+> identical set of players. A live "count whoever's here now" value lets tabs that reach the matching
+> step at different moments disagree on the group and compute divergent pairings.
+
+### What it demonstrates
+
+| Package                                          | Role in the demo                                                                                                       |
+| ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------- |
+| `@jspsych-multiplayer/adapter-multiplayer-local` | The network backend — `localStorage` + cross-tab signalling. Connected once, before `jsPsych.run`. **Dev/demo only.** |
+| `@jspsych-multiplayer/plugin-multiplayer-sync`   | The lobby: one declarative barrier — push your name, wait until `EXPECTED_PLAYERS` participants are present.           |
+| `@jspsych-multiplayer/plugin-multiplayer-match`  | The matchmaker: partitions the group into pairs; exposes this client's partners via `getMyMatch()`.                   |
+| `@jspsych-multiplayer/plugin-multiplayer-choice` | The round: each pair plays a Prisoner's Dilemma, keyed **per pair**.                                                   |
+
+`match` is the odd primitive out: it has **no UI of its own** — it's a short barrier that just
+resolves "who is with whom". This demo shows its value by *using* that result, which is exactly how
+`match` is meant to compose. Two details worth copying:
+
+1. **The paired round is namespaced per pair.** `choice`'s `data_key` is derived from the pair's
+   members (`"pd_" + members.sort().join("_")`) so two pairs keep separate ballots, and its
+   `expected_players` is the pair size, so the barrier lifts once *both partners* have chosen — not
+   the whole room.
+2. **Spectators are handled with a `conditional_function`.** With an odd number of players,
+   `leftover: "spectator"` leaves the extra unmatched (`getMyMatch()` is undefined); the game node's
+   `conditional_function` skips the round for them.
+
+### Swapping in a real backend
+
+Change the one adapter line from `adapter-multiplayer-local` to `adapter-multiplayer-jatos` (and load
+`jatos.js` / wrap `jsPsych.run` in `jatos.onLoad`, as in `ultimatum-game.html`). Nothing else in the
+timeline is backend-specific.
+
+### Running it
+
+Same as [`chat-room.html`](#running-it) — build the packages, serve the repo, and open
+`examples/match-room.html` across **4 tabs** (copy the `?mp_session=…` URL into each new one):
+
+```sh
+npm install && npm run build
+npx http-server .
+```
+
+## `ultimatum-game.html`
 
 A turn-based **ultimatum game** (Güth, Schmittberger & Schwarze, 1982): two players split a $10 pot.
 The **proposer** offers the **responder** some amount; the responder accepts (both keep the split) or
@@ -172,7 +460,7 @@ a `trial_duration` below `PARTNER_TIMEOUT_MS`, so a slow-but-present player is f
 choice before they can ever be read as absent. This demo leaves that off by default — it imposes an
 auto-advance and a forced decision, which is a behavioral choice better made deliberately than baked in.
 
-### Running it (`ultimatum-game-jatos.html`)
+### Running it (`ultimatum-game.html`)
 
 This example is **illustrative** — it cannot run from a single browser tab today. It requires:
 
@@ -198,13 +486,13 @@ Behavior & Organization_, 3(4), 367–388.
 
 ## `ultimatum-game-local.html`
 
-The same game as `ultimatum-game-jatos.html`, wired to `adapter-multiplayer-local` instead of
+The same game as `ultimatum-game.html`, wired to `adapter-multiplayer-local` instead of
 `adapter-multiplayer-jatos` (and without the `jatos.onLoad` wrapper), so it runs from **two browser
 tabs on one machine, no server** — the same local-adapter setup `chat-room.html` uses. Everything
 else in the timeline (role assignment, sync barriers, outcome screens) is identical to
-`ultimatum-game-jatos.html`; see that section above for the full design notes.
+`ultimatum-game.html`; see that section above for the full design notes.
 
-Use this file for iterating on the game logic itself. Use `ultimatum-game-jatos.html` when you want to test
+Use this file for iterating on the game logic itself. Use `ultimatum-game.html` when you want to test
 against a real JATOS deployment.
 
 ### Running it
@@ -239,3 +527,33 @@ Two ways, both documented in the file's header comment:
 
 The adapter itself is verified end-to-end against the RTDB + Auth emulators (anonymous sign-in, the
 onValue mirror, cross-client visibility, exact JSON round-trip, and slot cleanup on disconnect).
+
+## `reference-game.html`
+
+A repeated **referential communication game** ("tangrams"; Hawkins, Frank & Goodman, 2020) built on
+`plugin-multiplayer-reference-game`. Two players are paired as a fixed **director** and **matcher**;
+both see the same twelve abstract shapes, each in an independently scrambled layout, and only the
+director sees which shape is the round's **target**. They talk over the built-in chat, the matcher
+**clicks** the target, and both see feedback — repeated over several rounds so the same targets recur.
+
+### What it demonstrates
+
+Composing four packages into one experiment with almost no bespoke networking:
+`adapter-multiplayer-local` (two-tab backend), `plugin-multiplayer-sync` (lobby),
+`plugin-multiplayer-role` (director/matcher), and `plugin-multiplayer-reference-game` (the game
+trial, one per round via `timeline_variables`). The shapes are inline SVG, so there are no external
+assets. This is the **sequential** condition (one target ⇒ a single click).
+
+### Running it
+
+Same as `chat-room.html`: build the packages, serve the repo over http(s), open the file in one tab,
+then copy the full URL (including `?mp_session=…`) into a second tab so a second player joins. The
+first tab becomes the director, the second the matcher.
+
+## `reference-game-match.html`
+
+The **same plugin** as `reference-game.html`, configured for the **full-board match** ("unconstrained")
+condition: every object is an ordered **target**, so the director's board shows numbered slot badges
+and the matcher reproduces that order by assigning each shape to a slot, then submitting for a score
+out of N. Shows that "sequential" and "unconstrained" are one plugin with `targets` turned from
+length-1 to length-N. Run it the same two-tab way.

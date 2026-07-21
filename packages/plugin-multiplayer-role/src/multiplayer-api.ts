@@ -32,14 +32,27 @@ export interface MultiplayerApiLike {
 
   /**
    * Resolve with the group snapshot once `condition` returns true (fast-path if already true);
-   * reject if `timeout` ms elapse first. `undefined` timeout waits forever.
+   * reject with a `MultiplayerTimeoutError` if `timeout` ms elapse first. A throwing `condition`
+   * is treated as a programming error, not a timeout: the promise rejects with the error the
+   * predicate threw (whose `name` is therefore NOT `MultiplayerTimeoutError`). `undefined`
+   * timeout waits forever.
    */
   wait(condition: (data: GroupSessionData) => boolean, timeout?: number): Promise<GroupSessionData>;
+}
 
-  /** Convenience: push `data`, then `wait(condition, timeout)`. One promise so one `.catch` covers both. */
-  communicate(
-    data: Record<string, unknown>,
-    condition: (data: GroupSessionData) => boolean,
-    timeout?: number
-  ): Promise<GroupSessionData>;
+/**
+ * The `name` of the error jsPsych#3694's `wait()` rejects with when `timeout` elapses. Defined once
+ * per package — the class itself is not importable here (the published `jspsych` doesn't carry it
+ * yet), so the name string is the contract.
+ */
+export const MULTIPLAYER_TIMEOUT_ERROR_NAME = "MultiplayerTimeoutError";
+
+/**
+ * True when `e` is a genuine multiplayer `wait()` timeout, as opposed to any other rejection (a
+ * throwing condition predicate, an adapter/backend failure). Matches on `error.name` rather than
+ * `instanceof` — that is what the class's own doc recommends, since `instanceof` breaks across
+ * duplicate loaded copies of jspsych.
+ */
+export function isMultiplayerTimeoutError(e: unknown): e is Error {
+  return e instanceof Error && e.name === MULTIPLAYER_TIMEOUT_ERROR_NAME;
 }
