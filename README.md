@@ -46,6 +46,9 @@ The contributed packages can be found in the `/packages` directory. Plugins are 
 Plugin | Contributor | Description
 ----------- | ----------- | -----------
 [multiplayer-chat](https://github.com/jspsych/jspsych-multiplayer/blob/main/packages/plugin-multiplayer-chat/README.md) | [Hannah Tsukamoto](https://github.com/htsukamoto5) | jsPsych plugin: real-time chat room for the multiplayer API 
+[multiplayer-draw](https://github.com/jspsych/jspsych-multiplayer/blob/main/packages/plugin-multiplayer-draw/README.md) | [Hannah Tsukamoto](https://github.com/htsukamoto5) | jsPsych plugin: real-time collaborative drawing canvas for the multiplayer API 
+[multiplayer-ready](https://github.com/jspsych/jspsych-multiplayer/blob/main/packages/plugin-multiplayer-ready/README.md) | [Mandy Liao](https://github.com/Mandyx22) | jsPsych plugin: participant-facing ready/check-in barrier for the multiplayer API 
+[multiplayer-reference-game](https://github.com/jspsych/jspsych-multiplayer/blob/main/packages/plugin-multiplayer-reference-game/README.md) | [Mandy Liao](https://github.com/Mandyx22) | jsPsych plugin: repeated referential communication game (director/matcher "tangrams") for the multiplayer API 
 [multiplayer-role](https://github.com/jspsych/jspsych-multiplayer/blob/main/packages/plugin-multiplayer-role/README.md) | [Hannah Tsukamoto](https://github.com/htsukamoto5) | jsPsych plugin: assign multiplayer group roles by deterministic consensus 
 [multiplayer-sync](https://github.com/jspsych/jspsych-multiplayer/blob/main/packages/plugin-multiplayer-sync/README.md) | [Hannah Tsukamoto](https://github.com/htsukamoto5) | jsPsych plugin: synchronization barrier (push → wait) for the multiplayer API 
 

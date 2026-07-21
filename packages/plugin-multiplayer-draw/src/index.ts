@@ -409,8 +409,7 @@ class MultiplayerDrawPlugin implements JsPsychPlugin<Info> {
 
     // --- Pushing (throttled while a stroke is active) --------------------------------------------
     function flushPush() {
-      const mine = api.get(me) ?? {};
-      api.push({ ...mine, [dataKey]: ownStrokes }).catch(() => {
+      api.update({ [dataKey]: ownStrokes }).catch(() => {
         // Self-healing: the NEXT scheduled push resends the full current array, so a dropped/failed
         // push here is repaired automatically. No manual retry needed.
         showSendError();
@@ -555,9 +554,8 @@ class MultiplayerDrawPlugin implements JsPsychPlugin<Info> {
         undoneStrokes.push(undone);
         ownStrokes = undoLastStroke(ownStrokes);
       }
-      const mine = api.get(me) ?? {};
       doFullRepaint(localGroup()); // instant local feedback; peers repaint when the push echoes
-      api.push({ ...mine, [dataKey]: ownStrokes }).catch(() => showSendError());
+      api.update({ [dataKey]: ownStrokes }).catch(() => showSendError());
       updateUndoRedoButtons();
     };
     undoButton.addEventListener("click", onUndoClick);
@@ -568,9 +566,8 @@ class MultiplayerDrawPlugin implements JsPsychPlugin<Info> {
       if (!strokeToRestore) return;
       strokeToRestore.ts = Date.now(); // update timestamp so it renders on top collaboratively
       ownStrokes.push(strokeToRestore);
-      const mine = api.get(me) ?? {};
       doFullRepaint(localGroup()); // instant local feedback; peers repaint when the push echoes
-      api.push({ ...mine, [dataKey]: ownStrokes }).catch(() => showSendError());
+      api.update({ [dataKey]: ownStrokes }).catch(() => showSendError());
       updateUndoRedoButtons();
     };
     redoButton.addEventListener("click", onRedoClick);

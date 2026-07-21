@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Synchronized Countdown — jsPsych multiplayer</title>
+    <!-- jsPsych core MUST carry the multiplayer API (jsPsych#3694), which is not yet in a release.
+         Until it merges, load the PR's preview build from jsDelivr instead of the published `jspsych`.
+         This URL is pinned to #3694 commit 01b8ee4 (preview SHA c43b3a1). A SHA-pinned URL keeps
+         loading indefinitely (it never 404s); what goes stale is the #3694 API it was pinned against,
+         so a pin old enough to predate an API change can load fine yet behave wrongly. If the demo
+         misbehaves against a newer #3694, re-pin — see examples/README.md "Running it" for how. -->
+    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@7b1d96a0576032d15bd0d7c434f01b2d614f3a85/packages/jspsych/dist/index.browser.min.js"></script>
+    <script src="https://unpkg.com/@jspsych/plugin-html-button-response"></script>
+    <!-- The multiplayer packages. These resolve once the sibling packages are built in this repo;
+         once they are published, load them from a CDN instead, e.g.
+           <script src="https://unpkg.com/@jspsych-multiplayer/plugin-multiplayer-countdown"></script> -->
+    <script src="../packages/adapter-multiplayer-local/dist/index.browser.min.js"></script>
+    <script src="../packages/plugin-multiplayer-sync/dist/index.browser.min.js"></script>
+    <script src="../packages/plugin-multiplayer-countdown/dist/index.browser.min.js"></script>
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@7b1d96a0576032d15bd0d7c434f01b2d614f3a85/packages/jspsych/css/jspsych.css"
+    />
+  </head>
+
+  <body></body>
+  <script>
+    // ===============================================================================================
+    // Synchronized Countdown — a demo for the jsPsych multiplayer packages.
+    //
+    // Participants wait in a lobby until enough people have joined, then see the SAME countdown timer
+    // that ends at (approximately) the same moment for everyone, followed by a hard barrier. It
+    // composes three packages so the experiment carries almost no synchronization code of its own:
+    //   • adapter-multiplayer-local  — the network backend. localStorage + cross-tab signalling, so
+    //                                  the whole thing runs by OPENING TWO BROWSER TABS — no server.
+    //                                  (Swap in adapter-multiplayer-jatos for a real deployment;
+    //                                  nothing else in the timeline changes.)
+    //   • plugin-multiplayer-sync    — the lobby, and the barrier after the timer, are declarative:
+    //                                  push a flag, wait until the group condition holds.
+    //   • plugin-multiplayer-countdown — the shared timer: every client derives the same remaining
+    //                                  time from the minimum start timestamp across all slots.
+    //
+    // Why a barrier BEFORE the countdown: it makes every client resolve the consensus start at nearly
+    // the same instant, so the timer is already converged when it appears (no visible downward step).
+    // Why a barrier AFTER: the countdown is not itself a barrier — clients end within skew + latency —
+    // so a sync trial holds everyone at the line before the results screen.
+    // -----------------------------------------------------------------------------------------------
+    // ILLUSTRATIVE example. Unlike the JATOS demos it needs no server, but it still cannot run from a
+    // released jsPsych today: connecting ANY adapter requires the multiplayer API from jsPsych#3694,
+    // which is not yet in a release. Once a #3694 build is in place, this runs for real in two tabs of
+    // one browser (see examples/README.md → "Running it"). The local adapter is same-origin,
+    // same-browser, same-machine — a development/demo tool, NOT for data collection.
+    // ===============================================================================================
+
+    // How many participants must be present before the countdown starts.
+    const MIN_PLAYERS = 2;
+    // How long the shared countdown runs, in milliseconds.
+    const COUNTDOWN_MS = 20 * 1000;
+
+    const jsPsych = initJsPsych();
+
+    // persistParticipant keeps this tab's participant id in sessionStorage, so a mid-demo refresh
+    // rejoins as the SAME participant (and resumes the countdown at the group's real remaining time,
+    // thanks to keep-if-present) instead of leaving a stale "ghost" slot.
+    const localAdapter = new jsPsychAdapterMultiplayerLocal({ persistParticipant: true });
+
+    // 1) Lobby: announce we're here, then wait until enough players are present. Aligning the START
+    //    of the countdown behind this barrier is what keeps the timers converged.
+    const lobbyTrial = {
+      type: jsPsychMultiplayerSync,
+      push_data: () => ({ joinedAt: Date.now() }),
+      message: `<p>Waiting for at least ${MIN_PLAYERS} players to join…</p>
+               <p>Open this page in another tab (keep the <code>?mp_session=</code> in the URL) to add a player.</p>`,
+      wait_for: (group) => Object.keys(group).length >= MIN_PLAYERS,
+    };
+
+    // 2) The shared countdown. `name` namespaces its start timestamp in the group session; it must be
+    //    identical across clients and unique per countdown in the timeline. All clients converge on
+    //    the minimum start timestamp across slots, so they show the same remaining time and end
+    //    together within clock skew + latency.
+    const countdownTrial = {
+      type: jsPsychMultiplayerCountdown,
+      name: "shared_round",
+      duration: COUNTDOWN_MS,
+      stimulus: "<strong>Round in progress — time remaining:</strong>",
+      prompt: "The round ends automatically for everyone when the timer reaches zero.",
+    };
+
+    // 3) Hard barrier: the countdown ends within skew + latency, not exactly together, so hold every
+    //    client here until all present participants have finished the round before showing results.
+    const afterTimerBarrier = {
+      type: jsPsychMultiplayerSync,
+      push_data: () => ({ finishedRound: true }),
+      message: "<p>Time's up! Waiting for the other players to finish…</p>",
+      wait_for: (group) => Object.values(group).every((entry) => entry && entry.finishedRound),
+    };
+
+    // 4) Wrap-up screen showing this client's own timing data.
+    const doneTrial = {
+      type: jsPsychHtmlButtonResponse,
+      choices: ["Finish"],
+      stimulus: () => {
+        const c =
+          jsPsych.data.get().filter({ trial_type: "multiplayer-countdown" }).values()[0] || {};
+        const skew = (c.own_started_at ?? 0) - (c.started_at ?? 0);
+        return `<h2>Round complete!</h2>
+                <p>The timer was on screen for ${Math.round((c.displayed_duration ?? 0) / 1000)}s.</p>
+                <p>Your entry was ${skew}ms after the group's consensus start
+                   (<code>own_started_at − started_at</code>).</p>`;
+      },
+    };
+
+    // Connect the backend, then run. Everything above is backend-agnostic — swapping the adapter on
+    // the line below is the only change needed to move from local two-tab testing to JATOS.
+    jsPsych.pluginAPI.connect(localAdapter).then(() => {
+      jsPsych.run([lobbyTrial, countdownTrial, afterTimerBarrier, doneTrial]);
+    });
+  </script>
+</html>
