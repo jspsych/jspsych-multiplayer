@@ -58,9 +58,10 @@ The group session maps participant ID → that participant's data slot, and a `p
 **replaces** the pushing participant's entire slot. It does not merge.
 :::
 
-If your slot is `{ status: "ready", joinedAt: 1783619087856 }` and you push `{ offer: 9 }`,
-your slot is now `{ offer: 9 }`. The `joinedAt` is gone — for you *and* for every other
-client reading the group. Step 4 below is devoted to the rule this forces.
+If a participant's slot is `{ status: "ready", joinedAt: 1783619087856 }` and that
+participant pushes `{ offer: 9 }`, the slot becomes `{ offer: 9 }`. The `joinedAt` is gone —
+both for that participant and for every other client reading the group. Step 4 below is
+devoted to the rule this forces.
 
 ## Build it
 
@@ -125,9 +126,9 @@ const lobby = {
 };
 ```
 
-That is the sync plugin's whole contract in one trial: **push your data, then wait until a
-predicate over the group holds.** `push_data` writes `{ status: "ready" }` into this
-participant's slot; `wait_for` receives the full group map every time it changes and
+That is the sync plugin's whole contract in one trial: **push data, then wait until a
+predicate over the group holds.** `push_data` writes `{ status: "ready" }` into the
+participant's own slot; `wait_for` receives the full group map every time it changes and
 returns `true` once at least two participants are present. The plugin shows `message` while
 waiting and ends the trial the moment the predicate passes.
 
@@ -242,8 +243,8 @@ on a different client, in a different trial.
 
 The pattern, in three parts:
 
-1. **Capture:** `save_group: true` on the role trial, then read your own slot's `joinedAt`
-   into a variable in `on_finish`.
+1. **Capture:** `save_group: true` on the role trial, then read the participant's own
+   `joinedAt` out of the snapshot in `on_finish`.
 2. **Carry:** include `joinedAt: myJoinedAt` in every subsequent `push_data`.
 3. **Guard — initial assignment only:** the role trial's `ready` predicate refuses to
    assign over a lobby entry whose `joinedAt` has not landed. It does *not* catch a
@@ -263,8 +264,8 @@ a dev-time signal about a bug the carry rule already owns. If you adapt this des
 late joiners *do* act on the computed role map, revisit the trade.
 </details>
 
-The general form outlives this example: **whatever fields of your slot other clients depend
-on, every push must carry them forward** — and *only* those. The correct pushes above still
+The general form outlives this example: **whatever fields of a participant's slot other
+clients depend on, every push must carry forward** — and *only* those. The correct pushes above still
 happily erase `status` and the role plugin's `rounds` key, because nothing downstream reads
 them. The rule is not "preserve everything", it is "preserve what other clients depend on".
 At every `push_data`, the review question is: *what does this push erase?*
@@ -341,8 +342,9 @@ const responderSendDecisionTrial = {
 ```
 
 Its `wait_for` checks the responder's **own** slot — it just confirms the decision landed
-in shared state before moving on. Like the lobby it carries no timeout: a wait on your own
-data either succeeds promptly or something is wrong at a level a timeout would not fix.
+in shared state before moving on. Like the lobby it carries no timeout: a wait on a
+client's own data either succeeds promptly or something is wrong at a level a timeout would
+not fix.
 
 Both roles' timelines hang off `conditional_function`s checking `myRole`, so one file
 serves both players; which client runs which branch is decided entirely by the role trial's
@@ -378,7 +380,7 @@ const outcome = { timeline: [outcomeTrial],
 So the stranded player gets a clean exit instead of an infinite spinner.
 
 :::caution Each client times out independently
-There is no "we both agree you're gone" handshake. If a present-but-slow responder ponders
+There is no handshake in which the two clients agree that one of them has left. If a present-but-slow responder ponders
 past `PARTNER_TIMEOUT_MS`, the proposer concludes they left while the responder completes
 the round normally, and the two walk away with contradictory end-states. Keep the timeout
 generous relative to your slowest plausible participant, and consider capping decision

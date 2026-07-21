@@ -113,8 +113,9 @@ experiments are mostly normal jsPsych, with coordination inserted at the seams.
 <Step title="Push and wait — the barrier">
 
 Here is the one genuinely multiplayer trial. `plugin-multiplayer-sync` does exactly two
-things, in order: writes `push_data` into **your** slot of the group session, then blocks
-until `wait_for` — a predicate that receives the whole group — returns true.
+things, in order: writes `push_data` into **the participant's own** slot of the group
+session, then blocks until `wait_for` — a predicate that receives the whole group — returns
+true.
 
 ```js
 const barrier = {
@@ -136,9 +137,9 @@ turn-based paradigms are built out of nothing else.
 Note `push_data` is a *function*: `myChoice` does not exist when the timeline is defined,
 only when the trial starts.
 
-:::caution A push replaces your whole slot
-`push_data` does not merge — it overwrites everything you previously had in your slot. If
-other clients depend on a field you pushed earlier, include it again. See the
+:::caution A push replaces the whole slot
+`push_data` does not merge — it overwrites everything the participant's slot previously
+held. If other clients depend on a field pushed earlier, include it again. See the
 [ultimatum tutorial](/tutorials/ultimatum-game) for the failure mode this causes.
 :::
 
@@ -198,8 +199,8 @@ instant the second choice lands.
 
 - One **adapter**, registered once with `jsPsych.multiplayer.connect()`, decides where
   shared state lives. Swapping it is how a two-tab prototype becomes a real study.
-- The **group session** is a map from participant ID to that participant's slot. You write
-  only your own slot; you read everyone's.
+- The **group session** is a map from participant ID to that participant's slot. Each
+  client writes only its own slot, and reads every slot.
 - A **barrier** — push, then wait for a predicate over the group — is the core primitive.
 
 ## Next

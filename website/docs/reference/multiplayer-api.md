@@ -33,8 +33,8 @@ This client's stable ID within the session. Keys into the group session object.
 
 ### `push(data): Promise<void>`
 
-**Replaces** this participant's slot with `data`. It does not merge: any key you do not
-include is gone, for you and for every other client.
+**Replaces** the calling client's slot with `data`. It does not merge: any key the call
+omits is gone, both for that client and for every other client reading the session.
 
 ```js
 await jsPsych.multiplayer.push({ offer: 4, joinedAt: myJoinedAt });
@@ -46,7 +46,7 @@ most common source of multiplayer bugs; see the
 
 ### `update(data): Promise<void>`
 
-Shallow-**merges** `data` into this participant's slot and pushes the result — the
+Shallow-**merges** `data` into the calling client's slot and pushes the result — the
 `get` → merge → `push` sequence in one call, for plugins and experiments that only ever
 change a few keys of their own slot.
 
@@ -88,7 +88,7 @@ Resolves with the group session once `condition(group)` returns true.
 
 `push()` followed by `wait()` is the **synchronization barrier** most turn-based paradigms
 reduce to. `plugin-multiplayer-sync` packages that pair as one declarative trial, and is
-usually what you want instead of calling these directly.
+usually the better choice for experiment code than calling these directly.
 
 ### `disconnect(): Promise<void>`
 
@@ -118,9 +118,9 @@ so an adapter does not implement them.
 
 ## The rules of the group session
 
-1. **You can only write your own slot**, and a write replaces it entirely. Write conflicts
-   are impossible by construction.
-2. **Everyone can read every slot**, by snapshot or subscription.
+1. **A client can write only its own slot**, and a write replaces it entirely. Write
+   conflicts are impossible by construction.
+2. **Every client can read every slot**, by snapshot or subscription.
 3. **Shared decisions are computed, not negotiated** — every client runs the same
    deterministic function over the same session data and reaches the same conclusion, with
    no coordinator to disconnect.
