@@ -1,11 +1,7 @@
 {
-  "name": "@jspsych-multiplayer/plugin-multiplayer-choice",
+  "name": "@jspsych-multiplayer/plugin-multiplayer-scoreboard",
   "version": "0.1.0",
-  "description": "jsPsych plugin: simultaneous group decision — everyone picks an option, barrier until all have chosen, then reveal who chose what or an anonymous tally",
-  "author": {
-    "name": "Mandy Liao",
-    "url": "https://github.com/Mandyx22"
-  },
+  "description": "jsPsych plugin: end-of-game scoreboard — rank every player's final score from the shared multiplayer session",
   "type": "module",
   "main": "dist/index.cjs",
   "exports": {
@@ -19,6 +15,10 @@
     "dist"
   ],
   "source": "src/index.ts",
+  "author": {
+    "name": "Mandy Liao",
+    "url": "https://github.com/Mandyx22"
+  },
   "scripts": {
     "test": "jest",
     "test:watch": "npm test -- --watch",
@@ -29,7 +29,7 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/jspsych/jspsych-multiplayer.git",
-    "directory": "packages/plugin-multiplayer-choice"
+    "directory": "packages/plugin-multiplayer-scoreboard"
   },
   "keywords": [
     "jsPsych"
@@ -38,7 +38,7 @@
   "bugs": {
     "url": "https://github.com/jspsych/jspsych-multiplayer/issues"
   },
-  "homepage": "https://github.com/jspsych/jspsych-multiplayer/blob/main/packages/plugin-multiplayer-choice/README.md",
+  "homepage": "https://github.com/jspsych/jspsych-multiplayer/blob/main/packages/plugin-multiplayer-scoreboard/README.md",
   "peerDependencies": {
     "jspsych": ">=8.0.0"
   },
