@@ -1,7 +1,7 @@
 import { JsPsych, JsPsychPlugin, ParameterType, TrialType } from "jspsych";
 
 import { version } from "../package.json";
-import { GroupSessionData, MultiplayerApiLike } from "./multiplayer-api";
+import { GroupSessionData, MultiplayerApiLike, isMultiplayerTimeoutError } from "./multiplayer-api";
 
 const info = <const>{
   name: "multiplayer-ready",
@@ -98,9 +98,9 @@ const info = <const>{
       type: ParameterType.BOOL,
     },
     /**
-     * Message from the `wait()` rejection when the trial ended without the group being ready;
-     * null when everyone was ready. On a genuine timeout this is the timeout message, so
-     * non-timeout rejections (if the API ever produces them) remain diagnosable in the data.
+     * The `MultiplayerTimeoutError` message when `timeout` elapsed; null when everyone was ready.
+     * A non-timeout `wait()` rejection (an adapter/backend failure) is NOT captured here — it
+     * propagates and fails the trial instead of being recorded as a timeout.
      */
     wait_error: {
       type: ParameterType.STRING,
@@ -235,15 +235,20 @@ class MultiplayerReadyPlugin implements JsPsychPlugin<Info> {
       await holdMinimumWait();
       finish(group, false, null);
     } catch (e) {
-      // As of jsPsych#3694's current draft, api.wait() rejects only on timeout, so every rejection
-      // is labeled `timed_out: true` and routed to on_timeout. The rejection's message is stored in
-      // `wait_error` so a non-timeout failure would still be diagnosable from the data.
+      // #3694 exports a typed MultiplayerTimeoutError so a genuine timeout can be told apart from
+      // another wait() failure (e.g. an adapter/backend error). The name-based match lives in
+      // isMultiplayerTimeoutError (multiplayer-api.ts) — the class itself isn't importable here.
+      if (!isMultiplayerTimeoutError(e)) {
+        // Not a timeout — an adapter/backend failure. Surface it loudly instead of mislabeling it
+        // `timed_out: true`, matching the push-failure handling above.
+        throw e;
+      }
       if (typeof trial.on_timeout === "function") {
         trial.on_timeout(e);
       }
       // Honour minimum_wait here too, so a short timeout can't flash the waiting message by.
       await holdMinimumWait();
-      finish(safeGetAll(), true, e instanceof Error ? e.message : String(e));
+      finish(safeGetAll(), true, e.message);
     }
   }
 }

@@ -31,3 +31,20 @@ export interface MultiplayerApiLike {
    */
   wait(condition: (data: GroupSessionData) => boolean, timeout?: number): Promise<GroupSessionData>;
 }
+
+/**
+ * The `name` of the error jsPsych#3694's `wait()` rejects with when `timeout` elapses. Defined once
+ * per package — the class itself is not importable here (the published `jspsych` doesn't carry it
+ * yet), so the name string is the contract.
+ */
+export const MULTIPLAYER_TIMEOUT_ERROR_NAME = "MultiplayerTimeoutError";
+
+/**
+ * True when `e` is a genuine multiplayer `wait()` timeout, as opposed to any other rejection (a
+ * throwing condition predicate, an adapter/backend failure). Matches on `error.name` rather than
+ * `instanceof` — that is what the class's own doc recommends, since `instanceof` breaks across
+ * duplicate loaded copies of jspsych.
+ */
+export function isMultiplayerTimeoutError(e: unknown): e is Error {
+  return e instanceof Error && e.name === MULTIPLAYER_TIMEOUT_ERROR_NAME;
+}

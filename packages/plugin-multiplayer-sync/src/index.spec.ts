@@ -1,7 +1,11 @@
 import { startTimeline } from "@jspsych/test-utils";
 import { initJsPsych } from "jspsych";
 
-import { GroupSessionData, MultiplayerApiLike } from "./multiplayer-api";
+import {
+  GroupSessionData,
+  MULTIPLAYER_TIMEOUT_ERROR_NAME,
+  MultiplayerApiLike,
+} from "./multiplayer-api";
 import MultiplayerSyncPlugin from ".";
 
 // ---------------------------------------------------------------------------------------------------
@@ -54,7 +58,11 @@ class MockApi implements MultiplayerApiLike {
         setTimeout(() => {
           if (!settled) {
             settled = true;
-            reject(new Error(`wait timed out after ${timeout}ms`));
+            // Mirrors the real MultiplayerTimeoutError: a named Error, since the plugin can't
+            // import that class (see multiplayer-api.ts) and matches on `error.name` instead.
+            const err = new Error(`wait timed out after ${timeout}ms`);
+            err.name = MULTIPLAYER_TIMEOUT_ERROR_NAME;
+            reject(err);
           }
         }, timeout);
       }
@@ -211,26 +219,55 @@ describe("multiplayer-sync plugin", () => {
     expect(finished[0].group).toEqual(api.getAll()); // snapshot from getAll() on timeout
   });
 
-  it("records a non-timeout wait() rejection message in wait_error so failures are diagnosable", async () => {
-    // As of jsPsych#3694's current draft, wait() rejects only on timeout, so the plugin labels any
-    // rejection `timed_out: true` — but the original message must survive into the trial data.
+  it("propagates a non-timeout wait() rejection instead of mislabeling it a timeout", async () => {
+    // #3694 exports a typed MultiplayerTimeoutError so a genuine timeout can be told apart from
+    // another wait() failure. Anything else (a throwing wait_for, an adapter error) must fail the
+    // trial loudly rather than being recorded as `timed_out: true`, matching push-failure handling.
     const api = new MockApi("p1");
     jest.spyOn(api, "wait").mockRejectedValue(new Error("adapter disconnected"));
     const on_timeout = jest.fn();
     const { jsPsych, finished } = makeJsPsych(api);
     const plugin = new MultiplayerSyncPlugin(jsPsych as never);
 
-    await plugin.trial(display(), {
-      push_data: null,
-      wait_for: () => false,
-      message: "<p>Waiting…</p>",
-      timeout: 40,
-      on_timeout,
-      minimum_wait: 0,
-    } as never);
+    await expect(
+      plugin.trial(display(), {
+        push_data: null,
+        wait_for: () => false,
+        message: "<p>Waiting…</p>",
+        timeout: 40,
+        on_timeout,
+        minimum_wait: 0,
+      } as never)
+    ).rejects.toThrow(/adapter disconnected/);
+
+    expect(on_timeout).not.toHaveBeenCalled();
+    expect(finished.length).toBe(0);
+  });
+
+  it("still finishes gracefully when getAll() throws on the timeout path (adapter torn down)", async () => {
+    // On a genuine timeout the adapter may already be torn down, so getAll() throws
+    // ("connect() must be called…"). That must not escape and reject the trial — it falls back to
+    // an empty snapshot so the timeout still finishes as data. Mirrors the ready plugin's guard.
+    const api = new MockApi("p1");
+    jest.spyOn(api, "getAll").mockImplementation(() => {
+      throw new Error("connect() must be called before using multiplayer methods");
+    });
+    const { jsPsych, finished } = makeJsPsych(api);
+    const plugin = new MultiplayerSyncPlugin(jsPsych as never);
+
+    await expect(
+      plugin.trial(display(), {
+        push_data: null,
+        wait_for: () => false, // never satisfied → MockApi wait() rejects with a MultiplayerTimeoutError
+        message: "<p>Waiting…</p>",
+        timeout: 40,
+        minimum_wait: 0,
+      } as never)
+    ).resolves.toBeUndefined();
 
     expect(finished[0].timed_out).toBe(true);
-    expect(finished[0].wait_error).toBe("adapter disconnected");
+    expect(finished[0].wait_error).toMatch(/timed out/); // original error preserved, not masked
+    expect(finished[0].group).toEqual({}); // empty fallback snapshot
   });
 
   it("holds the message for minimum_wait even when the timeout elapses first", async () => {
