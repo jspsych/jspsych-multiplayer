@@ -518,7 +518,7 @@ are still ordinary IIFE `<script>` tags.
 Two ways, both documented in the file's header comment:
 
 - **A real Firebase project** (real data collection): create a project, enable Anonymous auth, create a
-  Realtime Database, paste the default `auth != null` rules and your web-app config (see
+  Realtime Database, paste the recommended session-locked rules and your web-app config (see
   [`adapter-multiplayer-firebase`'s README](../packages/adapter-multiplayer-firebase/README.md)), then
   serve the repo and open the page on two devices/tabs sharing the `?mp_session=…` URL.
 - **The local Firebase Emulator** (no account, no credentials): `firebase emulators:start` (database +

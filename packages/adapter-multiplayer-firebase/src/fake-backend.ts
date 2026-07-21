@@ -91,6 +91,11 @@ export interface FakeBackendOptions {
    * failed to tear down on the timeout reject.
    */
   deferInitialSnapshot?: boolean;
+  /**
+   * `set()` rejects with PERMISSION_DENIED for any path matching this predicate (simulates a
+   * security-rules write denial, e.g. a membership record already bound to another session).
+   */
+  denyWrite?: (path: string) => boolean;
 }
 
 export class FakeBackend implements FirebaseBackend {
@@ -100,6 +105,7 @@ export class FakeBackend implements FirebaseBackend {
   private readonly denyReads: boolean;
   private readonly neverSnapshot: boolean;
   private readonly deferInitialSnapshot: boolean;
+  private readonly denyWrite: ((path: string) => boolean) | null;
 
   /** Paths with an armed onDisconnect().remove(), consumed when the "server" fires it. */
   private readonly armed = new Set<string>();
@@ -114,6 +120,7 @@ export class FakeBackend implements FirebaseBackend {
     this.denyReads = options.denyReads ?? false;
     this.neverSnapshot = options.neverSnapshot ?? false;
     this.deferInitialSnapshot = options.deferInitialSnapshot ?? false;
+    this.denyWrite = options.denyWrite ?? null;
   }
 
   signIn(): Promise<string> {
@@ -121,6 +128,11 @@ export class FakeBackend implements FirebaseBackend {
   }
 
   set(path: string, value: string): Promise<void> {
+    if (this.denyWrite?.(path)) {
+      return Promise.reject(
+        new Error("PERMISSION_DENIED: Client doesn't have permission to access the desired data.")
+      );
+    }
     this.rtdb.set(path, value); // fires the echo synchronously, before we resolve
     return Promise.resolve();
   }

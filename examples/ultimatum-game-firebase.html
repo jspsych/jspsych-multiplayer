@@ -4,7 +4,7 @@
     <title>Multiplayer Ultimatum Game (Firebase) — jsPsych multiplayer</title>
     <!-- jsPsych core MUST carry the multiplayer API (jsPsych#3694), which is not yet in a release.
          Until it merges, load the PR's preview build from jsDelivr instead of the published `jspsych`.
-         This URL is pinned to #3694 commit 01b8ee4 (preview SHA c43b3a1) — see examples/README.md
+         This URL is pinned to the #3694 preview build SHA 7b1d96a — see examples/README.md
          "Running it" for how to find/re-pin the current preview link. -->
     <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@7b1d96a0576032d15bd0d7c434f01b2d614f3a85/packages/jspsych/dist/index.browser.min.js"></script>
     <script src="https://unpkg.com/@jspsych/plugin-html-button-response"></script>
@@ -45,20 +45,27 @@
     //
     // ── Running it ────────────────────────────────────────────────────────────────────────────────
     // Option A — a real Firebase project (real cross-device data collection):
-    //   1. Create a project, enable Anonymous auth, create a Realtime Database, and paste the default
-    //      `auth != null` rules (see packages/adapter-multiplayer-firebase/README.md).
+    //   1. Create a project, enable Anonymous auth, create a Realtime Database, and paste the
+    //      RECOMMENDED session-locked rules (packages/adapter-multiplayer-firebase/database.rules.json
+    //      — uid-as-slot-key + first-write-wins session binding; see that package's README).
     //   2. Paste your web app's config into FIREBASE_CONFIG below.
     //   3. Serve this folder (`npx http-server .`) and open the page on two devices/tabs — share the
     //      full URL (with its `?mp_session=…`) so both join the same session.
     //
     // Option B — the local Firebase Emulator (no account, no credentials):
-    //   1. `firebase emulators:start` (Realtime Database + Auth emulators).
+    //   1. From packages/adapter-multiplayer-firebase/ (which ships firebase.json + the rules):
+    //      `npx firebase-tools emulators:start --project demo-jspsych`
     //   2. Open this page with `?emulator` in the query string. It builds a database pointed at the
     //      emulator and hands it to the adapter, so a two-tab run works entirely offline.
     // ===============================================================================================
 
     import { initializeApp } from "firebase/app";
-    import { connectAuthEmulator, getAuth } from "firebase/auth";
+    import {
+      browserSessionPersistence,
+      connectAuthEmulator,
+      getAuth,
+      setPersistence,
+    } from "firebase/auth";
     import { connectDatabaseEmulator, getDatabase } from "firebase/database";
     import FirebaseAdapter from "../packages/adapter-multiplayer-firebase/dist/index.js";
 
@@ -83,11 +90,15 @@
         databaseURL: "https://demo-jspsych-default-rtdb.firebaseio.com",
       });
       connectAuthEmulator(getAuth(app), "http://127.0.0.1:9099", { disableWarnings: true });
+      // Per-TAB auth persistence, so two tabs on this machine are two distinct uids — required for
+      // uid-as-key mode (with the default persistence both tabs would share one uid and one slot).
+      // The adapter only defaults this for an app it owns; an injected database means we own it.
+      await setPersistence(getAuth(app), browserSessionPersistence);
       const db = getDatabase(app);
       connectDatabaseEmulator(db, "127.0.0.1", 9000);
-      adapter = new FirebaseAdapter({ database: db });
+      adapter = new FirebaseAdapter({ database: db, useUidAsParticipantId: true });
     } else {
-      adapter = new FirebaseAdapter({ firebaseConfig: FIREBASE_CONFIG });
+      adapter = new FirebaseAdapter({ firebaseConfig: FIREBASE_CONFIG, useUidAsParticipantId: true });
     }
 
     const jsPsych = initJsPsych();
@@ -329,8 +340,23 @@
 
     // Connect the backend, then run. Everything above is backend-agnostic — swapping the adapter is
     // the only change from ultimatum-game-jatos.html (plus the jatos.onLoad wrapper it no longer needs).
-    jsPsych.pluginAPI.connect(adapter).then(() => {
-      jsPsych.run([lobby, assignRoles, gameFull, noGroupScreen, gameTimeline, doneScreen]);
-    });
+    jsPsych.pluginAPI.connect(adapter).then(
+      () => {
+        jsPsych.run([lobby, assignRoles, gameFull, noGroupScreen, gameTimeline, doneScreen]);
+      },
+      (error) => {
+        // Surface a failed connect (bad config, rules denial, membership bound to another session,
+        // timeout) instead of leaving a blank page — the adapter's errors say what to fix.
+        console.error(error);
+        document.body.innerHTML = `
+          <div style="max-width:40em;margin:3em auto;font-family:sans-serif;">
+            <h2>Could not connect to the multiplayer session</h2>
+            <p>${String(error && error.message ? error.message : error)
+              .replace(/&/g, "&amp;")
+              .replace(/</g, "&lt;")}</p>
+            <p>Check the Firebase config, the database security rules, and your network, then reload.</p>
+          </div>`;
+      }
+    );
   </script>
 </html>

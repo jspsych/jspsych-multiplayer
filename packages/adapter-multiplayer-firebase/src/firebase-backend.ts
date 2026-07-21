@@ -24,7 +24,8 @@ export interface FirebaseBackend {
   /** Sign in anonymously; resolve the resulting uid. */
   signIn(): Promise<string>;
 
-  /** REPLACE the value at `path` with the given (already JSON-encoded) string. */
+  /** REPLACE the value at `path` with the given string (a JSON-encoded slot payload, or the raw
+   *  sessionId for a membership record — the rules compare that one unquoted). */
   set(path: string, value: string): Promise<void>;
 
   /** Remove the value at `path`. */

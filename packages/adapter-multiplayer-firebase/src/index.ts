@@ -39,6 +39,16 @@ export interface FirebaseAdapterOptions {
    * Incompatible with a supplied `participantId` (constructing with both throws). Default `false`.
    */
   useUidAsParticipantId?: boolean;
+  /**
+   * Register a `<pathPrefix>-memberships/<uid> = sessionId` record during `connect()`, before the
+   * session listener attaches. The recommended (session-locked) security rules make that record
+   * FIRST-WRITE-WINS and require it to match on every session read/write, which is what enforces
+   * "a client can only touch the session it first joined" — the enforcement lives in the
+   * server-evaluated rules; this write is just the client's half of the handshake. Defaults to the
+   * value of `useUidAsParticipantId` (the locked rules need uid-as-key). Set `false` when using the
+   * quick-start rules, which have no memberships node.
+   */
+  sessionBinding?: boolean;
 
   /** RTDB path namespace. Defaults to `"mp-sessions"`. */
   pathPrefix?: string;
@@ -77,10 +87,13 @@ export default class FirebaseAdapter implements MultiplayerAdapter {
   private readonly removeOnDisconnect: boolean;
   private readonly connectTimeoutMs: number;
   private readonly useUid: boolean;
+  private readonly sessionBinding: boolean;
   private readonly backendFactory: () => Promise<FirebaseBackend>;
 
   private backend: FirebaseBackend | null = null;
   private connected = false;
+  /** In-flight connect(), cached so concurrent calls share one attempt instead of double-joining. */
+  private connectPromise: Promise<void> | null = null;
   private readonly mirror: GroupSessionData = {};
   /** Last payload we pushed, re-sent after a reconnect so a transient blip can't erase us. */
   private lastOwnData: Record<string, unknown> | null = null;
@@ -102,6 +115,7 @@ export default class FirebaseAdapter implements MultiplayerAdapter {
     }
 
     this.useUid = options.useUidAsParticipantId ?? false;
+    this.sessionBinding = options.sessionBinding ?? this.useUid;
     this.pathPrefix = options.pathPrefix ?? DEFAULT_PATH_PREFIX;
     this.sessionId = options.sessionId ?? resolveSessionId();
     // In uid mode this placeholder is replaced with the real uid during connect().
@@ -131,7 +145,17 @@ export default class FirebaseAdapter implements MultiplayerAdapter {
 
   async connect(): Promise<void> {
     if (this.connected) return;
+    // Re-entrancy guard (matching JatosAdapter): a second connect() while the first is in flight
+    // must share that attempt, not run a parallel one — a parallel run would sign in twice, register
+    // a second session listener (leaking the first), and double-arm onDisconnect.
+    if (this.connectPromise) return this.connectPromise;
+    this.connectPromise = this.doConnect().finally(() => {
+      this.connectPromise = null;
+    });
+    return this.connectPromise;
+  }
 
+  private async doConnect(): Promise<void> {
     const backend = await this.backendFactory();
     this.backend = backend;
 
@@ -139,6 +163,27 @@ export default class FirebaseAdapter implements MultiplayerAdapter {
     if (this.useUid) {
       this.participantId = uid;
       validateKey("participantId (auth uid)", this.participantId);
+    }
+
+    // Session binding: claim (or re-assert) this uid's membership BEFORE the session listener
+    // attaches — under the recommended session-locked rules, reading the session already requires a
+    // matching membership record. The record is first-write-wins server-side (`.validate` makes it
+    // immutable), so re-asserting the SAME session on a rejoin succeeds and claiming a DIFFERENT
+    // one is denied. Never removed on disconnect: the binding IS the security property.
+    if (this.sessionBinding) {
+      try {
+        await backend.set(this.membershipPath(uid), this.sessionId);
+      } catch (err) {
+        throw new Error(
+          "FirebaseAdapter: registering session membership failed — either this client's anonymous " +
+            `identity is already bound to a different session (rejoining "${this.sessionId}" from a ` +
+            "browser profile that first joined another session; use a fresh tab/profile or clear " +
+            "site data), or the security rules are missing the memberships block (see the README's " +
+            `recommended rules). Underlying error: ${
+              err instanceof Error ? err.message : String(err)
+            }`
+        );
+      }
     }
 
     // Register the session listener and wait for the first snapshot before resolving, so a plugin
@@ -286,12 +331,17 @@ export default class FirebaseAdapter implements MultiplayerAdapter {
       return;
     }
     if (!this.connected || !this.backend) return;
+    // Capture the backend across the awaits: a disconnect() during either await nulls
+    // `this.backend`, and continuing against the captured (torn-down) one must be abandoned rather
+    // than crashing or resurrecting the slot of an adapter the caller already disconnected.
+    const backend = this.backend;
     try {
       if (this.removeOnDisconnect) {
-        await this.backend.onDisconnectRemove(this.slotPath());
+        await backend.onDisconnectRemove(this.slotPath());
+        if (this.backend !== backend) return;
       }
       if (this.lastOwnData !== null) {
-        await this.backend.set(this.slotPath(), JSON.stringify(this.lastOwnData));
+        await backend.set(this.slotPath(), JSON.stringify(this.lastOwnData));
       }
     } catch (err) {
       console.error("FirebaseAdapter: failed to restore own slot after reconnect", err);
@@ -318,6 +368,16 @@ export default class FirebaseAdapter implements MultiplayerAdapter {
 
   private slotPath(): string {
     return `${this.pathPrefix}/${this.sessionId}/${this.participantId}`;
+  }
+
+  /**
+   * The membership record's path. A SIBLING namespace of the sessions node (never inside it, where
+   * the per-session rules would govern it), derived from `pathPrefix` so a custom prefix keeps the
+   * pair collision-free. The stored value is the raw sessionId string — the rules compare it with
+   * `=== $session`, so it must not be JSON-quoted.
+   */
+  private membershipPath(uid: string): string {
+    return `${this.pathPrefix}-memberships/${uid}`;
   }
 
   /**

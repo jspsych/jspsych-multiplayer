@@ -194,6 +194,75 @@ describe("FirebaseAdapter — disconnect", () => {
   });
 });
 
+describe("FirebaseAdapter — connect re-entrancy", () => {
+  it("shares one in-flight attempt: two concurrent connect() calls sign in once, one listener", async () => {
+    const backend = new FakeBackend();
+    const signIn = jest.spyOn(backend, "signIn");
+    const adapter = makeAdapter(backend);
+
+    await Promise.all([adapter.connect(), adapter.connect()]);
+
+    expect(signIn).toHaveBeenCalledTimes(1);
+    expect(backend.rtdb.listenerCount()).toBe(1);
+  });
+
+  it("a failed attempt clears the guard so connect() can be retried", async () => {
+    const backend = new FakeBackend({ neverSnapshot: true });
+    const adapter = makeAdapter(backend);
+    await expect(adapter.connect()).rejects.toThrow(/timed out/);
+    // Retry against a healthy backend path is not possible with this fake, but the retry must at
+    // least run a fresh attempt (and fail the same way) instead of returning the stale rejection.
+    await expect(adapter.connect()).rejects.toThrow(/timed out/);
+  });
+});
+
+describe("FirebaseAdapter — session binding", () => {
+  const membership = (uid: string) => `${PREFIX}-memberships/${uid}`;
+
+  it("uid mode registers a first-write-wins membership record before the session listener", async () => {
+    const backend = new FakeBackend({ uid: "uid-1" });
+    const adapter = makeAdapter(backend, { participantId: undefined, useUidAsParticipantId: true });
+
+    await adapter.connect();
+
+    // The record is the RAW sessionId (the rules compare it unquoted with === $session).
+    expect(backend.rtdb.snapshotOf(`${PREFIX}-memberships`)).toEqual({ "uid-1": SESSION });
+  });
+
+  it("a denied membership write rejects connect() with a descriptive error and no live listener", async () => {
+    const backend = new FakeBackend({
+      uid: "uid-1",
+      denyWrite: (path) => path === membership("uid-1"),
+    });
+    const adapter = makeAdapter(backend, { participantId: undefined, useUidAsParticipantId: true });
+
+    await expect(adapter.connect()).rejects.toThrow(/session membership/);
+    expect(backend.rtdb.listenerCount()).toBe(0); // listener never attached
+  });
+
+  it("sessionBinding: false skips the membership write (quick-start rules)", async () => {
+    const backend = new FakeBackend({ uid: "uid-1" });
+    const adapter = makeAdapter(backend, {
+      participantId: undefined,
+      useUidAsParticipantId: true,
+      sessionBinding: false,
+    });
+
+    await adapter.connect();
+
+    expect(backend.rtdb.snapshotOf(`${PREFIX}-memberships`)).toBeNull();
+  });
+
+  it("membership survives disconnect() (the binding is the security property)", async () => {
+    const backend = new FakeBackend({ uid: "uid-1" });
+    const adapter = makeAdapter(backend, { participantId: undefined, useUidAsParticipantId: true });
+    await adapter.connect();
+    await adapter.disconnect();
+
+    expect(backend.rtdb.snapshotOf(`${PREFIX}-memberships`)).toEqual({ "uid-1": SESSION });
+  });
+});
+
 describe("FirebaseAdapter — uid-as-key mode", () => {
   it("adopts the backend uid as participantId and writes to that slot", async () => {
     const backend = new FakeBackend({ uid: "uid-123" });

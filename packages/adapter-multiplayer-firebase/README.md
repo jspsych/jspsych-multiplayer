@@ -43,9 +43,52 @@ Each run is namespaced by a **session id** carried in the URL as `?mp_session=�
 4. Paste one of the rules blocks below (**Realtime Database → Rules**).
 5. Copy your web app's config object (**Project settings → General → Your apps**) into `firebaseConfig`.
 
-### Default rules — `auth != null`
+### Recommended rules — session-locked (use these for data collection)
 
-Any signed-in (anonymous) client may read and write within a session. This is the right default for research demos and works with the default locally-minted participant id.
+These are the rules shipped as [`database.rules.json`](./database.rules.json). Pair them with `useUidAsParticipantId: true`:
+
+```js
+new jsPsychAdapterMultiplayerFirebase({ firebaseConfig, useUidAsParticipantId: true });
+```
+
+```json
+{
+  "rules": {
+    "mp-sessions": {
+      "$session": {
+        ".read": "auth != null && root.child('mp-sessions-memberships').child(auth.uid).val() === $session",
+        "$slot": {
+          ".write": "auth != null && $slot === auth.uid && root.child('mp-sessions-memberships').child(auth.uid).val() === $session",
+          ".validate": "newData.isString() && newData.val().length < 131072"
+        }
+      }
+    },
+    "mp-sessions-memberships": {
+      "$uid": {
+        ".read": "auth != null && $uid === auth.uid",
+        ".write": "auth != null && $uid === auth.uid && (!data.exists() || data.val() === newData.val())",
+        ".validate": "newData.isString() && newData.val().length < 256"
+      }
+    }
+  }
+}
+```
+
+They enforce three properties, all **server-side** (Firebase evaluates rules on its servers — a client that modifies or skips its half of the protocol is simply denied):
+
+1. **Own-slot writes only.** A client may only write the slot whose key equals its own auth uid — no participant can forge another's offer or flip another's ready flag (`$slot === auth.uid`, which is why these rules require uid-as-key mode).
+2. **Session binding — a client can only touch the session it first joined.** During `connect()` the adapter registers `mp-sessions-memberships/<uid> = sessionId` *before* attaching the session listener. The membership rule is **first-write-wins**: only that uid can write its own record, and once set it can be re-asserted but never changed or deleted (`!data.exists() || data.val() === newData.val()`). Every session read and write then requires the membership to match (`…memberships/<uid> === $session`). So the same client identity cannot read or write any *other* session — rejoining its own session after a refresh works (same value, re-assertion passes), joining a different one is `PERMISSION_DENIED`.
+3. **Bounded writes.** Slot payloads are capped (128 KB) so a buggy or hostile client can't balloon your database.
+
+> **Why this is enforceable despite running only client-side code:** the client cannot be trusted, but it doesn't need to be. The rules are the enforcement point and they run on Firebase's servers; the client's only job is the one-time membership write, and the rules make that write self-limiting (own uid only, immutable once set). A client that lies, skips the write, or replays another session's id gets denied by the server.
+
+**What this does *not* buy:** joining is still controlled by the **unguessable session URL**, not by the rules — anyone who has the URL can sign in anonymously with a *fresh* uid and join that session as a new participant (and then read it, since members can read their session). Don't hand out short or predictable session ids, and treat session contents accordingly for IRB purposes. Blocking uninvited *fresh* identities requires real (non-anonymous) auth or a server tier (JATOS) — anonymous auth has no notion of an invite list.
+
+Note: with per-tab auth persistence (the adapter's default for its owned app), every new tab is a fresh uid, so the one-session-per-uid binding never gets in a legitimate participant's way; a same-tab reload keeps both the uid and the `?mp_session=` URL and rejoins cleanly. Membership records are a few bytes per participant and are deliberately never deleted; clear them with your project's normal data-retention tooling if desired.
+
+### Quick-start rules — prototyping only
+
+Any signed-in (anonymous) client may read and write **any** session. Fine for a first smoke test with the default constructor options (locally-minted participant id, no session binding); not for data collection — any participant can overwrite any slot in any session they can name.
 
 ```json
 {
@@ -60,34 +103,9 @@ Any signed-in (anonymous) client may read and write within a session. This is th
 }
 ```
 
-> **Session privacy / IRB:** with anonymous auth, anyone who holds or can guess a session id can read every participant's data in that session. That is fine for most research demos, but be aware of it for sensitive data. The mitigation is the **unguessable random session id** the adapter generates by default (not the rules) — don't hand out short or predictable session ids.
+These rules have no memberships node, so don't combine them with `useUidAsParticipantId: true` (which defaults `sessionBinding` on — the membership write would be denied). If you need uid-as-key without session binding for some reason, pass `sessionBinding: false` explicitly.
 
-### Advanced rules — uid-as-slot-key (per-slot write integrity)
-
-Pass `useUidAsParticipantId: true` and use these rules so **no participant can overwrite another's slot** — each client may only write the slot whose key equals its own auth uid. This is the property a sync barrier or economic game wants (nobody can forge your offer or flip your ready flag).
-
-```json
-{
-  "rules": {
-    "mp-sessions": {
-      "$session": {
-        ".read": "auth != null",
-        "$slot": {
-          ".write": "auth != null && $slot === auth.uid"
-        }
-      }
-    }
-  }
-}
-```
-
-```js
-new jsPsychAdapterMultiplayerFirebase({ firebaseConfig, useUidAsParticipantId: true });
-```
-
-In this mode the adapter adopts the anonymous auth uid as `participantId` during `connect()`, so **`participantId` is a placeholder until `connect()` resolves — don't read or cache it before connecting.** It is incompatible with a supplied `participantId` (constructing with both throws).
-
-**What uid-as-key does and doesn't buy:** it guarantees **per-slot write integrity among the participants in a session** — not adversarial robustness. Anyone with the session URL can still mint a fresh uid, join as a new participant, spam slots, or read everyone's data. For that threat model you need real (non-anonymous) auth or a server tier (JATOS).
+In uid-as-key mode the adapter adopts the anonymous auth uid as `participantId` during `connect()`, so **`participantId` is a placeholder until `connect()` resolves — don't read or cache it before connecting.** It is incompatible with a supplied `participantId` (constructing with both throws).
 
 ## Options
 
@@ -97,7 +115,8 @@ In this mode the adapter adopts the anonymous auth uid as `participantId` during
 | `database` | — | An already-initialized RTDB `Database` (the caller owns the app + auth); use instead of `firebaseConfig`. |
 | `sessionId` | `?mp_session=` or a fresh id | Session namespace under `<pathPrefix>/<sessionId>`. |
 | `participantId` | a fresh random id | This participant's slot key. Incompatible with `useUidAsParticipantId`. |
-| `useUidAsParticipantId` | `false` | Adopt the auth uid as the id during connect (enables strict rules). |
+| `useUidAsParticipantId` | `false` | Adopt the auth uid as the id during connect (enables the recommended rules). |
+| `sessionBinding` | same as `useUidAsParticipantId` | Register the first-write-wins `mp-sessions-memberships/<uid>` record during connect (required by the recommended rules; must be `false` with the quick-start rules). |
 | `pathPrefix` | `"mp-sessions"` | RTDB path namespace. |
 | `removeOnDisconnect` | `true` | Server-remove the slot on disconnect via `onDisconnect().remove()`. |
 | `connectTimeoutMs` | `20000` | Timeout for the await-first-snapshot step of `connect()`. |
@@ -108,13 +127,13 @@ Ids (`participantId`, `sessionId`, `pathPrefix`) must not contain `. # $ [ ] /` 
 
 Firebase Auth persists per **origin**, not per tab, so two tabs on the same machine share one anonymous uid. The adapter defaults its owned app to **per-tab auth persistence** so a two-tab test still behaves like two participants — but if you inject your own `database`, you own persistence and should configure it yourself.
 
-For a fully local loop, run the [Firebase Emulator Suite](https://firebase.google.com/docs/emulator-suite):
+For a fully local loop, run the [Firebase Emulator Suite](https://firebase.google.com/docs/emulator-suite). This package ships the config it needs (`firebase.json` + the recommended `database.rules.json`), so from this package's directory:
 
 ```
-firebase emulators:start
+npx firebase-tools emulators:start --project demo-local
 ```
 
-and point your app at the emulator's database URL. No live project or credentials required.
+(any `demo-*` project id runs the emulators fully offline — no live project or credentials required). Then point your app at the emulator's database URL (`http://127.0.0.1:9000?ns=demo-local-default-rtdb`) and auth emulator. The emulator UI at the printed URL shows rule evaluations live, which is the fastest way to watch the session-binding rules allow/deny in practice.
 
 ## How it works
 
