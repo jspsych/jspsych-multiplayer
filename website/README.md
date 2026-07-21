@@ -31,10 +31,11 @@ tab. Tutorials are `.mdx` and use the local `<Steps>/<Step>` component from
 
 ## Two things to know before editing
 
-- **The docs are written against `jsPsych.multiplayer`** (jsPsych#3694), which is merged but
-  not in a published `jspsych` release yet. That is why a site-wide `announcementBar` in
-  `docusaurus.config.ts` and a note on the first tutorial point readers at a jsDelivr
-  preview build. Remove both once a release carries the API.
+- **The docs are written against `jsPsych.multiplayer`** ([jsPsych#3694](https://github.com/jspsych/jsPsych/pull/3694)),
+  which is **still an open PR** — not merged, and not in any `jspsych` release. That is why a
+  site-wide `announcementBar` in `docusaurus.config.ts` and a note on the first tutorial
+  point readers at a jsDelivr preview build. Remove both once a release carries the API, and
+  re-check the pages against the API as merged, since it can still change in review.
 - **`overrides.webpack` is pinned** in `package.json`. webpack ≥ 5.102 tightened the
   `ProgressPlugin` options schema, which Docusaurus 3.9's `webpackbar` fails validation
   against. Drop the override once that is fixed upstream. Docusaurus versions are pinned to

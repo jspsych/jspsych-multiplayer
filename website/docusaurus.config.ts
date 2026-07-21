@@ -46,13 +46,13 @@ const config: Config = defineJspsychConfig({
   },
 
   // The docs are written against the `jsPsych.multiplayer` API from jsPsych#3694, which
-  // is merged but not yet in a published `jspsych` release. Remove this banner (and the
-  // "Before you start" note on the first tutorial) once a release carries it.
+  // is still an open PR. Remove this banner (and the "Before you start" note on the first
+  // tutorial) once a `jspsych` release carries the API.
   themeConfig: {
     announcementBar: {
       id: "prerelease-3694",
       content:
-        'These docs describe the <code>jsPsych.multiplayer</code> API, which is merged into jsPsych but not yet in a published release. See <a href="/tutorials/first-multiplayer-trial">the first tutorial</a> for how to load a preview build.',
+        'These docs describe the <code>jsPsych.multiplayer</code> API from <a href="https://github.com/jspsych/jsPsych/pull/3694">jsPsych#3694</a>, which is still in review and not yet in any <code>jspsych</code> release. See <a href="/tutorials/first-multiplayer-trial">the first tutorial</a> for how to load a preview build.',
       isCloseable: true,
     },
   },
