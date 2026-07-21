@@ -225,6 +225,44 @@ Run it the same way as `chat-room.html`: build the packages, serve the repo over
 printed URL in one tab, then a second tab with the same `?mp_session=` in the URL. See
 `chat-room.html`'s "Running it" section above for the jsDelivr preview build and step-by-step details.
 
+## `draw-room.html`
+
+A real-time **collaborative drawing canvas**: participants wait in a lobby until enough have joined,
+then draw together on one shared canvas for a synced, time-boxed round. Unlike `chat-room.html`,
+participants are never asked for a display name — strokes aren't attributed by name anywhere in the
+UI, so the roster labels players by join order ("Player 1", "Player 2", …) instead. It is the
+highest-rate demo of the multiplayer API's `subscribe` primitive (continuous, throttled pushes while a
+stroke is active, vs. `chat-room.html`'s one push per message), and the flagship demo for the countdown
+plugin's **"render a synced timer during another trial"** use — the same core `public-goods-local.html`
+uses for its contribution window, drawn on top of a plugin (`plugin-multiplayer-draw`) instead of a
+core jsPsych plugin. Like `chat-room.html` it runs on the local adapter, so you can drive it **entirely
+from two browser tabs**, no server.
+
+### What it demonstrates
+
+| Package                                             | Role in the demo                                                                                                                 |
+| --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `@jspsych-multiplayer/adapter-multiplayer-local`    | The network backend — `localStorage` + cross-tab signalling. Connected once, before `jsPsych.run`. **Dev/demo only.**            |
+| `@jspsych-multiplayer/plugin-multiplayer-sync`      | The lobby: push a join timestamp, wait until at least `MIN_PLAYERS` are present.                                                 |
+| `@jspsych-multiplayer/plugin-multiplayer-draw`      | The shared canvas: pen/eraser, colors, brush sizes, and an undo that only ever removes this participant's own last stroke.       |
+| `@jspsych-multiplayer/plugin-multiplayer-countdown` | Used through its **exported statics** (`startedAtKey` / `resolveStartedAt` / `computeRemaining` / `formatTime`), not as a trial. |
+
+The composition detail worth copying: the draw plugin's own `duration` parameter is a per-client
+`setTimeout` with no cross-tab agreement on _when_ it started, so two tabs opened moments apart would
+see different end times. This demo skips that parameter entirely and instead renders the countdown
+plugin's consensus clock into the draw trial's `prompt` on `on_load`, using the same "read own slot →
+spread → push, keep-if-present" pattern the countdown plugin itself uses internally. When the synced
+clock reaches zero, the client auto-clicks its own "I'm done" button rather than ending the trial
+directly — the room closes for everyone through the same `end_when` "wait for everyone's `draw_done`
+flag" mechanism a manual click uses, so a clock-driven end and a manual end are indistinguishable to
+the rest of the group.
+
+### Running it
+
+Run it the same way as `chat-room.html`: build the packages, serve the repo over http(s), open the
+printed URL in one tab, then a second tab with the same `?mp_session=` in the URL. See
+`chat-room.html`'s "Running it" section above for the jsDelivr preview build and step-by-step details.
+
 ## `ultimatum-game.html`
 
 A turn-based **ultimatum game** (Güth, Schmittberger & Schwarze, 1982): two players split a $10 pot.
