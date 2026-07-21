@@ -326,10 +326,11 @@ const info = <const>{
     },
     /**
      * The matcher's submitted `slot -> objectId` map (1-based slots); for k = 1 just the one
-     * clicked objectId. Null if the trial ended without a submission.
+     * clicked objectId as a bare string. Null if the trial ended without a submission. COMPLEX
+     * because the value's shape depends on k (string when k = 1, object when k > 1).
      */
     assignment: {
-      type: ParameterType.OBJECT,
+      type: ParameterType.COMPLEX,
       default: undefined,
     },
     /** Number of correct slots per the configured scoring. Null without a submission. */

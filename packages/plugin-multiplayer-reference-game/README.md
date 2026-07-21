@@ -106,7 +106,7 @@ Only `stimuli`, `targets`, and `role` are required; everything else has a sensib
 | `role`                | string   | This participant's role this round.                                                                            |
 | `round`               | integer  | The round index this trial ran as.                                                                             |
 | `targets`             | string[] | The ordered target object ids.                                                                                 |
-| `assignment`          | object   | The matcher's submitted `slot -> objectId` map (for k=1, just the one clicked objectId). `null` if none.       |
+| `assignment`          | object\|string | The matcher's submitted `slot -> objectId` map; for k=1, just the one clicked objectId (a string). `null` if none. |
 | `n_correct`           | integer  | Number of correct slots per the configured scoring. `null` without a submission.                               |
 | `n_targets`           | integer  | Number of targets (k).                                                                                          |
 | `accuracy`            | float    | `n_correct / n_targets`. `null` without a submission.                                                           |
