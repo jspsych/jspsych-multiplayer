@@ -1,12 +1,11 @@
 /**
  * Local, structural mirror of the jsPsych multiplayer API surface this plugin uses.
  *
- * The real API is `MultiplayerAPI`, which jsPsych flattens onto `jsPsych.pluginAPI`. It ships in
- * jsPsych core via https://github.com/jspsych/jsPsych/pull/3694, which is not yet released — so the
- * published `jspsych` type for `pluginAPI` does not carry these members. Rather than take a
- * build-time dependency on an unmerged fork, the plugin codes against this minimal interface and
- * reaches the real object with one cast (`pluginAPI as unknown as MultiplayerApiLike`). The cast is
- * the single seam to re-verify once #3694 lands.
+ * The real API is `MultiplayerAPI`, which jsPsych core exposes as its own `jsPsych.multiplayer`
+ * module. It ships via https://github.com/jspsych/jsPsych/pull/3694, which is not yet released — so
+ * the published `jspsych` types carry no such module. Rather than take a build-time dependency on an
+ * unmerged fork, the plugin codes against this minimal interface and reaches the real object through
+ * `resolveMultiplayerApi()` (below) — the single seam to re-verify once #3694 lands.
  *
  * Unlike the barrier-based `plugin-multiplayer-sync` (which uses `push`/`getAll`/`wait`), the chat
  * room is a continuously-open trial, so it additionally declares **`subscribe`** — the real-time

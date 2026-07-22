@@ -751,15 +751,14 @@ describe("multiplayer-draw plugin", () => {
     const jsPsych = initJsPsych();
     // A released jsPsych has no `multiplayer` module (jsPsych#3694 is unmerged), so create it here.
     const core = jsPsych as unknown as { multiplayer: Record<string, unknown> };
-    core.multiplayer = {};
-    Object.assign(core.multiplayer, {
+    core.multiplayer = {
       participantId: api.participantId,
       get: api.get.bind(api),
       push: api.push.bind(api),
       update: api.update.bind(api),
       getAll: api.getAll.bind(api),
       subscribe: api.subscribe.bind(api),
-    });
+    };
 
     const { displayElement, expectFinished, getData } = await startTimeline(
       [{ type: MultiplayerDrawPlugin, end_button_label: "Done" }],

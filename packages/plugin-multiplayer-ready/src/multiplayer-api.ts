@@ -1,14 +1,13 @@
 /**
  * Local, structural mirror of the jsPsych multiplayer API surface this plugin uses.
  *
- * The real API is `MultiplayerAPI`, which jsPsych flattens onto `jsPsych.pluginAPI`
- * (packages/jspsych/src/modules/plugin-api/index.ts). It ships in jsPsych core via
- * https://github.com/jspsych/jsPsych/pull/3694, which is not yet released — so the published
- * `jspsych` type for `pluginAPI` does not carry these members. Rather than take a build-time
- * dependency on an unmerged fork, the plugin codes against this minimal interface and reaches the
- * real object with one cast (`pluginAPI as unknown as MultiplayerApiLike`). The cast is the single
- * seam to re-verify once #3694 lands; the method shapes here were copied from that PR's
- * `MultiplayerAPI` and confirmed against its example experiments.
+ * The real API is `MultiplayerAPI`, which jsPsych core exposes as its own `jsPsych.multiplayer`
+ * module. It ships via https://github.com/jspsych/jsPsych/pull/3694, which is not yet released — so
+ * the published `jspsych` types carry no such module. Rather than take a build-time dependency on an
+ * unmerged fork, the plugin codes against this minimal interface and reaches the real object through
+ * `resolveMultiplayerApi()` (below) — the single seam to re-verify once #3694 lands.
+ * The method shapes here were copied from that PR's `MultiplayerAPI` and confirmed against its
+ * ultimatum-game examples.
  *
  * Only the members this plugin actually calls are declared (`push`, `getAll`, `wait`). Mock-based
  * tests implement this same interface, so the plugin is exercised end-to-end with no live group

@@ -1,19 +1,18 @@
 /**
  * Local, structural mirror of the jsPsych multiplayer API surface this plugin uses.
  *
- * The real API is `MultiplayerAPI`, which jsPsych flattens onto `jsPsych.pluginAPI`. It ships in
- * jsPsych core via https://github.com/jspsych/jsPsych/pull/3694, which is not yet released — so the
- * published `jspsych` type for `pluginAPI` does not carry these members. Rather than take a
- * build-time dependency on an unmerged fork, the plugin codes against this minimal interface and
- * reaches the real object with one cast (`pluginAPI as unknown as MultiplayerApiLike`). The cast is
- * the single seam to re-verify once #3694 lands.
+ * The real API is `MultiplayerAPI`, which jsPsych core exposes as its own `jsPsych.multiplayer`
+ * module. It ships via https://github.com/jspsych/jsPsych/pull/3694, which is not yet released — so
+ * the published `jspsych` types carry no such module. Rather than take a build-time dependency on an
+ * unmerged fork, the plugin codes against this minimal interface and reaches the real object through
+ * `resolveMultiplayerApi()` (below) — the single seam to re-verify once #3694 lands.
  *
  * Like `plugin-multiplayer-role`, the end-of-game scoreboard is a barrier-then-render trial: it
  * pushes this client's score once (`push`), then waits (`wait`) until the group is ready — kept as
  * two separate calls so a push failure is distinguishable from a barrier timeout — then computes and
  * renders the final board. It declares `push`/`get`/`getAll`/`wait` — but not `subscribe`; the live
  * standings demo (examples/live-scoreboard-room.html) renders from the pure core plus
- * `pluginAPI.subscribe` directly, without going through this interface.
+ * `jsPsych.multiplayer.subscribe` directly, without going through this interface.
  *
  * Mock-based tests implement this same interface, so the plugin is exercised end-to-end with no live
  * group session.

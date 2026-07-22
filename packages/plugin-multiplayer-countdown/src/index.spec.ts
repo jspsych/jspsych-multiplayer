@@ -308,14 +308,13 @@ describe("multiplayer-countdown plugin", () => {
     // Graft the multiplayer API seam onto jsPsych.multiplayer, where connect() puts it (jsPsych#3694).
     // A released jsPsych has no `multiplayer` module (jsPsych#3694 is unmerged), so create it here.
     const core = jsPsych as unknown as { multiplayer: Record<string, unknown> };
-    core.multiplayer = {};
-    Object.assign(core.multiplayer, {
+    core.multiplayer = {
       participantId: api.participantId,
       get: api.get.bind(api),
       push: api.push.bind(api),
       getAll: api.getAll.bind(api),
       subscribe: api.subscribe.bind(api),
-    });
+    };
 
     const { getData, expectFinished } = await startTimeline(
       [{ type: MultiplayerCountdownPlugin, name: "smoke", duration: 1000, save_group: true }],

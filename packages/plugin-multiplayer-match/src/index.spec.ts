@@ -357,14 +357,13 @@ describe("plugin-multiplayer-match — real jsPsych pipeline (startTimeline smok
     api.seed("p2", {});
     // A released jsPsych has no `multiplayer` module (jsPsych#3694 is unmerged), so create it here.
     const core = jsPsych as unknown as { multiplayer: Record<string, unknown> };
-    core.multiplayer = {};
-    Object.assign(core.multiplayer, {
+    core.multiplayer = {
       participantId: api.participantId,
       get: api.get.bind(api),
       push: api.push.bind(api),
       getAll: api.getAll.bind(api),
       wait: api.wait.bind(api),
-    });
+    };
 
     const { getData, expectFinished } = await startTimeline(
       [{ type: MultiplayerMatchPlugin, expected_players: 2, group_size: 2 }],

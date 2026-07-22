@@ -72,4 +72,4 @@ const readyGate = {
 
 ## Scope
 
-A jsPsych plugin is a trial, so this plugin covers readiness checkpoints that are their own timeline step (lobbies, "press ready to continue" gates). For communication _in the middle_ of another interactive trial, use the raw `jsPsych.pluginAPI` (`push`, `wait`, `get`, `getAll`, `subscribe`) directly, or `plugin-multiplayer-sync` for a custom-condition barrier.
+A jsPsych plugin is a trial, so this plugin covers readiness checkpoints that are their own timeline step (lobbies, "press ready to continue" gates). For communication _in the middle_ of another interactive trial, use the raw `jsPsych.multiplayer` (`push`, `wait`, `get`, `getAll`, `subscribe`) directly, or `plugin-multiplayer-sync` for a custom-condition barrier.

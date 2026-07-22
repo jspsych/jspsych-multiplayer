@@ -8,7 +8,7 @@ It is a sibling of [`adapter-multiplayer-jatos`](../adapter-multiplayer-jatos): 
 >
 > `localStorage` and its cross-tab signalling (`BroadcastChannel` / the `storage` event) are **same-origin, same-browser, same-machine**. This adapter therefore **cannot** cross devices, cross browsers, or cross machines, and must **not** be used to collect real data. Its whole purpose is to make "open two tabs and watch it work" possible while you develop, teach, or run CI. For genuine multi-device testing you need a small local WebSocket relay (a different tool); for real data collection use JATOS or Firebase.
 
-> **Status:** built against the jsPsych multiplayer API from [jsPsych#3694](https://github.com/jspsych/jsPsych/pull/3694), which is not yet released. The adapter implements a local interface mirroring that API's `MultiplayerAdapter` (`src/multiplayer-adapter.ts`) — the single seam to re-verify once #3694 lands. Note that connecting an adapter requires `pluginAPI.connect()`, which only exists in #3694, so experiments cannot *run* until that ships regardless of which adapter you choose.
+> **Status:** built against the jsPsych multiplayer API from [jsPsych#3694](https://github.com/jspsych/jsPsych/pull/3694), which is not yet released. The adapter implements a local interface mirroring that API's `MultiplayerAdapter` (`src/multiplayer-adapter.ts`) — the single seam to re-verify once #3694 lands. Note that connecting an adapter requires `jsPsych.multiplayer.connect()`, which only exists in #3694, so experiments cannot *run* until that ships regardless of which adapter you choose.
 
 ## Usage
 

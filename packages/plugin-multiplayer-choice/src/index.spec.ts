@@ -702,14 +702,13 @@ describe("plugin-multiplayer-choice — real jsPsych pipeline (startTimeline smo
     api.seed("p2", { choice: { index: 1, label: "Defect" } });
     // A released jsPsych has no `multiplayer` module (jsPsych#3694 is unmerged), so create it here.
     const core = jsPsych as unknown as { multiplayer: Record<string, unknown> };
-    core.multiplayer = {};
-    Object.assign(core.multiplayer, {
+    core.multiplayer = {
       participantId: api.participantId,
       get: api.get.bind(api),
       push: api.push.bind(api),
       getAll: api.getAll.bind(api),
       wait: api.wait.bind(api),
-    });
+    };
 
     const { displayElement, expectFinished, getData } = await startTimeline(
       [{ type: MultiplayerChoicePlugin, choices: ["Cooperate", "Defect"], expected_players: 2 }],

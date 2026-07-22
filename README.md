@@ -9,7 +9,7 @@ interested in using, this is the place to share it!
 
 jsPsych supports opt-in, real-time multiplayer experiments through a two-layer architecture:
 
-- A high-level **`MultiplayerAPI`** on `jsPsych.pluginAPI` for pushing data, subscribing to group
+- A high-level **`MultiplayerAPI`** on `jsPsych.multiplayer` for pushing data, subscribing to group
   session changes, and waiting on conditions. It is backend-agnostic — all network logic lives in a
   swappable adapter.
 - A swappable **`MultiplayerAdapter`** that implements the network I/O for a specific backend

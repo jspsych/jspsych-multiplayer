@@ -335,12 +335,11 @@ describe("multiplayer-sync plugin", () => {
     // above, but everything else (parameter defaults, finishTrial, data collection) is real jsPsych.
     // A released jsPsych has no `multiplayer` module (jsPsych#3694 is unmerged), so create it here.
     const core = jsPsych as unknown as { multiplayer: Record<string, unknown> };
-    core.multiplayer = {};
-    Object.assign(core.multiplayer, {
+    core.multiplayer = {
       push: api.push.bind(api),
       getAll: api.getAll.bind(api),
       wait: api.wait.bind(api),
-    });
+    };
 
     const { getData, expectFinished } = await startTimeline(
       [
@@ -360,5 +359,38 @@ describe("multiplayer-sync plugin", () => {
     expect(data.timed_out).toBe(false);
     expect(data.wait_error).toBeNull();
     expect(typeof data.wait_time).toBe("number");
+  });
+
+  it("runs against an older preview build that exposes the API on pluginAPI", async () => {
+    // The sibling test above covers the current location. jsPsych#3694 moved the API to its own
+    // `multiplayer` module and removed the old one, so a published plugin has to keep working
+    // against a preview build that predates the move — here the members are grafted onto
+    // `pluginAPI` and no `multiplayer` module exists, exercising resolveMultiplayerApi's fallback
+    // through the real pipeline rather than only as a unit (see multiplayer-api.spec.ts).
+    const api = new MockApi("p1");
+    const jsPsych = initJsPsych();
+    Object.assign(jsPsych.pluginAPI, {
+      push: api.push.bind(api),
+      getAll: api.getAll.bind(api),
+      wait: api.wait.bind(api),
+    });
+    expect((jsPsych as unknown as { multiplayer?: unknown }).multiplayer).toBeUndefined();
+
+    const { getData, expectFinished } = await startTimeline(
+      [
+        {
+          type: MultiplayerSyncPlugin,
+          push_data: { ready: true },
+          wait_for: (group: GroupSessionData) => Object.keys(group).length >= 1,
+        },
+      ],
+      jsPsych
+    );
+
+    await expectFinished();
+
+    const data = getData().values()[0];
+    expect(data.group).toEqual({ p1: { ready: true } });
+    expect(data.timed_out).toBe(false);
   });
 });

@@ -486,14 +486,13 @@ describe("plugin-multiplayer-role — real jsPsych pipeline (startTimeline smoke
     api.seed("p2", { joinedAt: 200 });
     // A released jsPsych has no `multiplayer` module (jsPsych#3694 is unmerged), so create it here.
     const core = jsPsych as unknown as { multiplayer: Record<string, unknown> };
-    core.multiplayer = {};
-    Object.assign(core.multiplayer, {
+    core.multiplayer = {
       participantId: api.participantId,
       push: api.push.bind(api),
       get: api.get.bind(api),
       getAll: api.getAll.bind(api),
       wait: api.wait.bind(api),
-    });
+    };
 
     // jsPsych's parameter pipeline warns when a FUNCTION-typed parameter receives a string — the
     // documented, deliberate tradeoff of typing `strategy` as FUNCTION (see info.parameters). Capture

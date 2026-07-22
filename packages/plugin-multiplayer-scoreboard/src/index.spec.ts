@@ -503,14 +503,13 @@ describe("plugin-multiplayer-scoreboard — real jsPsych pipeline (startTimeline
     api.seed("p3", { scoreboard: { score: 5 } });
     // A released jsPsych has no `multiplayer` module (jsPsych#3694 is unmerged), so create it here.
     const core = jsPsych as unknown as { multiplayer: Record<string, unknown> };
-    core.multiplayer = {};
-    Object.assign(core.multiplayer, {
+    core.multiplayer = {
       participantId: api.participantId,
       push: api.push.bind(api),
       get: api.get.bind(api),
       getAll: api.getAll.bind(api),
       wait: api.wait.bind(api),
-    });
+    };
 
     const { getData, expectFinished, finished, displayElement } = await startTimeline(
       [{ type: MultiplayerScoreboardPlugin, score: 20, group_size: 3 }],
