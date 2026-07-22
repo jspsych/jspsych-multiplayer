@@ -8,7 +8,12 @@ import {
   resolveStartedAt,
   startedAtKey,
 } from "./countdown-core";
-import { GroupSessionData, MultiplayerApiLike, Unsubscribe } from "./multiplayer-api";
+import {
+  GroupSessionData,
+  MultiplayerApiLike,
+  Unsubscribe,
+  resolveMultiplayerApi,
+} from "./multiplayer-api";
 
 const info = <const>{
   name: "multiplayer-countdown",
@@ -125,7 +130,7 @@ type Mode = "countdown" | "countup";
  * (`startedAtKey` / `resolveStartedAt` / `computeRemaining` / `computeElapsed` / `formatTime`), so a
  * demo can render its own synced display during another trial (e.g. `draw-room.html`).
  *
- * Requires a connected multiplayer adapter — call `await jsPsych.pluginAPI.connect(adapter)` before
+ * Requires a connected multiplayer adapter — call `await jsPsych.multiplayer.connect(adapter)` before
  * `jsPsych.run()`.
  *
  * @author Hannah Tsukamoto
@@ -150,9 +155,7 @@ class MultiplayerCountdownPlugin implements JsPsychPlugin<Info> {
   // would end the trial immediately. A sync `trial` makes jsPsych fire `on_load` itself and wait for
   // `finishTrial()`. (Same footgun the chat/sync plugins fixed — see chat/src/index.ts:131.)
   trial(display_element: HTMLElement, trial: TrialType<Info>) {
-    // The multiplayer API is flattened onto pluginAPI by jsPsych core (jsPsych#3694). The published
-    // `jspsych` types don't carry it yet, so reach it through the local interface with one cast.
-    const api = this.jsPsych.pluginAPI as unknown as MultiplayerApiLike;
+    const api = resolveMultiplayerApi(this.jsPsych);
     const me = api.participantId;
 
     // --- Validate required params (the pure core deliberately does not) -----------------------

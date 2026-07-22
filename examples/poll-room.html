@@ -163,7 +163,7 @@
     // jsPsych.run() resolves once the timeline (including the "Finish" click on doneTrial) is fully
     // done; replace the display with an explicit "you can close this now" message so clicking Finish
     // doesn't just leave a blank screen.
-    jsPsych.pluginAPI.connect(localAdapter).then(() => {
+    jsPsych.multiplayer.connect(localAdapter).then(() => {
       jsPsych.run([nameTrial, lobbyTrial, pollTrial, doneTrial]).then(() => {
         jsPsych.getDisplayElement().innerHTML = `
           <h2>Demo complete</h2>

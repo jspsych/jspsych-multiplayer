@@ -7,7 +7,7 @@
          This URL is pinned to the same #3694 preview SHA as chat-room.html. A SHA-pinned URL keeps
          loading indefinitely (it never 404s); what goes stale is the #3694 API it was pinned against,
          so if the demo misbehaves against a newer #3694, re-pin — see examples/README.md "Running it". -->
-    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@7b1d96a0576032d15bd0d7c434f01b2d614f3a85/packages/jspsych/dist/index.browser.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@781eb500facc7db27204b96aaf64ca09ccbae420/packages/jspsych/dist/index.browser.min.js"></script>
     <script src="https://unpkg.com/@jspsych/plugin-html-button-response"></script>
     <!-- The multiplayer packages resolve from the sibling packages' built dist/ in this repo (run
          `npm install && npm run build` from the repo root first — dist/ is gitignored). Once they are
@@ -21,7 +21,7 @@
     <script src="../packages/plugin-multiplayer-countdown/dist/index.browser.min.js?v=1"></script>
     <link
       rel="stylesheet"
-      href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@7b1d96a0576032d15bd0d7c434f01b2d614f3a85/packages/jspsych/css/jspsych.css"
+      href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@781eb500facc7db27204b96aaf64ca09ccbae420/packages/jspsych/css/jspsych.css"
     />
     <style>
       /* The draw plugin ships no CSS of its own (matching the other multiplayer plugins), so this
@@ -259,9 +259,9 @@
           .querySelector(".jspsych-multiplayer-draw-canvas-wrap");
         canvasRef = wrap.querySelector(".jspsych-multiplayer-draw-canvas");
         const markDone = () => {
-          const mine = jsPsych.pluginAPI.get(localAdapter.participantId) || {};
+          const mine = jsPsych.multiplayer.get(localAdapter.participantId) || {};
           if (mine.draw_done === true) return;
-          jsPsych.pluginAPI.update({ draw_done: true });
+          jsPsych.multiplayer.update({ draw_done: true });
           button.disabled = true;
           button.textContent = "Waiting for others…";
         };
@@ -276,11 +276,11 @@
         // the countdown plugin does, so a refresh resumes the same deadline and we never clobber the
         // `joinedAt`/`draw_done` this participant already pushed. push is fire-and-forget; the clock
         // falls back to our own start until (possibly lower) peer timestamps arrive.
-        const mineAtLoad = jsPsych.pluginAPI.get(localAdapter.participantId) || {};
+        const mineAtLoad = jsPsych.multiplayer.get(localAdapter.participantId) || {};
         const already =
           typeof mineAtLoad[DRAW_START_KEY] === "number" && Number.isFinite(mineAtLoad[DRAW_START_KEY]);
         const ownStart = already ? mineAtLoad[DRAW_START_KEY] : Date.now();
-        if (!already) jsPsych.pluginAPI.update({ [DRAW_START_KEY]: ownStart });
+        if (!already) jsPsych.multiplayer.update({ [DRAW_START_KEY]: ownStart });
 
         // Paint the shared clock and, once the synced remaining time hits zero, auto-click "I'm done"
         // on this client's behalf — every participant's clock converges to zero within skew + latency
@@ -289,7 +289,7 @@
         const clockEl = document.getElementById("draw-clock");
         const paint = () => {
           const startedAt =
-            jsPsychMultiplayerCountdown.resolveStartedAt(jsPsych.pluginAPI.getAll(), DRAW_START_KEY) ??
+            jsPsychMultiplayerCountdown.resolveStartedAt(jsPsych.multiplayer.getAll(), DRAW_START_KEY) ??
             ownStart;
           const remaining = jsPsychMultiplayerCountdown.computeRemaining(
             startedAt,
@@ -361,7 +361,7 @@
     // jsPsych.run() resolves once the timeline (including the "Finish" click on doneTrial) is fully
     // done; without this, clicking Finish just leaves a blank display_element with no indication the
     // demo is actually over. This replaces it with an explicit "you can close this now" message.
-    jsPsych.pluginAPI.connect(localAdapter).then(() => {
+    jsPsych.multiplayer.connect(localAdapter).then(() => {
       jsPsych.run([lobbyTrial, drawTrial, doneTrial]).then(() => {
         jsPsych.getDisplayElement().innerHTML = `
           <h2>Demo complete</h2>

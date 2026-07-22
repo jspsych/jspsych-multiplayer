@@ -128,7 +128,7 @@
     const labelFor = (id) =>
       id === localAdapter.participantId
         ? "You"
-        : (jsPsych.pluginAPI.get(id) || {}).name || "The other player";
+        : (jsPsych.multiplayer.get(id) || {}).name || "The other player";
 
     // 3) The decision. Unlike the anonymous vote, choice attributes each pick to a player on the
     //    reveal (via `player_label`). `expected_players` is read dynamically from the players who made
@@ -176,7 +176,7 @@
     // jsPsych.run() resolves once the timeline (including the "Finish" click on doneTrial) is fully
     // done; replace the display with an explicit "you can close this now" message so clicking Finish
     // doesn't just leave a blank screen.
-    jsPsych.pluginAPI.connect(localAdapter).then(() => {
+    jsPsych.multiplayer.connect(localAdapter).then(() => {
       jsPsych.run([nameTrial, lobbyTrial, choiceTrial, doneTrial]).then(() => {
         jsPsych.getDisplayElement().innerHTML = `
           <h2>Demo complete</h2>

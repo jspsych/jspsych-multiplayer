@@ -97,7 +97,7 @@
     const nameOfId = (id) =>
       id === localAdapter.participantId
         ? "You"
-        : (jsPsych.pluginAPI.get(id) || {}).name || "A player";
+        : (jsPsych.multiplayer.get(id) || {}).name || "A player";
 
     let myName = "";
 
@@ -224,7 +224,7 @@
 
     // Connect the backend, then run. Everything above is backend-agnostic — swapping the adapter on
     // the line below is the only change needed to move from local two-tab testing to JATOS.
-    jsPsych.pluginAPI.connect(localAdapter).then(() => {
+    jsPsych.multiplayer.connect(localAdapter).then(() => {
       jsPsych
         .run([nameTrial, lobbyTrial, matchTrial, gameNode, spectatorNode, doneTrial])
         .then(() => {

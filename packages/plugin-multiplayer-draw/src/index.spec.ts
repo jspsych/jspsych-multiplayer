@@ -60,7 +60,7 @@ class MockApi implements MultiplayerApiLike {
 function makeJsPsych(api: MockApi) {
   const finished: Array<Record<string, any>> = [];
   const jsPsych = {
-    pluginAPI: api,
+    multiplayer: api,
     finishTrial: (data: Record<string, any>) => finished.push(data),
   };
   return { jsPsych, finished };
@@ -749,7 +749,10 @@ describe("multiplayer-draw plugin", () => {
   it("runs through the real jsPsych parameter pipeline (startTimeline smoke test)", async () => {
     const api = new MockApi("me");
     const jsPsych = initJsPsych();
-    Object.assign(jsPsych.pluginAPI, {
+    // A released jsPsych has no `multiplayer` module (jsPsych#3694 is unmerged), so create it here.
+    const core = jsPsych as unknown as { multiplayer: Record<string, unknown> };
+    core.multiplayer = {};
+    Object.assign(core.multiplayer, {
       participantId: api.participantId,
       get: api.get.bind(api),
       push: api.push.bind(api),

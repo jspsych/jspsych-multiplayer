@@ -61,11 +61,11 @@ class MockApi implements MultiplayerApiLike {
   }
 }
 
-/** Minimal jsPsych double exposing `pluginAPI` (the mock) and capturing `finishTrial` data. */
+/** Minimal jsPsych double exposing `multiplayer` (the mock) and capturing `finishTrial` data. */
 function makeJsPsych(api: MockApi) {
   const finished: Array<Record<string, any>> = [];
   const jsPsych = {
-    pluginAPI: api,
+    multiplayer: api,
     finishTrial: (data: Record<string, any>) => finished.push(data),
   };
   return { jsPsych, finished };
@@ -305,8 +305,11 @@ describe("multiplayer-countdown plugin", () => {
     // tick would never fire — the synchronous end path is what exercises the pipeline here.
     api.session.me = { [startedAtKey("smoke")]: 0 };
     const jsPsych = initJsPsych();
-    // Graft the multiplayer API seam onto pluginAPI, exactly where connect() puts it (jsPsych#3694).
-    Object.assign(jsPsych.pluginAPI, {
+    // Graft the multiplayer API seam onto jsPsych.multiplayer, where connect() puts it (jsPsych#3694).
+    // A released jsPsych has no `multiplayer` module (jsPsych#3694 is unmerged), so create it here.
+    const core = jsPsych as unknown as { multiplayer: Record<string, unknown> };
+    core.multiplayer = {};
+    Object.assign(core.multiplayer, {
       participantId: api.participantId,
       get: api.get.bind(api),
       push: api.push.bind(api),

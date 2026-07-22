@@ -20,7 +20,7 @@ import MultiplayerSyncPlugin from ".";
 // The published `jspsych` in this repo has no multiplayer API, so the fork's real-adapter tests
 // can't run here; this mock + direct trial() calls exercise the same logic without a live group
 // session, and one startTimeline smoke test runs the plugin through the real jsPsych pipeline with
-// the mock grafted onto `pluginAPI`.
+// the mock grafted onto `multiplayer`.
 // ---------------------------------------------------------------------------------------------------
 class MockApi implements MultiplayerApiLike {
   session: GroupSessionData = {};
@@ -70,11 +70,11 @@ class MockApi implements MultiplayerApiLike {
   }
 }
 
-/** Minimal jsPsych double exposing `pluginAPI` (the mock) and capturing `finishTrial` data. */
+/** Minimal jsPsych double exposing `multiplayer` (the mock) and capturing `finishTrial` data. */
 function makeJsPsych(api: MockApi) {
   const finished: Array<Record<string, any>> = [];
   const jsPsych = {
-    pluginAPI: api,
+    multiplayer: api,
     finishTrial: (data: Record<string, any>) => finished.push(data),
   };
   return { jsPsych, finished };
@@ -331,9 +331,12 @@ describe("multiplayer-sync plugin", () => {
   it("runs through the real jsPsych parameter pipeline (startTimeline smoke test)", async () => {
     const api = new MockApi("p1");
     const jsPsych = initJsPsych();
-    // Graft the multiplayer seam onto the real pluginAPI — same stubbing strategy as the tests
+    // Graft the multiplayer seam onto the real instance — same stubbing strategy as the tests
     // above, but everything else (parameter defaults, finishTrial, data collection) is real jsPsych.
-    Object.assign(jsPsych.pluginAPI, {
+    // A released jsPsych has no `multiplayer` module (jsPsych#3694 is unmerged), so create it here.
+    const core = jsPsych as unknown as { multiplayer: Record<string, unknown> };
+    core.multiplayer = {};
+    Object.assign(core.multiplayer, {
       push: api.push.bind(api),
       getAll: api.getAll.bind(api),
       wait: api.wait.bind(api),

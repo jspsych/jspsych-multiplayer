@@ -1,7 +1,11 @@
 import { JsPsych, JsPsychPlugin, ParameterType, TrialType } from "jspsych";
 
 import { version } from "../package.json";
-import { MultiplayerApiLike, isMultiplayerTimeoutError } from "./multiplayer-api";
+import {
+  MultiplayerApiLike,
+  isMultiplayerTimeoutError,
+  resolveMultiplayerApi,
+} from "./multiplayer-api";
 import { makeReadiness } from "./readiness";
 import { AssignOptions, assignRoles } from "./roles";
 import {
@@ -119,15 +123,13 @@ class MultiplayerRolePlugin implements JsPsychPlugin<Info> {
   constructor(private jsPsych: JsPsych) {}
 
   trial(display_element: HTMLElement, trial: TrialType<Info>, on_load?: () => void) {
-    // The multiplayer API is flattened onto pluginAPI by jsPsych core (jsPsych#3694). The published
-    // `jspsych` types don't carry it yet, so reach it through the local interface with one cast.
-    const api = this.jsPsych.pluginAPI as unknown as MultiplayerApiLike;
+    const api = resolveMultiplayerApi(this.jsPsych);
 
     const me = api.participantId;
     if (me == null) {
       throw new Error(
         "plugin-multiplayer-role: no participantId — the multiplayer adapter must be connected " +
-          "(await jsPsych.pluginAPI.connect(adapter)) before this trial runs."
+          "(await jsPsych.multiplayer.connect(adapter)) before this trial runs."
       );
     }
 

@@ -16,7 +16,7 @@ Requires a connected multiplayer adapter (e.g. `@jspsych-multiplayer/adapter-mul
 
 ```js
 const jsPsych = initJsPsych();
-await jsPsych.pluginAPI.connect(new jsPsychAdapterMultiplayerJatos());
+await jsPsych.multiplayer.connect(new jsPsychAdapterMultiplayerJatos());
 await jsPsych.run(timeline);
 ```
 
@@ -65,7 +65,7 @@ const readyGate = {
     // Role assignment stays experiment-specific — do it here off data.group, or hand the snapshot
     // to @jspsych-multiplayer/plugin-multiplayer-role for deterministic consensus.
     const [firstId, secondId] = Object.keys(data.group).sort();
-    myRole = jsPsych.pluginAPI.participantId === firstId ? "proposer" : "responder";
+    myRole = jsPsych.multiplayer.participantId === firstId ? "proposer" : "responder";
   },
 };
 ```

@@ -67,7 +67,7 @@ export interface FirebaseAdapterOptions {
  * `adapter-multiplayer-jatos` (self-hosted research server).
  *
  *   const jsPsych = initJsPsych();
- *   await jsPsych.pluginAPI.connect(new FirebaseAdapter({ firebaseConfig }));
+ *   await jsPsych.multiplayer.connect(new FirebaseAdapter({ firebaseConfig }));
  *   await jsPsych.run(timeline);
  *
  * The contract's `getAll()`/`get()` are synchronous but every Firebase read is async, so the adapter

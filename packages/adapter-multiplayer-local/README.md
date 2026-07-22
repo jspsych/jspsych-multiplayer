@@ -17,7 +17,7 @@ import { initJsPsych } from "jspsych";
 import jsPsychAdapterMultiplayerLocal from "@jspsych-multiplayer/adapter-multiplayer-local";
 
 const jsPsych = initJsPsych();
-await jsPsych.pluginAPI.connect(new jsPsychAdapterMultiplayerLocal());
+await jsPsych.multiplayer.connect(new jsPsychAdapterMultiplayerLocal());
 await jsPsych.run(timeline);
 ```
 

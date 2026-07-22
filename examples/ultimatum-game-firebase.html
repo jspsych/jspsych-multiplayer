@@ -4,9 +4,9 @@
     <title>Multiplayer Ultimatum Game (Firebase) — jsPsych multiplayer</title>
     <!-- jsPsych core MUST carry the multiplayer API (jsPsych#3694), which is not yet in a release.
          Until it merges, load the PR's preview build from jsDelivr instead of the published `jspsych`.
-         This URL is pinned to the #3694 preview build SHA 7b1d96a — see examples/README.md
+         This URL is pinned to the #3694 preview build SHA 781eb500 — see examples/README.md
          "Running it" for how to find/re-pin the current preview link. -->
-    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@7b1d96a0576032d15bd0d7c434f01b2d614f3a85/packages/jspsych/dist/index.browser.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@781eb500facc7db27204b96aaf64ca09ccbae420/packages/jspsych/dist/index.browser.min.js"></script>
     <script src="https://unpkg.com/@jspsych/plugin-html-button-response"></script>
     <script src="https://unpkg.com/@jspsych/plugin-html-keyboard-response"></script>
     <!-- The two multiplayer PLUGINS are IIFE globals, loaded the same way as the other examples. The
@@ -17,7 +17,7 @@
     <script src="../packages/plugin-multiplayer-sync/dist/index.browser.min.js"></script>
     <link
       rel="stylesheet"
-      href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@7b1d96a0576032d15bd0d7c434f01b2d614f3a85/packages/jspsych/css/jspsych.css"
+      href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@781eb500facc7db27204b96aaf64ca09ccbae420/packages/jspsych/css/jspsych.css"
     />
     <!-- Resolve the adapter's bare `firebase/*` imports to Firebase's modular ESM CDN builds. -->
     <script type="importmap">
@@ -148,7 +148,7 @@
         const byRole = jsPsychMultiplayerRole.participantsByRole();
         proposerId = byRole.proposer?.[0];
         responderId = byRole.responder?.[0];
-        myJoinedAt = data.group?.[jsPsych.pluginAPI.participantId]?.joinedAt;
+        myJoinedAt = data.group?.[jsPsych.multiplayer.participantId]?.joinedAt;
       },
     };
 
@@ -160,7 +160,7 @@
           stimulus: "<p>Sorry, this game is already full. Thank you for your interest.</p>",
           choices: "NO_KEYS",
           trial_duration: 4000,
-          on_finish: () => jsPsych.pluginAPI.disconnect(),
+          on_finish: () => jsPsych.multiplayer.disconnect(),
         },
       ],
       conditional_function: () => myRole === "spectator",
@@ -307,7 +307,7 @@
           stimulus: "<p>Could not form a group — the session has ended.</p>",
           choices: "NO_KEYS",
           trial_duration: 4000,
-          on_finish: () => jsPsych.pluginAPI.disconnect(),
+          on_finish: () => jsPsych.multiplayer.disconnect(),
         },
       ],
       conditional_function: () => myRole == null,
@@ -340,7 +340,7 @@
 
     // Connect the backend, then run. Everything above is backend-agnostic — swapping the adapter is
     // the only change from ultimatum-game-jatos.html (plus the jatos.onLoad wrapper it no longer needs).
-    jsPsych.pluginAPI.connect(adapter).then(
+    jsPsych.multiplayer.connect(adapter).then(
       () => {
         jsPsych.run([lobby, assignRoles, gameFull, noGroupScreen, gameTimeline, doneScreen]);
       },

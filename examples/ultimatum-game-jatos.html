@@ -54,7 +54,7 @@
 
       // Connect the network backend before running. Every multiplayer trial below talks to the group
       // session through this adapter; nothing about the timeline is JATOS-specific.
-      await jsPsych.pluginAPI.connect(new jsPsychAdapterMultiplayerJatos());
+      await jsPsych.multiplayer.connect(new jsPsychAdapterMultiplayerJatos());
 
       const POT = 10;
 
@@ -127,7 +127,7 @@
           // mid-game push below must spread `joinedAt` back in — otherwise the first push would
           // erase it, and a late spectator (whose `ready` gate and `join_order` both read it) could
           // stall to a timeout or compute a different proposer/responder pair.
-          myJoinedAt = data.group?.[jsPsych.pluginAPI.participantId]?.joinedAt;
+          myJoinedAt = data.group?.[jsPsych.multiplayer.participantId]?.joinedAt;
         },
       };
 
@@ -139,7 +139,7 @@
             stimulus: "<p>Sorry, this game is already full. Thank you for your interest.</p>",
             choices: "NO_KEYS",
             trial_duration: 4000,
-            on_finish: () => jsPsych.pluginAPI.disconnect(),
+            on_finish: () => jsPsych.multiplayer.disconnect(),
           },
         ],
         conditional_function: () => myRole === "spectator",
@@ -297,7 +297,7 @@
             stimulus: "<p>Could not form a group — the session has ended.</p>",
             choices: "NO_KEYS",
             trial_duration: 4000,
-            on_finish: () => jsPsych.pluginAPI.disconnect(),
+            on_finish: () => jsPsych.multiplayer.disconnect(),
           },
         ],
         conditional_function: () => myRole == null,

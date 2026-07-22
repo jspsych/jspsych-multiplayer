@@ -27,7 +27,7 @@ const firebaseConfig = {
 };
 
 const jsPsych = initJsPsych();
-await jsPsych.pluginAPI.connect(new jsPsychAdapterMultiplayerFirebase({ firebaseConfig }));
+await jsPsych.multiplayer.connect(new jsPsychAdapterMultiplayerFirebase({ firebaseConfig }));
 await jsPsych.run(timeline);
 ```
 
