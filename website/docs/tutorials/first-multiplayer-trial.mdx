@@ -28,15 +28,18 @@ bundle; nothing else changes.
 Because the API is still under review, details on this site can change before release.
 :::
 
-:::danger This tutorial does not run yet
-The published `@jspsych-multiplayer/*` packages still reach the API through the older
-`jsPsych.pluginAPI` location and have not been migrated to `jsPsych.multiplayer`. Until
-they are republished, the code below will not work against any build of jsPsych core: the
-preview build pinned here does not expose `jsPsych.multiplayer`, and a build that does
-exposes nothing the published plugins can find.
+:::danger Waiting on a package release
+The plugin and adapter script tags below load from a CDN, which serves the last version
+published to npm — and that version predates the move to `jsPsych.multiplayer`, so it
+cannot find the API on the preview build pinned here.
 
-Follow it as a description of the intended API, not as something to run today. This notice
-comes down with the migration.
+Until those packages are republished, run this tutorial's code from a clone of the
+[repository](https://github.com/jspsych/jspsych-multiplayer) instead: `npm install &&
+npm run build`, then point the two script tags at
+`packages/<name>/dist/index.browser.min.js`, exactly as the files in `examples/` do. Those
+examples are already on the new namespace and run today.
+
+This notice comes down with the next release.
 :::
 
 ## Build it
@@ -52,10 +55,10 @@ Make an empty directory with one file, `first-trial.html`, containing:
 <html>
   <head>
     <!-- jsPsych core, preview build carrying the multiplayer API (see note above). -->
-    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@7b1d96a0576032d15bd0d7c434f01b2d614f3a85/packages/jspsych/dist/index.browser.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@781eb500facc7db27204b96aaf64ca09ccbae420/packages/jspsych/dist/index.browser.min.js"></script>
     <link
       rel="stylesheet"
-      href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@7b1d96a0576032d15bd0d7c434f01b2d614f3a85/packages/jspsych/css/jspsych.css"
+      href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@781eb500facc7db27204b96aaf64ca09ccbae420/packages/jspsych/css/jspsych.css"
     />
 
     <script src="https://unpkg.com/@jspsych/plugin-html-button-response"></script>
