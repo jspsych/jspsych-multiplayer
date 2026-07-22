@@ -53,14 +53,17 @@ jobs:
         run: npm run build
 
       - name: Upload Pages artifact
-        if: github.event_name != 'pull_request'
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3.0.1
         with:
           path: website/build
 
+  # The ref guard matters for `workflow_dispatch`, which is not branch-restricted:
+  # without it, dispatching this workflow from any branch would publish that branch
+  # to multiplayer.jspsych.org. Manual redeploys of `main` still work.
   deploy:
     needs: build
-    if: github.event_name != 'pull_request'
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       pages: write
