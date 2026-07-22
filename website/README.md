@@ -21,8 +21,8 @@ domain comes from `static/CNAME`.
 
 ## What goes here
 
-Only **user-facing** documentation. The repo-root `docs/*-design.md` files are internal
-design notes and are not published.
+Only **user-facing** documentation. Internal design notes live untracked in the repo-root
+`docs/` directory and are neither committed nor published.
 
 Content lives in `docs/`, in four groups matching the navbar: the single `introduction.md`
 page, plus `tutorials/`, `guides/`, and `reference/`. `sidebars.ts` defines one sidebar per
@@ -71,6 +71,3 @@ starting: it has moved once already, which is how the packages went stale.
   against. Drop the override once that is fixed upstream. Docusaurus versions are pinned to
   3.9.2 to match what `@jspsych/docusaurus-preset` depends on; a mismatch nests a second
   copy of the classic preset and breaks the build.
-
-The remaining plan — reference pages, more guides, embedded live demos — is in
-[`docs/docs-site-plan.md`](../docs/docs-site-plan.md) at the repo root.

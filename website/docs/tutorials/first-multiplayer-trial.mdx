@@ -21,12 +21,22 @@ condition over the group, read the result.
 The multiplayer API lives on `jsPsych.multiplayer`, added in
 [jsPsych#3694](https://github.com/jspsych/jsPsych/pull/3694), which is **still in review**
 and not part of any `jspsych` release yet. So the snippets below load a **preview build** of
-jsPsych core from jsDelivr rather than the released package. The multiplayer plugins and
-adapters themselves are published normally. Once the PR merges and a jsPsych release carries
-the API, replace that one script tag with the ordinary `jspsych` bundle; nothing else
-changes.
+jsPsych core from jsDelivr rather than the released package. Once the PR merges and a
+jsPsych release carries the API, replace that one script tag with the ordinary `jspsych`
+bundle; nothing else changes.
 
 Because the API is still under review, details on this site can change before release.
+:::
+
+:::danger This tutorial does not run yet
+The published `@jspsych-multiplayer/*` packages still reach the API through the older
+`jsPsych.pluginAPI` location and have not been migrated to `jsPsych.multiplayer`. Until
+they are republished, the code below will not work against any build of jsPsych core: the
+preview build pinned here does not expose `jsPsych.multiplayer`, and a build that does
+exposes nothing the published plugins can find.
+
+Follow it as a description of the intended API, not as something to run today. This notice
+comes down with the migration.
 :::
 
 ## Build it

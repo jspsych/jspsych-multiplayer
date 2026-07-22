@@ -39,7 +39,7 @@ one computer. It cannot connect real participants, and it is not a data-collecti
 :::
 
 What it is genuinely excellent at is the inner loop: no server, no credentials, no build
-step, instant reload. Every example in the repository has a local-adapter variant, and both
+step, instant reload. Nearly every example in the repository runs on the local adapter, and both
 tutorials use it. Develop your entire game here, then swap the constructor.
 
 Two options matter in practice:

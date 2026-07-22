@@ -26,6 +26,18 @@ synchronization or coordination code. Every "wait for the other player" moment i
 declarative trial; role assignment is one declarative trial; the network backend is one
 constructor call. The experiment code is about the game, not about networking.
 
+:::danger The example runs, but its source will not match this page
+`examples/ultimatum-game-local.html` works today — but it reaches the multiplayer API
+through the older `jsPsych.pluginAPI` location, while this tutorial is written against
+`jsPsych.multiplayer` ([jsPsych#3694](https://github.com/jspsych/jsPsych/pull/3694), still
+in review). So every `jsPsych.multiplayer.*` call below appears as `jsPsych.pluginAPI.*` in
+the file you open. Only the namespace differs; the arguments, the plugins, and the design
+are identical.
+
+The packages are being migrated to the new namespace, after which the example and this page
+will agree. This notice comes down then.
+:::
+
 ## Why multiplayer experiments are hard
 
 A single-participant jsPsych experiment is a linear timeline: every trial's inputs are

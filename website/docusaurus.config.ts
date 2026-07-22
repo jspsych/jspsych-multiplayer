@@ -3,11 +3,15 @@ import { defineJspsychConfig } from "@jspsych/docusaurus-preset";
 
 const editUrl = "https://github.com/jspsych/jspsych-multiplayer/tree/main/website/";
 
+// The announcement bar's content is raw HTML, so its link cannot go through
+// `useBaseUrl` the way an MDX link does — interpolate this instead of hardcoding "/".
+const baseUrl = "/";
+
 const config: Config = defineJspsychConfig({
   title: "jsPsych Multiplayer",
   tagline: "Run synchronous, multi-participant experiments in jsPsych",
   url: "https://multiplayer.jspsych.org",
-  baseUrl: "/",
+  baseUrl,
   organizationName: "jspsych",
   projectName: "jspsych-multiplayer",
   githubUrl: "https://github.com/jspsych/jspsych-multiplayer",
@@ -51,8 +55,7 @@ const config: Config = defineJspsychConfig({
   themeConfig: {
     announcementBar: {
       id: "prerelease-3694",
-      content:
-        'These docs describe the <code>jsPsych.multiplayer</code> API from <a href="https://github.com/jspsych/jsPsych/pull/3694">jsPsych#3694</a>, which is still in review and not yet in any <code>jspsych</code> release. See <a href="/tutorials/first-multiplayer-trial">the first tutorial</a> for how to load a preview build.',
+      content: `These docs describe the <code>jsPsych.multiplayer</code> API from <a href="https://github.com/jspsych/jsPsych/pull/3694">jsPsych#3694</a>, which is still in review and not yet in any <code>jspsych</code> release. See <a href="${baseUrl}tutorials/first-multiplayer-trial">the first tutorial</a> for how to load a preview build.`,
       isCloseable: true,
     },
   },
