@@ -4,10 +4,10 @@
     <title>Multiplayer Choice Room (Prisoner's Dilemma) — jsPsych multiplayer</title>
     <!-- jsPsych core MUST carry the multiplayer API (jsPsych#3694), which is not yet in a release.
          Until it merges, load the PR's preview build from jsDelivr instead of the published `jspsych`.
-         This URL is pinned to the same #3694 preview SHA as chat-room.html. A SHA-pinned URL keeps
+         This URL is pinned to #3694 commit c5c4499 (preview SHA 781eb500). A SHA-pinned URL keeps
          loading indefinitely (it never 404s); what goes stale is the #3694 API it was pinned against,
          so if the demo misbehaves against a newer #3694, re-pin — see examples/README.md "Running it". -->
-    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@c43b3a1f285ef2d899cd43960c889a4a9d630dc9/packages/jspsych/dist/index.browser.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@781eb500facc7db27204b96aaf64ca09ccbae420/packages/jspsych/dist/index.browser.min.js"></script>
     <script src="https://unpkg.com/@jspsych/plugin-survey-text"></script>
     <script src="https://unpkg.com/@jspsych/plugin-html-button-response"></script>
     <!-- The multiplayer packages resolve from the sibling packages' built dist/ in this repo (run
@@ -21,7 +21,7 @@
     <script src="../packages/plugin-multiplayer-choice/dist/index.browser.min.js?v=1"></script>
     <link
       rel="stylesheet"
-      href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@c43b3a1f285ef2d899cd43960c889a4a9d630dc9/packages/jspsych/css/jspsych.css"
+      href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@781eb500facc7db27204b96aaf64ca09ccbae420/packages/jspsych/css/jspsych.css"
     />
     <style>
       /* The choice plugin ships its own scoped stylesheet for the reveal list; this demo only adds a
