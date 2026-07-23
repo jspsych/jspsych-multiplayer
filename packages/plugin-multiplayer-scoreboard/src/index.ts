@@ -434,9 +434,11 @@ type WaitOutcome =
 async function raceWaitAgainstTimeout(
   startWaiting: () => Promise<GroupSessionData>,
   timeoutMs: number | undefined,
-  scheduleTimeout: (cb: () => void, ms: number) => ReturnType<typeof setTimeout>
+  // Returns `number` (pluginAPI.setTimeout's numeric handle), which clearTimeout accepts under both
+  // DOM and Node typings.
+  scheduleTimeout: (cb: () => void, ms: number) => number
 ): Promise<WaitOutcome> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
+  let timer: number | undefined;
   const timedOut =
     timeoutMs === undefined
       ? null

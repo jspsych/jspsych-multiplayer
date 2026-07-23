@@ -853,9 +853,10 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
     let finalRt: number | null = null;
     let finalReason: "submit" | "timeout" = "submit";
     let unsubscribe: Unsubscribe | null = null;
-    let feedbackTimer: ReturnType<typeof setTimeout> | null = null;
-    let selectionTimer: ReturnType<typeof setTimeout> | null = null;
-    let roundTimer: ReturnType<typeof setTimeout> | null = null;
+    // `number`, not ReturnType<typeof setTimeout>: pluginAPI.setTimeout returns a numeric handle.
+    let feedbackTimer: number | null = null;
+    let selectionTimer: number | null = null;
+    let roundTimer: number | null = null;
 
     // This participant's own outgoing chat sequence counter, seeded past the HIGHEST seq already in
     // our slot (e.g. after a reload) so ids stay unique (max-based, not length-based — see the chat

@@ -245,7 +245,8 @@ class MultiplayerChatPlugin implements JsPsychPlugin<Info> {
     let nextSeq = readOwnMessages().reduce((max, m) => Math.max(max, m.seq), -1) + 1;
     let ended = false;
     let unsubscribe: Unsubscribe | null = null;
-    let timer: ReturnType<typeof setTimeout> | null = null;
+    // `number`, not ReturnType<typeof setTimeout>: pluginAPI.setTimeout returns a numeric handle.
+    let timer: number | null = null;
 
     function readOwnMessages(): ChatMessage[] {
       const merged = mergeMessages({ [me]: api.get(me) ?? {} }, dataKey);

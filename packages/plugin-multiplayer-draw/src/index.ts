@@ -303,8 +303,9 @@ class MultiplayerDrawPlugin implements JsPsychPlugin<Info> {
     const start = performance.now();
     let ended = false;
     let unsubscribe: Unsubscribe | null = null;
-    let endTimer: ReturnType<typeof setTimeout> | null = null;
-    let resizeTimer: ReturnType<typeof setTimeout> | null = null;
+    // `number`, not ReturnType<typeof setTimeout>: pluginAPI.setTimeout returns a numeric handle.
+    let endTimer: number | null = null;
+    let resizeTimer: number | null = null;
 
     // --- Painting -------------------------------------------------------------------------------
     function strokeSegment(stroke: Stroke, fromPointIndex: number) {
