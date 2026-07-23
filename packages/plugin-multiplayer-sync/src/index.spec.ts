@@ -39,6 +39,15 @@ class MockApi implements MultiplayerApiLike {
     this.waiters.forEach((notify) => notify());
   }
 
+  /**
+   * Mirror of the real pluginAPI.setTimeout(callback, delay). The plugin routes its minimum_wait
+   * delay through this so the pending timeout is cleaned up if the trial is aborted mid-wait;
+   * since this mock stands in for pluginAPI, it must expose the same helper.
+   */
+  setTimeout(callback: () => void, delay: number) {
+    return window.setTimeout(callback, delay);
+  }
+
   getAll() {
     return this.session;
   }
