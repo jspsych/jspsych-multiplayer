@@ -49,7 +49,7 @@
     "jspsych": ">=8.0.0"
   },
   "devDependencies": {
-    "firebase": "^10.0.0",
+    "firebase": "^12.16.0",
     "jspsych": "^8.0.0",
     "@jspsych/config": "^3.2.2"
   }
