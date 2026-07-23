@@ -163,18 +163,31 @@ held. If other clients depend on a field pushed earlier, include it again. See t
 <Step title="Show what the partner said">
 
 The barrier stores the group snapshot it resolved over in its trial data, so reading the
-partner's value needs no extra network call — capture it in the barrier's `on_finish`:
+partner's value needs no extra network call — capture it in the barrier's `on_finish`.
+Replace the `barrier` from the previous step with this final version:
 
 ```js
 let partnerChoice;
 
-// add to `barrier`, above:
-//   on_finish: (data) => {
-//     const me = jsPsych.multiplayer.participantId;
-//     const partner = Object.entries(data.group).find(([id]) => id !== me);
-//     partnerChoice = partner?.[1].choice;
-//   },
+const barrier = {
+  type: jsPsychMultiplayerSync,
+  push_data: () => ({ choice: myChoice }),
+  wait_for: (group) => {
+    const slots = Object.values(group);
+    return slots.length >= 2 && slots.every((slot) => slot.choice !== undefined);
+  },
+  message: "<p>Waiting for your partner to choose…</p>",
+  on_finish: (data) => {
+    const me = jsPsych.multiplayer.participantId;
+    const partner = Object.entries(data.group).find(([id]) => id !== me);
+    partnerChoice = partner?.[1].choice;
+  },
+};
+```
 
+Then an ordinary trial reads the captured value back:
+
+```js
 const resultTrial = {
   type: jsPsychHtmlKeyboardResponse,
   stimulus: () => `<p>You picked <strong>${myChoice}</strong>.<br>

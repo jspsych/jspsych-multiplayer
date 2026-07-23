@@ -405,6 +405,11 @@ role trial), `myRole` stays undefined and a "could not form a group" screen show
 every path — played, spectated, or stranded — funnels into a closing screen, so no
 participant is ever left on a blank page.
 
+One last piece of hygiene: when a client is done with the session, leave it explicitly —
+`on_finish: () => jsPsych.multiplayer.disconnect()` on the final trial (or at experiment
+end) releases the participant's slot and cancels any live subscriptions, which is how the
+example's exit screens end.
+
 </Step>
 
 <Step title="Deploy it for real data collection">
