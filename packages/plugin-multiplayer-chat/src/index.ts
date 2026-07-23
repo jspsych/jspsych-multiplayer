@@ -388,7 +388,7 @@ class MultiplayerChatPlugin implements JsPsychPlugin<Info> {
     });
 
     if (hasDuration) {
-      timer = setTimeout(() => end("duration"), trial.duration as number);
+      timer = this.jsPsych.pluginAPI.setTimeout(() => end("duration"), trial.duration as number);
     }
   }
 }

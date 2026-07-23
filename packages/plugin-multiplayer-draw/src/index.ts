@@ -581,7 +581,7 @@ class MultiplayerDrawPlugin implements JsPsychPlugin<Info> {
     // tracking does not, since the pixel canvas was cleared) -------------------------------------
     const onResize = () => {
       if (resizeTimer != null) clearTimeout(resizeTimer);
-      resizeTimer = setTimeout(() => {
+      resizeTimer = this.jsPsych.pluginAPI.setTimeout(() => {
         sizeCanvas();
         doFullRepaint(localGroup());
       }, 100);
@@ -651,7 +651,7 @@ class MultiplayerDrawPlugin implements JsPsychPlugin<Info> {
     });
 
     if (hasDuration) {
-      endTimer = setTimeout(() => end("duration"), trial.duration as number);
+      endTimer = this.jsPsych.pluginAPI.setTimeout(() => end("duration"), trial.duration as number);
     }
   }
 }
