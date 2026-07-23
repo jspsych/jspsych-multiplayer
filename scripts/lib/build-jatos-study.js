@@ -27,8 +27,8 @@ export function nodeModulesAsset(root, specifier) {
   if (!existsSync(path)) {
     throw new Error(
       `Missing ${specifier} in node_modules.\n` +
-        `  Run \`npm install\` at the repo root first — jsPsych core and the stock plugins are ` +
-        `devDependencies here, not packages in this repo.`
+        `  jsPsych core and the stock plugins are devDependencies of the repo root (they are not ` +
+        `packages built in this repo) — run \`npm install\` at the repo root to install them.`
     );
   }
   return path;

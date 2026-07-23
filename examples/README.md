@@ -492,6 +492,14 @@ make unreachable. Note the archive carries the same #3694 caveat as the example 
 jsPsych core is a published release, so the study imports cleanly but fails at `connect()` until
 #3694 ships.
 
+Two packaging gotchas (they apply to `build:jatos:group-quiz` too):
+
+- On macOS/Linux the script shells out to the `zip` CLI, so it must be on your `PATH` (it is
+  preinstalled on macOS and most Linux distributions). On Windows no `zip` binary is needed —
+  the script uses PowerShell instead.
+- Every build generates **fresh** JATOS study/component UUIDs, so re-importing a rebuilt archive
+  creates a **new** study in JATOS rather than updating the one you imported before.
+
 ### Attribution
 
 Adapted from the author's ultimatum-game demo in jsPsych#3694 (MIT-licensed). Güth, W., Schmittberger,
@@ -559,6 +567,10 @@ The player's mid-game barriers have **no timeout**, so a host who closes the pre
 every player hanging; group size at real audience scale (~20+ phones on one JATOS group session) is
 **untested**; and there is no host election or late-joiner catch-up. See the design doc for details
 and the mechanical fix for each.
+
+### Attribution
+
+Adapted from the author's group-quiz demo in jsPsych#3694 (MIT-licensed).
 
 ## `ultimatum-game-local.html`
 
