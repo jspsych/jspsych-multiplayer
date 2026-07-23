@@ -478,11 +478,99 @@ npm install && npm run build
 Once the packages are published you can load them from a CDN instead
 (e.g. `https://unpkg.com/@jspsych-multiplayer/plugin-multiplayer-role`).
 
+To get it into JATOS, package it as an importable study archive:
+
+```sh
+npm run build:jatos:ultimatum      # → dist/ultimatum-jatos.jzip
+```
+
+This flattens the assets (resolving the CDN `<script src>` above to their installed node_modules
+copies, since a JATOS study has to be self-contained), writes the `.jas` metadata with
+`groupStudy: true`, and zips the result. The batch is left **uncapped** on purpose: this demo's
+population model admits extra arrivals as `spectator`s (see above), which a two-member cap would
+make unreachable. Note the archive carries the same #3694 caveat as the example — the bundled
+jsPsych core is a published release, so the study imports cleanly but fails at `connect()` until
+#3694 ships.
+
+Two packaging gotchas (they apply to `build:jatos:group-quiz` too):
+
+- On macOS/Linux the script shells out to the `zip` CLI, so it must be on your `PATH` (it is
+  preinstalled on macOS and most Linux distributions). On Windows no `zip` binary is needed —
+  the script uses PowerShell instead.
+- Every build generates **fresh** JATOS study/component UUIDs, so re-importing a rebuilt archive
+  creates a **new** study in JATOS rather than updating the one you imported before.
+
 ### Attribution
 
 Adapted from the author's ultimatum-game demo in jsPsych#3694 (MIT-licensed). Güth, W., Schmittberger,
 R., & Schwarze, B. (1982). An experimental analysis of ultimatum bargaining. _Journal of Economic
 Behavior & Organization_, 3(4), 367–388.
+
+## `group-quiz/`
+
+A live, Kahoot-style **group quiz**. Everyone opens **one** URL; one person clicks **Host** (the
+presenter screen — the big screen the room watches), everyone else clicks **Player** (their phone).
+The host drives the game forward question by question while players answer against a clock, score by
+speed, and see their rank between questions.
+
+It is the repo's demo of the **asymmetric** pattern — one authoritative driver plus many followers —
+and the counterpart to `ultimatum-game-jatos.html`, where every client runs the same timeline and
+coordination is by deterministic consensus. The host half is **not a jsPsych timeline at all**: it's
+vanilla JS driving the adapter directly, because a presenter screen reacts continuously rather than
+advancing through trials.
+
+### What it demonstrates
+
+| Package                                          | Role in the demo                                                                                                          |
+| ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------- |
+| `@jspsych-multiplayer/adapter-multiplayer-jatos` | The network backend — JATOS group session + channel. Used **two ways**: through the multiplayer API by players, and **directly** (`connect`/`push`/`subscribe`/`getAll`) by the host page. |
+| `@jspsych-multiplayer/plugin-multiplayer-sync`   | Every one of the player's four "wait for the host to advance" points is a single declarative barrier trial.                |
+
+The composition detail worth copying is the **monotonic step counter**. The host advances by
+overwriting its `phase` field, and JATOS doesn't guarantee a client observes every intermediate
+snapshot — so the obvious barrier, `wait_for: g => g[hostId]?.phase === "reveal"`, **deadlocks**: a
+lagging player whose snapshot jumps straight from `question` to `leaderboard` is left with a
+permanently unsatisfiable condition and hangs forever. Every host push therefore also carries a
+`step` that only ever increases, and players wait on `hostStepValue(group) >= phaseStep(…)`. A `>=`
+test against a monotonic value can never be missed — once true it stays true. Generalized: **on a
+snapshot-based transport, barrier predicates must be monotone.** "State currently equals X" is a
+latent deadlock; "state has reached at least X" is not.
+
+`questions.js` holds the answer key, and the protocol keeps correctness a **host** decision — players
+push only their `choice`, and the host publishes `correctChoice` at reveal. The demo does load the key
+on both roles (one file serves both), so a player can read it in devtools; for anything scored for
+real, serve it host-only. Full design notes, including why this demo hand-rolls its leaderboard,
+timer, and answer buttons instead of composing the scoreboard/countdown/choice plugins, are in
+[`docs/group-quiz-design.md`](../docs/group-quiz-design.md).
+
+### Running it
+
+Like `ultimatum-game-jatos.html`, this example is **illustrative** — it cannot run from a single
+browser tab today. It requires:
+
+1. a jsPsych core that includes the multiplayer API ([jsPsych#3694](https://github.com/jspsych/jsPsych/pull/3694)), not yet in a released `jspsych`;
+2. the **JATOS** environment, so the `jatos` global and a group study exist; and
+3. at least **two** real participants in one JATOS group — one Host plus one or more Players.
+
+Build the multiplayer packages first (`dist/` is gitignored), then package the study for upload:
+
+```sh
+npm install && npm run build
+npm run build:jatos:group-quiz     # → dist/group-quiz-jatos.jzip
+```
+
+Import the `.jzip` into JATOS and share the single study link with the room.
+
+### Known limitations
+
+The player's mid-game barriers have **no timeout**, so a host who closes the presenter screen leaves
+every player hanging; group size at real audience scale (~20+ phones on one JATOS group session) is
+**untested**; and there is no host election or late-joiner catch-up. See the design doc for details
+and the mechanical fix for each.
+
+### Attribution
+
+Adapted from the author's group-quiz demo in jsPsych#3694 (MIT-licensed).
 
 ## `ultimatum-game-local.html`
 

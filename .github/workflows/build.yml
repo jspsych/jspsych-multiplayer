@@ -31,6 +31,9 @@ jobs:
       - name: Build packages
         run: npm run build
 
+      - name: Package JATOS study archives # smoke test; needs the `zip` binary, preinstalled on ubuntu-latest
+        run: npm run build:jatos:ultimatum && npm run build:jatos:group-quiz
+
       - name: Run tests
         run: npm run test -- --ci --coverage --maxWorkers=2
         env:
