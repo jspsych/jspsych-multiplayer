@@ -456,6 +456,8 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
   trial(display_element: HTMLElement, trial: TrialType<Info>) {
     const api = resolveMultiplayerApi(this.jsPsych);
     const me = api.participantId;
+    // Captured so nested `function` declarations (no lexical `this`) can register timers too.
+    const pluginAPI = this.jsPsych.pluginAPI;
 
     // --- Resolve & validate configuration -------------------------------------------------------
     const stimuli = (trial.stimuli ?? []) as unknown as StimulusSpec[];
@@ -851,9 +853,10 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
     let finalRt: number | null = null;
     let finalReason: "submit" | "timeout" = "submit";
     let unsubscribe: Unsubscribe | null = null;
-    let feedbackTimer: ReturnType<typeof setTimeout> | null = null;
-    let selectionTimer: ReturnType<typeof setTimeout> | null = null;
-    let roundTimer: ReturnType<typeof setTimeout> | null = null;
+    // `number`, not ReturnType<typeof setTimeout>: pluginAPI.setTimeout returns a numeric handle.
+    let feedbackTimer: number | null = null;
+    let selectionTimer: number | null = null;
+    let roundTimer: number | null = null;
 
     // This participant's own outgoing chat sequence counter, seeded past the HIGHEST seq already in
     // our slot (e.g. after a reload) so ids stay unique (max-based, not length-based — see the chat
@@ -1149,7 +1152,7 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
       renderFeedback(sub, finalScore);
       const duration = trial.feedback_duration as number | null;
       if (typeof duration === "number" && duration > 0) {
-        feedbackTimer = setTimeout(() => end(finalReason), duration);
+        feedbackTimer = pluginAPI.setTimeout(() => end(finalReason), duration);
       } else {
         const cont = document.createElement("button");
         cont.type = "button";
@@ -1251,12 +1254,12 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
     });
 
     if (isMatcher && typeof trial.selection_timeout === "number" && trial.selection_timeout > 0) {
-      selectionTimer = setTimeout(() => {
+      selectionTimer = pluginAPI.setTimeout(() => {
         if (!submitted && !feedbackShown && !ended) submit("timeout");
       }, trial.selection_timeout);
     }
     if (hasRoundTimeout) {
-      roundTimer = setTimeout(() => {
+      roundTimer = pluginAPI.setTimeout(() => {
         if (!feedbackShown && !ended) end("timeout");
       }, trial.round_timeout as number);
     }

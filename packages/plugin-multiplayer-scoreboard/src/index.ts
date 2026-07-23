@@ -245,7 +245,13 @@ class MultiplayerScoreboardPlugin implements JsPsychPlugin<Info> {
     // 32-bit setTimeout max so a huge `timeout` can't overflow the doubled delay into a near-zero one
     // (which would fire the backstop immediately and reintroduce that misclassification).
     const backstopMs = timeoutMs === undefined ? undefined : Math.min(timeoutMs * 2, 2_147_483_647);
-    const outcome = await raceWaitAgainstTimeout(() => api.wait(isReady, backstopMs), timeoutMs);
+    const outcome = await raceWaitAgainstTimeout(
+      () => api.wait(isReady, backstopMs),
+      timeoutMs,
+      // Register the timer through the pluginAPI so jsPsych cancels it if the trial is ended
+      // externally (abortExperiment / endCurrentTimeline / forced finishTrial).
+      (cb, ms) => this.jsPsych.pluginAPI.setTimeout(cb, ms)
+    );
 
     if (outcome.kind === "ready") {
       this.reveal(display_element, trial, me, outcome.group, false);
@@ -427,14 +433,17 @@ type WaitOutcome =
  */
 async function raceWaitAgainstTimeout(
   startWaiting: () => Promise<GroupSessionData>,
-  timeoutMs: number | undefined
+  timeoutMs: number | undefined,
+  // Returns `number` (pluginAPI.setTimeout's numeric handle), which clearTimeout accepts under both
+  // DOM and Node typings.
+  scheduleTimeout: (cb: () => void, ms: number) => number
 ): Promise<WaitOutcome> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
+  let timer: number | undefined;
   const timedOut =
     timeoutMs === undefined
       ? null
       : new Promise<WaitOutcome>((resolve) => {
-          timer = setTimeout(() => resolve({ kind: "timeout" as const }), timeoutMs);
+          timer = scheduleTimeout(() => resolve({ kind: "timeout" as const }), timeoutMs);
         });
 
   const settled: Promise<WaitOutcome> = (async () => startWaiting())().then(

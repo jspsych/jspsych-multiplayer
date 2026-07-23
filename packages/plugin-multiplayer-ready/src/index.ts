@@ -200,7 +200,9 @@ class MultiplayerReadyPlugin implements JsPsychPlugin<Info> {
       const min = typeof trial.minimum_wait === "number" ? trial.minimum_wait : 0;
       const elapsed = performance.now() - waitStart;
       if (elapsed < min) {
-        await new Promise((resolve) => setTimeout(resolve, min - elapsed));
+        await new Promise<void>((resolve) =>
+          this.jsPsych.pluginAPI.setTimeout(resolve, min - elapsed)
+        );
       }
     };
 
