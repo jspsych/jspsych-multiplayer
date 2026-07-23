@@ -62,11 +62,11 @@ class MockApi implements MultiplayerApiLike {
   }
 }
 
-/** Minimal jsPsych double exposing `pluginAPI` (the mock) and capturing `finishTrial` data. */
+/** Minimal jsPsych double exposing `multiplayer` (the mock) and capturing `finishTrial` data. */
 function makeJsPsych(api: MockApi) {
   const finished: Array<Record<string, any>> = [];
   const jsPsych = {
-    pluginAPI: api,
+    multiplayer: api,
     finishTrial: (data: Record<string, any>) => finished.push(data),
   };
   return { jsPsych, finished };
@@ -700,13 +700,15 @@ describe("plugin-multiplayer-choice — real jsPsych pipeline (startTimeline smo
     const jsPsych = initJsPsych();
     const api = new MockApi("p1");
     api.seed("p2", { choice: { index: 1, label: "Defect" } });
-    Object.assign(jsPsych.pluginAPI, {
+    // A released jsPsych has no `multiplayer` module (jsPsych#3694 is unmerged), so create it here.
+    const core = jsPsych as unknown as { multiplayer: Record<string, unknown> };
+    core.multiplayer = {
       participantId: api.participantId,
       get: api.get.bind(api),
       push: api.push.bind(api),
       getAll: api.getAll.bind(api),
       wait: api.wait.bind(api),
-    });
+    };
 
     const { displayElement, expectFinished, getData } = await startTimeline(
       [{ type: MultiplayerChoicePlugin, choices: ["Cooperate", "Defect"], expected_players: 2 }],

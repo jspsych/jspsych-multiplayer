@@ -4,9 +4,9 @@
     <title>Multiplayer Public Goods Game (local, two-tab) — jsPsych multiplayer</title>
     <!-- jsPsych core MUST carry the multiplayer API (jsPsych#3694), which is not yet in a release.
          Until it merges, load the PR's preview build from jsDelivr instead of the published `jspsych`.
-         This URL is pinned to #3694 commit 01b8ee4 (preview SHA c43b3a1) — see examples/README.md
+         This URL is pinned to #3694 commit c5c4499 (preview SHA 781eb500) — see examples/README.md
          "Running it" for how to find/re-pin the current preview link. -->
-    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@7b1d96a0576032d15bd0d7c434f01b2d614f3a85/packages/jspsych/dist/index.browser.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@781eb500facc7db27204b96aaf64ca09ccbae420/packages/jspsych/dist/index.browser.min.js"></script>
     <script src="https://unpkg.com/@jspsych/plugin-html-button-response"></script>
     <script src="https://unpkg.com/@jspsych/plugin-html-keyboard-response"></script>
     <!-- The multiplayer packages. These resolve once the sibling packages are built in this repo;
@@ -17,7 +17,7 @@
     <script src="../packages/plugin-multiplayer-countdown/dist/index.browser.min.js"></script>
     <link
       rel="stylesheet"
-      href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@7b1d96a0576032d15bd0d7c434f01b2d614f3a85/packages/jspsych/css/jspsych.css"
+      href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@781eb500facc7db27204b96aaf64ca09ccbae420/packages/jspsych/css/jspsych.css"
     />
   </head>
 
@@ -107,16 +107,16 @@
         // countdown plugin does, so a refresh resumes the same deadline and we never clobber the
         // `status` the lobby pushed. push is fire-and-forget; the timer falls back to our own start
         // until (possibly lower) peer timestamps arrive.
-        const me = jsPsych.pluginAPI.participantId;
-        const mine = jsPsych.pluginAPI.get(me) ?? {};
+        const me = jsPsych.multiplayer.participantId;
+        const mine = jsPsych.multiplayer.get(me) ?? {};
         const already = typeof mine[START_KEY] === "number" && Number.isFinite(mine[START_KEY]);
         const ownStart = already ? mine[START_KEY] : Date.now();
-        if (!already) jsPsych.pluginAPI.push({ ...mine, [START_KEY]: ownStart });
+        if (!already) jsPsych.multiplayer.push({ ...mine, [START_KEY]: ownStart });
 
         const clockEl = document.getElementById("pg-clock");
         const paint = () => {
           const startedAt =
-            jsPsychMultiplayerCountdown.resolveStartedAt(jsPsych.pluginAPI.getAll(), START_KEY) ??
+            jsPsychMultiplayerCountdown.resolveStartedAt(jsPsych.multiplayer.getAll(), START_KEY) ??
             ownStart;
           const remaining = jsPsychMultiplayerCountdown.computeRemaining(
             startedAt,
@@ -142,8 +142,8 @@
     const submitAndWait = {
       type: jsPsychMultiplayerSync,
       push_data: () => {
-        const me = jsPsych.pluginAPI.participantId;
-        const mine = jsPsych.pluginAPI.get(me) ?? {};
+        const me = jsPsych.multiplayer.participantId;
+        const mine = jsPsych.multiplayer.get(me) ?? {};
         return { ...mine, contribution: myContribution };
       },
       wait_for: (group) =>
@@ -156,8 +156,8 @@
     const reveal = {
       type: jsPsychHtmlKeyboardResponse,
       stimulus: () => {
-        const me = jsPsych.pluginAPI.participantId;
-        const group = jsPsych.pluginAPI.getAll();
+        const me = jsPsych.multiplayer.participantId;
+        const group = jsPsych.multiplayer.getAll();
         const contributions = Object.values(group).map((e) => e.contribution ?? 0);
         const pool = contributions.reduce((a, b) => a + b, 0);
         const share = (pool * MULTIPLIER) / N_PLAYERS;
@@ -195,7 +195,7 @@
 
     // Connect the backend, then run. Everything above is backend-agnostic — swapping the adapter is
     // the only change needed to move from local two-tab testing to a networked deployment.
-    jsPsych.pluginAPI.connect(localAdapter).then(() => {
+    jsPsych.multiplayer.connect(localAdapter).then(() => {
       jsPsych.run([lobby, contribution, submitAndWait, reveal, doneScreen]);
     });
   </script>

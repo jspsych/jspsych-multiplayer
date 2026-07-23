@@ -2,7 +2,12 @@ import { JsPsych, JsPsychPlugin, ParameterType, TrialType } from "jspsych";
 
 import { version } from "../package.json";
 import { ChatMessage, appendOwnMessage, mergeMessages } from "./chat-core";
-import { GroupSessionData, MultiplayerApiLike, Unsubscribe } from "./multiplayer-api";
+import {
+  GroupSessionData,
+  MultiplayerApiLike,
+  Unsubscribe,
+  resolveMultiplayerApi,
+} from "./multiplayer-api";
 import {
   InteractionEvent,
   ScoreResult,
@@ -434,7 +439,7 @@ const P = "jspsych-multiplayer-reference-game";
  * Like `plugin-multiplayer-chat`, the trial stays open and re-renders on every group-session
  * update: it subscribes to the shared session, merges the chat transcript, and watches for the
  * matcher's submitted assignment — the shared trigger on which both clients score, show feedback,
- * and end. Requires a connected multiplayer adapter — call `await jsPsych.pluginAPI.connect(adapter)`
+ * and end. Requires a connected multiplayer adapter — call `await jsPsych.multiplayer.connect(adapter)`
  * before `jsPsych.run()`.
  *
  * @author Mandy Liao
@@ -449,9 +454,7 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
   // against `finishTrial()`, so an async `trial` that resolves after setup would end the trial
   // immediately. A sync `trial` makes jsPsych fire `on_load` itself and wait for `finishTrial()`.
   trial(display_element: HTMLElement, trial: TrialType<Info>) {
-    // The multiplayer API is flattened onto pluginAPI by jsPsych core (jsPsych#3694). The published
-    // `jspsych` types don't carry it yet, so reach it through the local interface with one cast.
-    const api = this.jsPsych.pluginAPI as unknown as MultiplayerApiLike;
+    const api = resolveMultiplayerApi(this.jsPsych);
     const me = api.participantId;
 
     // --- Resolve & validate configuration -------------------------------------------------------

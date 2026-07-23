@@ -14,7 +14,7 @@ Requires a connected multiplayer adapter, plus a way to assign the two roles. [`
 
 ```js
 const jsPsych = initJsPsych();
-await jsPsych.pluginAPI.connect(new jsPsychAdapterMultiplayerJatos());
+await jsPsych.multiplayer.connect(new jsPsychAdapterMultiplayerJatos());
 await jsPsych.run(timeline);
 ```
 

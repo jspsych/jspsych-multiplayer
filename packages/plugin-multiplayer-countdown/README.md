@@ -12,7 +12,7 @@ Requires a connected multiplayer adapter (e.g. `@jspsych-multiplayer/adapter-mul
 
 ```js
 const jsPsych = initJsPsych();
-await jsPsych.pluginAPI.connect(new jsPsychAdapterMultiplayerJatos());
+await jsPsych.multiplayer.connect(new jsPsychAdapterMultiplayerJatos());
 await jsPsych.run(timeline);
 ```
 
@@ -117,7 +117,7 @@ The flagship use case renders the timer *during another trial* (e.g. a shared dr
 
 ```js
 const key = jsPsychMultiplayerCountdown.startedAtKey("draw_phase");
-const startedAt = jsPsychMultiplayerCountdown.resolveStartedAt(jsPsych.pluginAPI.getAll(), key);
+const startedAt = jsPsychMultiplayerCountdown.resolveStartedAt(jsPsych.multiplayer.getAll(), key);
 const remaining = jsPsychMultiplayerCountdown.computeRemaining(startedAt, 60000, Date.now());
 myTimerEl.textContent = jsPsychMultiplayerCountdown.formatTime(remaining);
 ```

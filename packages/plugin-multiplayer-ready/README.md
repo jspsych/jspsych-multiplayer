@@ -16,7 +16,7 @@ Requires a connected multiplayer adapter (e.g. `@jspsych-multiplayer/adapter-mul
 
 ```js
 const jsPsych = initJsPsych();
-await jsPsych.pluginAPI.connect(new jsPsychAdapterMultiplayerJatos());
+await jsPsych.multiplayer.connect(new jsPsychAdapterMultiplayerJatos());
 await jsPsych.run(timeline);
 ```
 
@@ -65,11 +65,11 @@ const readyGate = {
     // Role assignment stays experiment-specific — do it here off data.group, or hand the snapshot
     // to @jspsych-multiplayer/plugin-multiplayer-role for deterministic consensus.
     const [firstId, secondId] = Object.keys(data.group).sort();
-    myRole = jsPsych.pluginAPI.participantId === firstId ? "proposer" : "responder";
+    myRole = jsPsych.multiplayer.participantId === firstId ? "proposer" : "responder";
   },
 };
 ```
 
 ## Scope
 
-A jsPsych plugin is a trial, so this plugin covers readiness checkpoints that are their own timeline step (lobbies, "press ready to continue" gates). For communication _in the middle_ of another interactive trial, use the raw `jsPsych.pluginAPI` (`push`, `wait`, `get`, `getAll`, `subscribe`) directly, or `plugin-multiplayer-sync` for a custom-condition barrier.
+A jsPsych plugin is a trial, so this plugin covers readiness checkpoints that are their own timeline step (lobbies, "press ready to continue" gates). For communication _in the middle_ of another interactive trial, use the raw `jsPsych.multiplayer` (`push`, `wait`, `get`, `getAll`, `subscribe`) directly, or `plugin-multiplayer-sync` for a custom-condition barrier.

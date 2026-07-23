@@ -12,7 +12,7 @@ Requires a connected multiplayer adapter (e.g. `@jspsych-multiplayer/adapter-mul
 
 ```js
 const jsPsych = initJsPsych();
-await jsPsych.pluginAPI.connect(new jsPsychAdapterMultiplayerJatos());
+await jsPsych.multiplayer.connect(new jsPsychAdapterMultiplayerJatos());
 await jsPsych.run(timeline);
 ```
 

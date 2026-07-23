@@ -121,7 +121,7 @@ browser tabs, no server**.
 Two composition details worth copying:
 
 1. **`player_label` turns ids into lobby names on the reveal.** The lobby pushes each participant's
-   `name`; the choice trial's `player_label` reads it back (`jsPsych.pluginAPI.get(id).name`) so the
+   `name`; the choice trial's `player_label` reads it back (`jsPsych.multiplayer.get(id).name`) so the
    reveal reads "Alice: Cooperate" rather than a raw id, and labels this client "You".
 2. **The `payoff` hook scores the round.** It receives `{ participantId: { index, label } }` for
    everyone plus this client's id, and returns this client's points — here, a lookup into the classic
@@ -288,7 +288,7 @@ Two composition details worth copying:
    players who made it through the lobby.
 
 Contrast with `live-scoreboard-room.html`, which renders the standings **live** from the same pure
-ranking core (via `pluginAPI.subscribe`) as peers report, rather than revealing once at the end.
+ranking core (via `jsPsych.multiplayer.subscribe`) as peers report, rather than revealing once at the end.
 
 ### Swapping in a real backend
 
@@ -312,7 +312,7 @@ The **live** counterpart to `scoreboard-room.html`: the same name → lobby → 
 standings panel stays on screen through the whole quiz and **fills in and re-ranks in real time** as
 each player's running score arrives — no barrier, no one-shot reveal. There is no separate plugin for
 this: the panel is rendered directly from `plugin-multiplayer-scoreboard`'s exported pure core
-(`buildLeaderboard`) inside a `jsPsych.pluginAPI.subscribe` callback, the same
+(`buildLeaderboard`) inside a `jsPsych.multiplayer.subscribe` callback, the same
 "use the statics during another trial" pattern as `public-goods-local.html`'s countdown overlay.
 
 ### What it demonstrates

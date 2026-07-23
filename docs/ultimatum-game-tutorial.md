@@ -102,7 +102,7 @@ const localAdapter = new jsPsychAdapterMultiplayerLocal({ persistParticipant: tr
 
 // ...timeline definitions...
 
-jsPsych.pluginAPI.connect(localAdapter).then(() => {
+jsPsych.multiplayer.connect(localAdapter).then(() => {
   jsPsych.run([lobby, assignRoles, gameFull, noGroupScreen, gameTimeline, doneScreen]);
 });
 ```
@@ -168,7 +168,7 @@ const assignRoles = {
     const byRole = jsPsychMultiplayerRole.participantsByRole();
     proposerId = byRole.proposer?.[0];
     responderId = byRole.responder?.[0];
-    myJoinedAt = data.group?.[jsPsych.pluginAPI.participantId]?.joinedAt;
+    myJoinedAt = data.group?.[jsPsych.multiplayer.participantId]?.joinedAt;
   },
 };
 ```
@@ -440,14 +440,14 @@ diff in experiment logic is the connection code.
 ```js
 // Local (two tabs, no server):
 const localAdapter = new jsPsychAdapterMultiplayerLocal({ persistParticipant: true });
-jsPsych.pluginAPI.connect(localAdapter).then(() => {
+jsPsych.multiplayer.connect(localAdapter).then(() => {
   jsPsych.run([...]);
 });
 
 // JATOS (real, cross-device study):
 jatos.onLoad(async () => {
   const jsPsych = initJsPsych({ on_finish: () => jatos.endStudy() });
-  await jsPsych.pluginAPI.connect(new jsPsychAdapterMultiplayerJatos());
+  await jsPsych.multiplayer.connect(new jsPsychAdapterMultiplayerJatos());
   jsPsych.run([...]);
 });
 ```

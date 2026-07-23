@@ -1,7 +1,12 @@
 import { JsPsych, JsPsychPlugin, ParameterType, TrialType } from "jspsych";
 
 import { version } from "../package.json";
-import { GroupSessionData, MultiplayerApiLike, isMultiplayerTimeoutError } from "./multiplayer-api";
+import {
+  GroupSessionData,
+  MultiplayerApiLike,
+  isMultiplayerTimeoutError,
+  resolveMultiplayerApi,
+} from "./multiplayer-api";
 
 const info = <const>{
   name: "multiplayer-sync",
@@ -10,7 +15,7 @@ const info = <const>{
     /**
      * Predicate evaluated against the full group session on every update. The trial ends as soon
      * as it returns true. Receives the group session data (keyed by participantId). This is the
-     * same condition you would pass to `jsPsych.pluginAPI.wait()`.
+     * same condition you would pass to `jsPsych.multiplayer.wait()`.
      */
     wait_for: {
       type: ParameterType.FUNCTION,
@@ -95,7 +100,7 @@ type Info = typeof info;
  * push → wait pattern as a single declarative trial so experiments don't have to shoehorn waiting
  * into `call-function` or a `NO_KEYS` keyboard-response trial.
  *
- * Requires a connected multiplayer adapter — call `await jsPsych.pluginAPI.connect(adapter)` before
+ * Requires a connected multiplayer adapter — call `await jsPsych.multiplayer.connect(adapter)` before
  * `jsPsych.run()`. The resolved group session is stored in the trial's `group` data so peer reads
  * and role assignment can happen in a normal `on_finish`.
  *
@@ -108,9 +113,7 @@ class MultiplayerSyncPlugin implements JsPsychPlugin<Info> {
   constructor(private jsPsych: JsPsych) {}
 
   async trial(display_element: HTMLElement, trial: TrialType<Info>, on_load?: () => void) {
-    // The multiplayer API is flattened onto pluginAPI by jsPsych core (jsPsych#3694). The published
-    // `jspsych` types don't carry it yet, so reach it through the local interface with one cast.
-    const api = this.jsPsych.pluginAPI as unknown as MultiplayerApiLike;
+    const api = resolveMultiplayerApi(this.jsPsych);
 
     if (typeof trial.wait_for !== "function") {
       throw new Error(

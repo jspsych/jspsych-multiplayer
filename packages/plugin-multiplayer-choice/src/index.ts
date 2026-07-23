@@ -11,7 +11,7 @@ import {
   plurality,
   tally,
 } from "./choice-core";
-import { MultiplayerApiLike } from "./multiplayer-api";
+import { MultiplayerApiLike, resolveMultiplayerApi } from "./multiplayer-api";
 
 // Public types are part of the API. They erase at build time, so exporting them does not add a
 // runtime named export — the bundle stays a single default export, per the jsPsych plugin packaging
@@ -150,7 +150,7 @@ type Info = typeof info;
  * `record_choices_by_player: false` to keep the recorded data anonymous too). The pure core
  * (`collectChoices`, `countChosen`, `tally`, `plurality`) is reachable as static members.
  *
- * Requires a connected multiplayer adapter — call `await jsPsych.pluginAPI.connect(adapter)` before
+ * Requires a connected multiplayer adapter — call `await jsPsych.multiplayer.connect(adapter)` before
  * `jsPsych.run()`.
  *
  * @see {@link https://github.com/jspsych/jspsych-multiplayer/tree/main/packages/plugin-multiplayer-choice}
@@ -170,14 +170,12 @@ class MultiplayerChoicePlugin implements JsPsychPlugin<Info> {
   // plugin-multiplayer-sync — jsPsych does NOT auto-fire on_load; we invoke it once the choice
   // screen is rendered, and end the trial by calling finishTrial after the (optional) reveal.
   async trial(display_element: HTMLElement, trial: TrialType<Info>, on_load?: () => void) {
-    // The multiplayer API is flattened onto pluginAPI by jsPsych core (jsPsych#3694). The published
-    // `jspsych` types don't carry it yet, so reach it through the local interface with one cast.
-    const api = this.jsPsych.pluginAPI as unknown as MultiplayerApiLike;
+    const api = resolveMultiplayerApi(this.jsPsych);
     const me = api.participantId;
     if (me == null) {
       throw new Error(
         "plugin-multiplayer-choice: no participantId — the multiplayer adapter must be connected " +
-          "(await jsPsych.pluginAPI.connect(adapter)) before this trial runs."
+          "(await jsPsych.multiplayer.connect(adapter)) before this trial runs."
       );
     }
 

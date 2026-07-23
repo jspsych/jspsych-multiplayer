@@ -47,7 +47,7 @@ export interface LocalAdapterOptions {
  * tabs — no server:
  *
  *   const jsPsych = initJsPsych();
- *   await jsPsych.pluginAPI.connect(new LocalAdapter());
+ *   await jsPsych.multiplayer.connect(new LocalAdapter());
  *   await jsPsych.run(timeline);
  *
  * **Development / demo / tutorial / CI only — not for data collection.** `localStorage` and its

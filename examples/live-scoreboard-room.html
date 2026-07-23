@@ -7,7 +7,7 @@
          This URL is pinned to the same #3694 preview SHA as the other examples. A SHA-pinned URL keeps
          loading indefinitely (it never 404s); what goes stale is the #3694 API it was pinned against,
          so if the demo misbehaves against a newer #3694, re-pin — see examples/README.md "Running it". -->
-    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@7b1d96a0576032d15bd0d7c434f01b2d614f3a85/packages/jspsych/dist/index.browser.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@781eb500facc7db27204b96aaf64ca09ccbae420/packages/jspsych/dist/index.browser.min.js"></script>
     <script src="https://unpkg.com/@jspsych/plugin-survey-text"></script>
     <script src="https://unpkg.com/@jspsych/plugin-html-button-response"></script>
     <!-- The multiplayer packages resolve from the sibling packages' built dist/ in this repo (run
@@ -21,7 +21,7 @@
     <script src="../packages/plugin-multiplayer-scoreboard/dist/index.browser.min.js?v=1"></script>
     <link
       rel="stylesheet"
-      href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@7b1d96a0576032d15bd0d7c434f01b2d614f3a85/packages/jspsych/css/jspsych.css"
+      href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@781eb500facc7db27204b96aaf64ca09ccbae420/packages/jspsych/css/jspsych.css"
     />
     <style>
       /* The live standings panel lives OUTSIDE the jsPsych display element (jsPsych wipes the display
@@ -66,7 +66,7 @@
     // panel stays on screen through the whole quiz and re-ranks in real time as each player's running
     // score arrives — no barrier, no one-shot reveal. There is no separate plugin for this: the panel
     // is rendered from plugin-multiplayer-scoreboard's exported pure core (buildLeaderboard) inside a
-    // jsPsych.pluginAPI.subscribe callback — the "use the statics during another trial" pattern, like
+    // jsPsych.multiplayer.subscribe callback — the "use the statics during another trial" pattern, like
     // public-goods-local.html's countdown overlay. It composes:
     //   • adapter-multiplayer-local     — the network backend. localStorage + cross-tab signalling, so
     //                                     the whole thing runs by OPENING TWO BROWSER TABS — no server.
@@ -129,7 +129,7 @@
       if (!panel) return;
       const rows = jsPsychMultiplayerScoreboard.buildLeaderboard(group, {
         dataKey: "score",
-        self: jsPsych.pluginAPI.participantId,
+        self: jsPsych.multiplayer.participantId,
         sort: "desc",
       });
       const items = rows
@@ -149,7 +149,7 @@
       panel.id = "live-scoreboard";
       document.body.appendChild(panel);
       // subscribe replays the current snapshot on registration, so the panel paints immediately.
-      unsubscribe = jsPsych.pluginAPI.subscribe(renderBoard);
+      unsubscribe = jsPsych.multiplayer.subscribe(renderBoard);
     };
 
     const removePanel = () => {
@@ -162,7 +162,7 @@
     // REPLACES the whole slot and the lobby's `name` must survive. `score` uses the ScoreEntry shape
     // ({ score, label }) that buildLeaderboard reads.
     const pushScore = () => {
-      const api = jsPsych.pluginAPI;
+      const api = jsPsych.multiplayer;
       const mine = api.get(api.participantId) ?? {};
       const total = jsPsych.data.get().select("points").sum();
       api
@@ -232,7 +232,7 @@
 
     // Connect the backend, then run. Everything above is backend-agnostic — swapping the adapter on
     // the line below is the only change needed to move from local two-tab testing to JATOS.
-    jsPsych.pluginAPI.connect(localAdapter).then(() => {
+    jsPsych.multiplayer.connect(localAdapter).then(() => {
       jsPsych.run([nameTrial, lobbyTrial, ...quizTrials, doneTrial]).then(() => {
         removePanel();
         jsPsych.getDisplayElement().innerHTML = `

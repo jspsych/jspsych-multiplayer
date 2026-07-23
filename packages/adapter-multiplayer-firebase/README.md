@@ -10,7 +10,7 @@ It is a sibling of [`adapter-multiplayer-local`](../adapter-multiplayer-local) a
 | **`firebase`** | **any device, anywhere** | **a free Firebase project** | **real cross-device data collection** |
 | `jatos` | any device | a self-hosted JATOS server | lab-hosted studies |
 
-> **Status:** built against the jsPsych multiplayer API from [jsPsych#3694](https://github.com/jspsych/jsPsych/pull/3694), which is not yet released. The adapter implements a local interface mirroring that API's `MultiplayerAdapter` (`src/multiplayer-adapter.ts`) — the single seam to re-verify once #3694 lands. Connecting an adapter requires `pluginAPI.connect()`, which only exists in #3694, so experiments cannot *run* until that ships regardless of which adapter you choose.
+> **Status:** built against the jsPsych multiplayer API from [jsPsych#3694](https://github.com/jspsych/jsPsych/pull/3694), which is not yet released. The adapter implements a local interface mirroring that API's `MultiplayerAdapter` (`src/multiplayer-adapter.ts`) — the single seam to re-verify once #3694 lands. Connecting an adapter requires `jsPsych.multiplayer.connect()`, which only exists in #3694, so experiments cannot *run* until that ships regardless of which adapter you choose.
 
 ## Usage
 
@@ -27,7 +27,7 @@ const firebaseConfig = {
 };
 
 const jsPsych = initJsPsych();
-await jsPsych.pluginAPI.connect(new jsPsychAdapterMultiplayerFirebase({ firebaseConfig }));
+await jsPsych.multiplayer.connect(new jsPsychAdapterMultiplayerFirebase({ firebaseConfig }));
 await jsPsych.run(timeline);
 ```
 

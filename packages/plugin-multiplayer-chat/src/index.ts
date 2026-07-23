@@ -2,7 +2,12 @@ import { JsPsych, JsPsychPlugin, ParameterType, TrialType } from "jspsych";
 
 import { version } from "../package.json";
 import { ChatMessage, appendOwnMessage, mergeMessages } from "./chat-core";
-import { GroupSessionData, MultiplayerApiLike, Unsubscribe } from "./multiplayer-api";
+import {
+  GroupSessionData,
+  MultiplayerApiLike,
+  Unsubscribe,
+  resolveMultiplayerApi,
+} from "./multiplayer-api";
 
 const info = <const>{
   name: "multiplayer-chat",
@@ -117,7 +122,7 @@ type EndReason = "duration" | "button" | "condition";
  * an `end_when` predicate over the group session becoming true. The transcript this client saw is
  * stored in the trial data.
  *
- * Requires a connected multiplayer adapter — call `await jsPsych.pluginAPI.connect(adapter)` before
+ * Requires a connected multiplayer adapter — call `await jsPsych.multiplayer.connect(adapter)` before
  * `jsPsych.run()`.
  *
  * @author Hannah Tsukamoto
@@ -132,9 +137,7 @@ class MultiplayerChatPlugin implements JsPsychPlugin<Info> {
   // against `finishTrial()`, so an async `trial` that resolves after setup would end the trial
   // immediately. A sync `trial` makes jsPsych fire `on_load` itself and wait for `finishTrial()`.
   trial(display_element: HTMLElement, trial: TrialType<Info>) {
-    // The multiplayer API is flattened onto pluginAPI by jsPsych core (jsPsych#3694). The published
-    // `jspsych` types don't carry it yet, so reach it through the local interface with one cast.
-    const api = this.jsPsych.pluginAPI as unknown as MultiplayerApiLike;
+    const api = resolveMultiplayerApi(this.jsPsych);
     const me = api.participantId;
     const dataKey = trial.data_key;
 

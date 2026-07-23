@@ -15,7 +15,12 @@ import {
   shouldRecordPoint,
   undoLastStroke,
 } from "./draw-core";
-import { GroupSessionData, MultiplayerApiLike, Unsubscribe } from "./multiplayer-api";
+import {
+  GroupSessionData,
+  MultiplayerApiLike,
+  Unsubscribe,
+  resolveMultiplayerApi,
+} from "./multiplayer-api";
 
 const DEFAULT_COLORS = ["#1a1a1a", "#e03131", "#2f9e44", "#1971c2", "#f08c00"];
 const DEFAULT_BRUSH_SIZES = [0.004, 0.01, 0.02]; // normalized against canvas width
@@ -154,7 +159,7 @@ type EndReason = "duration" | "button" | "condition";
  * screen. Includes pen/eraser tools, a fixed color palette, brush sizes, and an undo button that
  * only ever removes this participant's own last stroke.
  *
- * Requires a connected multiplayer adapter — call `await jsPsych.pluginAPI.connect(adapter)` before
+ * Requires a connected multiplayer adapter — call `await jsPsych.multiplayer.connect(adapter)` before
  * `jsPsych.run()`.
  *
  * @author Hannah Tsukamoto
@@ -168,7 +173,7 @@ class MultiplayerDrawPlugin implements JsPsychPlugin<Info> {
   // Deliberately synchronous (returns undefined, NOT a Promise) — see plugin-multiplayer-chat for
   // why: jsPsych races a returned promise against `finishTrial()`.
   trial(display_element: HTMLElement, trial: TrialType<Info>) {
-    const api = this.jsPsych.pluginAPI as unknown as MultiplayerApiLike;
+    const api = resolveMultiplayerApi(this.jsPsych);
     const me = api.participantId;
     const dataKey = trial.data_key;
     const aspectRatio = trial.aspect_ratio > 0 ? trial.aspect_ratio : 4 / 3;

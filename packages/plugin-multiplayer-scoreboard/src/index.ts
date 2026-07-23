@@ -1,7 +1,7 @@
 import { JsPsych, JsPsychPlugin, ParameterType, TrialType } from "jspsych";
 
 import { version } from "../package.json";
-import { GroupSessionData, MultiplayerApiLike } from "./multiplayer-api";
+import { GroupSessionData, MultiplayerApiLike, resolveMultiplayerApi } from "./multiplayer-api";
 import { LeaderboardRow, buildLeaderboard, countReported } from "./scoreboard";
 import { getLeaderboard, getMyRank, getMyScore, setMyStanding } from "./store";
 
@@ -122,7 +122,7 @@ type Info = typeof info;
  * (`MultiplayerScoreboardPlugin.buildLeaderboard`, `.getMyRank`, `.getMyScore`, `.getLeaderboard`) —
  * usable standalone, today.
  *
- * Requires a connected multiplayer adapter — call `await jsPsych.pluginAPI.connect(adapter)` before
+ * Requires a connected multiplayer adapter — call `await jsPsych.multiplayer.connect(adapter)` before
  * `jsPsych.run()`.
  *
  * @see {@link https://github.com/jspsych/jspsych-multiplayer/tree/main/packages/plugin-multiplayer-scoreboard}
@@ -147,14 +147,12 @@ class MultiplayerScoreboardPlugin implements JsPsychPlugin<Info> {
   // wait for the `finishTrial()` we call on the continue button (or, with no button, never — hence
   // the warning). The barrier is awaited internally.
   trial(display_element: HTMLElement, trial: TrialType<Info>) {
-    // The multiplayer API is flattened onto pluginAPI by jsPsych core (jsPsych#3694). The published
-    // `jspsych` types don't carry it yet, so reach it through the local interface with one cast.
-    const api = this.jsPsych.pluginAPI as unknown as MultiplayerApiLike;
+    const api = resolveMultiplayerApi(this.jsPsych);
     const me = api.participantId;
     if (me == null) {
       throw new Error(
         "plugin-multiplayer-scoreboard: no participantId — the multiplayer adapter must be connected " +
-          "(await jsPsych.pluginAPI.connect(adapter)) before this trial runs."
+          "(await jsPsych.multiplayer.connect(adapter)) before this trial runs."
       );
     }
 

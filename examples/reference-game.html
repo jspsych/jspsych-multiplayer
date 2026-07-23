@@ -4,9 +4,9 @@
     <title>Repeated Reference Game — sequential (local, two-tab) — jsPsych multiplayer</title>
     <!-- jsPsych core MUST carry the multiplayer API (jsPsych#3694), which is not yet in a release.
          Until it merges, load the PR's preview build from jsDelivr instead of the published `jspsych`.
-         SHA-pinned to #3694 commit 0e60825 (preview SHA 7b1d96a0) — see examples/README.md "Running
+         SHA-pinned to #3694 commit c5c4499 (preview SHA 781eb500) — see examples/README.md "Running
          it" for how to re-pin if the demo misbehaves against a newer #3694. -->
-    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@7b1d96a0576032d15bd0d7c434f01b2d614f3a85/packages/jspsych/dist/index.browser.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@781eb500facc7db27204b96aaf64ca09ccbae420/packages/jspsych/dist/index.browser.min.js"></script>
     <script src="https://unpkg.com/@jspsych/plugin-survey-text"></script>
     <script src="https://unpkg.com/@jspsych/plugin-html-button-response"></script>
     <script src="https://unpkg.com/@jspsych/plugin-html-keyboard-response"></script>
@@ -18,7 +18,7 @@
     <script src="../packages/plugin-multiplayer-reference-game/dist/index.browser.min.js?v=1"></script>
     <link
       rel="stylesheet"
-      href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@7b1d96a0576032d15bd0d7c434f01b2d614f3a85/packages/jspsych/css/jspsych.css"
+      href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@781eb500facc7db27204b96aaf64ca09ccbae420/packages/jspsych/css/jspsych.css"
     />
   </head>
 
@@ -147,7 +147,7 @@
           stimulus: "<p>This game is already full. Thanks for your interest!</p>",
           choices: "NO_KEYS",
           trial_duration: 4000,
-          on_finish: () => jsPsych.pluginAPI.disconnect(),
+          on_finish: () => jsPsych.multiplayer.disconnect(),
         },
       ],
       conditional_function: () => myRole === "spectator",
@@ -205,7 +205,7 @@
       },
     };
 
-    jsPsych.pluginAPI.connect(localAdapter).then(() => {
+    jsPsych.multiplayer.connect(localAdapter).then(() => {
       jsPsych.run([nameTrial, lobbyTrial, roleTrial, spectatorScreen, gameLoop, doneTrial]);
     });
   </script>

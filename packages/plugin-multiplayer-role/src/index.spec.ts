@@ -69,11 +69,11 @@ class MockApi implements MultiplayerApiLike {
   }
 }
 
-/** Minimal jsPsych double exposing `pluginAPI` (the mock) and capturing `finishTrial` data. */
+/** Minimal jsPsych double exposing `multiplayer` (the mock) and capturing `finishTrial` data. */
 function makeJsPsych(api: MockApi) {
   const finished: Array<Record<string, any>> = [];
   const jsPsych = {
-    pluginAPI: api,
+    multiplayer: api,
     finishTrial: (data: Record<string, any>) => finished.push(data),
   };
   return { jsPsych, finished };
@@ -478,19 +478,21 @@ describe("plugin-multiplayer-role — trial wrapper", () => {
 // ---------------------------------------------------------------------------------------------------
 describe("plugin-multiplayer-role — real jsPsych pipeline (startTimeline smoke test)", () => {
   it("runs through jsPsych's parameter pipeline, records trial_type, and saves the assignment", async () => {
-    // Real jsPsych instance; only the multiplayer seam (flattened onto pluginAPI by jsPsych core in
+    // Real jsPsych instance; only the multiplayer seam (its own module in jsPsych core as of
     // jsPsych#3694, not yet in the published types) is stubbed with the same mock the unit tests use.
     const jsPsych = initJsPsych();
     const api = new MockApi("p1");
     api.seed("p1", { joinedAt: 100 });
     api.seed("p2", { joinedAt: 200 });
-    Object.assign(jsPsych.pluginAPI, {
+    // A released jsPsych has no `multiplayer` module (jsPsych#3694 is unmerged), so create it here.
+    const core = jsPsych as unknown as { multiplayer: Record<string, unknown> };
+    core.multiplayer = {
       participantId: api.participantId,
       push: api.push.bind(api),
       get: api.get.bind(api),
       getAll: api.getAll.bind(api),
       wait: api.wait.bind(api),
-    });
+    };
 
     // jsPsych's parameter pipeline warns when a FUNCTION-typed parameter receives a string — the
     // documented, deliberate tradeoff of typing `strategy` as FUNCTION (see info.parameters). Capture
