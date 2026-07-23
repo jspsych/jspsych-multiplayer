@@ -32,7 +32,7 @@ tab. Tutorials are `.mdx` and use the local `<Steps>/<Step>` component from
 ## ⚠️ One page still needs a package release
 
 The packages and all 14 examples now run on `jsPsych.multiplayer`, pinned to preview build
-`781eb500` (built by jsPsych's PR bot from #3694's current head). The **ultimatum
+`151ab52` (built by jsPsych's PR bot from #3694's current head). The **ultimatum
 tutorial** therefore matches the example it points at, and runs today.
 
 The **first tutorial** does not, and cannot be fixed here. Its premise is "one HTML file,
