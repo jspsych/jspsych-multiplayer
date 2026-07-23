@@ -1,6 +1,6 @@
 {
   "name": "@jspsych-multiplayer/adapter-multiplayer-firebase",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Firebase Realtime Database adapter for the jsPsych multiplayer API (real cross-device multiplayer, ~zero backend)",
   "type": "module",
   "main": "dist/index.cjs",
