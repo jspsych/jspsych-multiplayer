@@ -1,0 +1,248 @@
+---
+id: first-multiplayer-trial
+title: Your first multiplayer trial
+sidebar_label: Your first multiplayer trial
+sidebar_position: 1
+description: Ten minutes, no server — get two browser tabs talking to each other.
+---
+
+import {Steps, Step} from '@site/src/components/Steps';
+
+# Your first multiplayer trial
+
+About ten minutes, no server, no account. At the end you will have a single HTML file in
+which **two browser tabs wait for each other**, exchange a value, and then each display
+what the other said.
+
+That is the whole of multiplayer in miniature: push something into shared state, wait for a
+condition over the group, read the result.
+
+:::info Before you start
+The multiplayer API lives on `jsPsych.multiplayer`, added in
+[jsPsych#3694](https://github.com/jspsych/jsPsych/pull/3694), which is **still in review**
+and not part of any `jspsych` release yet. So the snippets below load a **preview build** of
+jsPsych core from jsDelivr rather than the released package. Once the PR merges and a
+jsPsych release carries the API, replace that one script tag with the ordinary `jspsych`
+bundle; nothing else changes.
+
+Because the API is still under review, details on this site can change before release.
+:::
+
+:::danger Waiting on a package release
+The plugin and adapter script tags below load from a CDN, which serves the last version
+published to npm — and that version predates the move to `jsPsych.multiplayer`, so it
+cannot find the API on the preview build pinned here.
+
+Until those packages are republished, run this tutorial's code from a clone of the
+[repository](https://github.com/jspsych/jspsych-multiplayer) instead: `npm install &&
+npm run build`, then point the two script tags at
+`packages/<name>/dist/index.browser.min.js`, exactly as the files in `examples/` do. Those
+examples are already on the new namespace and run today.
+
+This notice comes down with the next release.
+:::
+
+## Build it
+
+<Steps>
+
+<Step title="Create the file">
+
+Make an empty directory with one file, `first-trial.html`, containing:
+
+```html
+<!DOCTYPE html>
+<html>
+  <head>
+    <!-- jsPsych core, preview build carrying the multiplayer API (see note above). -->
+    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@781eb500facc7db27204b96aaf64ca09ccbae420/packages/jspsych/dist/index.browser.min.js"></script>
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@781eb500facc7db27204b96aaf64ca09ccbae420/packages/jspsych/css/jspsych.css"
+    />
+
+    <script src="https://unpkg.com/@jspsych/plugin-html-button-response"></script>
+    <script src="https://unpkg.com/@jspsych/plugin-html-keyboard-response"></script>
+
+    <!-- The backend, and one multiplayer plugin. -->
+    <script src="https://unpkg.com/@jspsych-multiplayer/adapter-multiplayer-local"></script>
+    <script src="https://unpkg.com/@jspsych-multiplayer/plugin-multiplayer-sync"></script>
+  </head>
+  <body></body>
+  <script>
+    // filled in below
+  </script>
+</html>
+```
+
+</Step>
+
+<Step title="Connect a backend">
+
+Every multiplayer experiment registers exactly one **adapter** — the thing that decides
+where shared state lives — before the timeline runs. We use the local adapter, which
+synchronizes tabs in one browser using `localStorage` and needs no infrastructure at all.
+
+Inside the empty `<script>`:
+
+```js
+const jsPsych = initJsPsych();
+
+const adapter = new jsPsychAdapterMultiplayerLocal({ persistParticipant: true });
+
+// ...timeline goes here...
+
+jsPsych.multiplayer.connect(adapter).then(() => {
+  jsPsych.run(timeline);
+});
+```
+
+`connect` must resolve **before** `jsPsych.run()`, because every multiplayer trial talks to
+the group session through the connected adapter. `persistParticipant: true` means a
+mid-experiment refresh rejoins as the same participant instead of leaving a ghost behind.
+
+</Step>
+
+<Step title="Ask for something to share">
+
+An ordinary, entirely single-player jsPsych trial:
+
+```js
+let myChoice;
+
+const chooseTrial = {
+  type: jsPsychHtmlButtonResponse,
+  stimulus: "<p>Pick a colour. Your partner will see it.</p>",
+  choices: ["red", "blue"],
+  on_finish: (data) => {
+    myChoice = ["red", "blue"][data.response];
+  },
+};
+```
+
+Nothing about this trial knows multiplayer exists. That is the point: multiplayer
+experiments are mostly normal jsPsych, with coordination inserted at the seams.
+
+</Step>
+
+<Step title="Push and wait — the barrier">
+
+Here is the one genuinely multiplayer trial. `plugin-multiplayer-sync` does exactly two
+things, in order: writes `push_data` into **the participant's own** slot of the group
+session, then blocks until `wait_for` — a predicate that receives the whole group — returns
+true.
+
+```js
+const barrier = {
+  type: jsPsychMultiplayerSync,
+  push_data: () => ({ choice: myChoice }),
+  wait_for: (group) => {
+    const slots = Object.values(group);
+    return slots.length >= 2 && slots.every((slot) => slot.choice !== undefined);
+  },
+  message: "<p>Waiting for your partner to choose…</p>",
+};
+```
+
+Read `wait_for` aloud: *at least two participants are present, and every one of them has
+pushed a choice.* Both tabs run this same predicate over the same data and both release at
+the same moment. This push-then-wait pair is the **synchronization barrier**, and most
+turn-based paradigms are built out of nothing else.
+
+Note `push_data` is a *function*: `myChoice` does not exist when the timeline is defined,
+only when the trial starts.
+
+:::caution A push replaces the whole slot
+`push_data` does not merge — it overwrites everything the participant's slot previously
+held. If other clients depend on a field pushed earlier, include it again. See the
+[ultimatum tutorial](/tutorials/ultimatum-game) for the failure mode this causes.
+:::
+
+</Step>
+
+<Step title="Show what the partner said">
+
+The barrier stores the group snapshot it resolved over in its trial data, so reading the
+partner's value needs no extra network call — capture it in the barrier's `on_finish`.
+Replace the `barrier` from the previous step with this final version:
+
+```js
+let partnerChoice;
+
+const barrier = {
+  type: jsPsychMultiplayerSync,
+  push_data: () => ({ choice: myChoice }),
+  wait_for: (group) => {
+    const slots = Object.values(group);
+    return slots.length >= 2 && slots.every((slot) => slot.choice !== undefined);
+  },
+  message: "<p>Waiting for your partner to choose…</p>",
+  on_finish: (data) => {
+    const me = jsPsych.multiplayer.participantId;
+    const partner = Object.entries(data.group).find(([id]) => id !== me);
+    partnerChoice = partner?.[1].choice;
+  },
+};
+```
+
+Then an ordinary trial reads the captured value back:
+
+```js
+const resultTrial = {
+  type: jsPsychHtmlKeyboardResponse,
+  stimulus: () => `<p>You picked <strong>${myChoice}</strong>.<br>
+                   Your partner picked <strong>${partnerChoice}</strong>.</p>
+                   <p>Press any key to finish.</p>`,
+};
+
+const timeline = [chooseTrial, barrier, resultTrial];
+```
+
+`data.group` is the snapshot the barrier resolved over; `participantId` is this client's own
+ID, so the entry that is not it is the partner. The `?.` matters: `wait_for` guarantees a
+partner exists here, but loosen that predicate later and an unguarded lookup crashes.
+
+If a value is needed outside a trial that already carries a snapshot,
+`jsPsych.multiplayer.getAll()` returns one synchronously.
+
+</Step>
+
+<Step title="Run it in two tabs">
+
+Serve the directory over HTTP — `file://` URLs do not share `localStorage`:
+
+```sh
+npx http-server .
+```
+
+Open `first-trial.html` from the printed URL. You will see your colour buttons, then the
+waiting message. Now look at the address bar: the adapter has appended a session id,
+`?mp_session=…`.
+
+:::warning Copy the whole URL, including `?mp_session=`
+Opening the bare URL in the second tab starts a *different* session, and the two tabs will
+wait for each other forever.
+:::
+
+Paste the full URL into a second tab, choose a colour there, and both tabs advance the
+instant the second choice lands.
+
+</Step>
+
+</Steps>
+
+## What you just learned
+
+- One **adapter**, registered once with `jsPsych.multiplayer.connect()`, decides where
+  shared state lives. Swapping it is how a two-tab prototype becomes a real study.
+- The **group session** is a map from participant ID to that participant's slot. Each
+  client writes only its own slot, and reads every slot.
+- A **barrier** — push, then wait for a predicate over the group — is the core primitive.
+
+## Next
+
+- [Ultimatum game](/tutorials/ultimatum-game) — a complete, deployable two-player
+  experiment: role assignment without a coordinator, dropout handling, and the one-line
+  swap to a real backend.
+- [Choosing an adapter](/guides/choosing-an-adapter) — when to leave the local adapter
+  behind, and what to replace it with.

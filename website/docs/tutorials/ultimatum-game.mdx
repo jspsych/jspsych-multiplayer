@@ -1,0 +1,495 @@
+---
+id: ultimatum-game
+title: Ultimatum game
+sidebar_label: Ultimatum game
+sidebar_position: 2
+description: Build a complete two-player ultimatum game, then deploy it for real data collection by changing one line.
+---
+
+import {Steps, Step} from '@site/src/components/Steps';
+
+# Building a two-player ultimatum game
+
+This tutorial builds a complete two-player **ultimatum game** — the canonical turn-based
+economic game (Güth, Schmittberger & Schwarze, 1982). Two players split a $10 pot: the
+**proposer** offers the **responder** some amount; the responder accepts (both keep the
+split) or rejects (both get nothing).
+
+The finished experiment is
+[`examples/ultimatum-game-local.html`](https://github.com/jspsych/jspsych-multiplayer/blob/main/examples/ultimatum-game-local.html).
+You can run it from **two browser tabs on one machine, with no server** — and by the end
+you will know how to swap one line to deploy the identical experiment on JATOS for real,
+cross-device data collection.
+
+The headline of this tutorial is what is *missing* from the finished experiment: almost no
+synchronization or coordination code. Every "wait for the other player" moment is one
+declarative trial; role assignment is one declarative trial; the network backend is one
+constructor call. The experiment code is about the game, not about networking.
+
+## Why multiplayer experiments are hard
+
+A single-participant jsPsych experiment is a linear timeline: every trial's inputs are
+available the moment it starts. A multiplayer experiment breaks that assumption three ways:
+
+- **Waiting.** The responder cannot decide until the proposer's offer exists. Some client
+  has to idle until a condition about *another* client's data becomes true.
+- **Agreement.** Both clients must agree who the proposer is — without a server-side
+  coordinator, and even though each client only sees its own local copy of shared state.
+- **Absence.** Real participants close tabs. A design that waits forever for a partner who
+  left is a design that strands the partner who stayed.
+
+Hand-rolling these — polling loops, sorting participant IDs in an `on_finish`, ad-hoc
+timeout flags — is exactly the code that makes multiplayer experiments brittle. The
+packages below turn each concern into a declarative trial parameter instead.
+
+## The building blocks
+
+| Package | What it contributes |
+| --- | --- |
+| `@jspsych-multiplayer/adapter-multiplayer-local` | The network backend: `localStorage` + cross-tab signalling. Zero infrastructure. **Dev/demo only.** |
+| `@jspsych-multiplayer/plugin-multiplayer-sync` | A **barrier** trial: push data, then wait until a condition over the whole group holds. |
+| `@jspsych-multiplayer/plugin-multiplayer-role` | **Deterministic role assignment**: every client independently computes the same role map, with no coordinator. |
+
+Before reading any code, internalize the state model, because every decision below follows
+from it:
+
+:::info The one rule that explains everything
+The group session maps participant ID → that participant's data slot, and a `push`
+**replaces** the pushing participant's entire slot. It does not merge.
+:::
+
+If a participant's slot is `{ status: "ready", joinedAt: 1783619087856 }` and that
+participant pushes `{ offer: 9 }`, the slot becomes `{ offer: 9 }`. The `joinedAt` is gone —
+both for that participant and for every other client reading the group. Step 4 below is
+devoted to the rule this forces.
+
+## Build it
+
+<Steps>
+
+<Step title="Run it first">
+
+The tutorial is easier to follow if you have watched the game run.
+
+```sh
+npm install && npm run build   # dist/ is gitignored, so build the packages first
+npx http-server .              # serve over http:// — file:// URLs break localStorage sharing
+```
+
+Open the printed URL to `examples/ultimatum-game-local.html` in one tab. The local adapter
+mints a session and writes it into the URL as `?mp_session=…` — **copy that full URL into a
+second tab** to join the same game (the bare URL would start a new session). One tab
+becomes the proposer, the other the responder. Play the round through and use the end
+screen's button to download the session data as JSON.
+
+</Step>
+
+<Step title="Connect the adapter">
+
+The experiment begins by constructing the backend and handing it to jsPsych:
+
+```js
+const jsPsych = initJsPsych();
+
+const localAdapter = new jsPsychAdapterMultiplayerLocal({ persistParticipant: true });
+
+// ...timeline definitions...
+
+jsPsych.multiplayer.connect(localAdapter).then(() => {
+  jsPsych.run([lobby, assignRoles, gameFull, noGroupScreen, gameTimeline, doneScreen]);
+});
+```
+
+Two things to note:
+
+- **`connect` before `run`.** Every multiplayer trial talks to the group session through
+  the connected adapter, so the connection must exist before the timeline starts.
+- **`persistParticipant: true`** stores this tab's participant ID in `sessionStorage`, so a
+  mid-game refresh rejoins as the *same* participant instead of abandoning a ghost slot
+  (which would, for example, falsely satisfy the lobby's "two players present" condition).
+
+This is the only backend-specific code in the whole file. Everything after this point runs
+unchanged on JATOS (step 8).
+
+</Step>
+
+<Step title="The lobby: a synchronization barrier">
+
+The first trial holds each arriving player until a partner exists:
+
+```js
+const lobby = {
+  type: jsPsychMultiplayerSync,
+  push_data: { status: "ready" },
+  wait_for: (group) => Object.keys(group).length >= 2,
+  message: `<p>Waiting for another player to join…</p>`,
+};
+```
+
+That is the sync plugin's whole contract in one trial: **push data, then wait until a
+predicate over the group holds.** `push_data` writes `{ status: "ready" }` into the
+participant's own slot; `wait_for` receives the full group map every time it changes and
+returns `true` once at least two participants are present. The plugin shows `message` while
+waiting and ends the trial the moment the predicate passes.
+
+There is deliberately **no timeout** here: waiting indefinitely for a partner to arrive is
+correct for a recruitment lobby. Timeouts belong on mid-game waits, where an absent partner
+means the round cannot finish (step 7).
+
+</Step>
+
+<Step title="Role assignment by deterministic consensus">
+
+With two players present, someone must become the proposer. The trap is that there is no
+server to decide: each client runs the same code against its own view of the group. The
+role plugin's answer is to make the computation **deterministic over shared inputs** — if
+every client sorts the same data by the same rule, every client derives the same answer,
+and no coordination round-trip is needed.
+
+```js
+const assignRoles = {
+  type: jsPsychMultiplayerRole,
+  roles: ["proposer", "responder"],
+  strategy: "join_order",
+  overflow_role: "spectator",
+  ready: (group) =>
+    Object.keys(group).length >= 2 &&
+    Object.values(group).every(
+      (entry) =>
+        entry.joinedAt != null || entry.offer !== undefined || entry.decision !== undefined
+    ),
+  save_group: true,
+  message: "<p>Assigning roles…</p>",
+  on_finish: (data) => {
+    myRole = jsPsychMultiplayerRole.getMyRole();
+    const byRole = jsPsychMultiplayerRole.participantsByRole();
+    proposerId = byRole.proposer?.[0];
+    responderId = byRole.responder?.[0];
+    myJoinedAt = data.group?.[jsPsych.multiplayer.participantId]?.joinedAt;
+  },
+};
+```
+
+Piece by piece:
+
+- **`strategy: "join_order"`** sorts participants by `joinedAt`, a timestamp the role
+  plugin stamps into each slot **once, when its own trial starts** — near-simultaneously on
+  clients leaving the lobby together. Ties break deterministically by participant ID. The
+  first two fill `roles`; anyone beyond them gets `overflow_role: "spectator"`.
+- **The `ready` predicate gates *when* a snapshot is safe to assign over** — and supplying a
+  custom one *replaces* the plugin's built-in gate, so it must check two things.
+  *Membership*: at least two participants. *Field readiness*: every present entry actually
+  carries the data `join_order` sorts on.
+
+  <details>
+  <summary>Why a count-only predicate is a real bug</summary>
+
+  Each client would assign the instant it sees the peer's lobby entry — possibly before the
+  peer's `joinedAt` lands — sort the missing timestamp as 0, conclude the *other* client is
+  the proposer, and both would sit waiting for an offer that never comes. The
+  `entry.offer !== undefined || entry.decision !== undefined` fallback is a deliberate
+  liveness choice for one buggy-edit case; when the carry rule below is followed it never
+  fires.
+  </details>
+
+- **`on_finish` captures what the rest of the timeline needs**: this client's role (via
+  `getMyRole()`), the two player IDs by role (via `participantsByRole()`), and — because
+  `save_group: true` saved the snapshot the roles were computed over — this client's own
+  `joinedAt`. That last capture looks like bookkeeping. It is load-bearing, and it gets its
+  own step.
+
+</Step>
+
+<Step title="The joinedAt rule: pushes replace, so carry it forward">
+
+This is the least obvious line in the experiment, and the one most likely to be dropped by
+someone adapting the code. Stated on its own:
+
+:::warning
+Every push after role assignment must include `joinedAt`, because a push replaces the
+participant's entire slot, and the role ordering that keeps the game stable is derived from
+`joinedAt`.
+:::
+
+Both mid-game pushes spread it back in:
+
+```js
+// Proposer sends the offer:
+push_data: () => ({ offer: proposerOffer, joinedAt: myJoinedAt }),
+
+// Responder sends the decision:
+push_data: () => ({ decision: responderDecision, joinedAt: myJoinedAt }),
+```
+
+<details>
+<summary>What breaks without it</summary>
+
+The proposer pushes a bare `{ offer: 9 }`. Because pushes replace rather than merge, the
+proposer's slot — left by the role trial as
+`{ status: "ready", joinedAt: 1783619087856, rounds: { "0": {} } }` — is now just
+`{ offer: 9 }`. The timestamp that determined who the proposer *is* has been erased from
+shared state.
+
+Between the two original players nothing visibly breaks at first: they already captured
+their roles in local variables. The failure arrives with the next client that has to
+*compute* roles from the group session — a spectator joining mid-game. Deterministic
+consensus only works if every client sorts **the same inputs**; a late joiner who sees one
+player's `joinedAt` missing sorts that player as timestamp 0, derives a *different*
+proposer/responder pair than the pair actually playing, and the guarantee is silently
+broken. The same erasure would invalidate any role recomputation after a refresh. It is a
+classic distributed-state bug: the mistake happens at push time, the symptom appears later,
+on a different client, in a different trial.
+</details>
+
+The pattern, in three parts:
+
+1. **Capture:** `save_group: true` on the role trial, then read the participant's own
+   `joinedAt` out of the snapshot in `on_finish`.
+2. **Carry:** include `joinedAt: myJoinedAt` in every subsequent `push_data`.
+3. **Guard — initial assignment only:** the role trial's `ready` predicate refuses to
+   assign over a lobby entry whose `joinedAt` has not landed. It does *not* catch a
+   forgotten carry, because the fallback clause deliberately admits mid-game entries. For
+   everything after initial assignment, the carry rule is the **only** protection.
+
+<details>
+<summary>Why the gate tolerates that instead of failing loudly</summary>
+
+The divergence it admits is *inert in this design*, and strictness would punish the wrong
+person. A missing timestamp sorts **first**, never last — so a late joiner can never sort
+ahead of a timestamp-less player into a player slot. It always lands in the overflow role,
+routes to the "game full" screen, and never acts on who it *thinks* the pair is. A strict
+gate would instead leave that innocent spectator hanging until the role trial's 30 s
+timeout and exit them through "could not form a group" — trading participant experience for
+a dev-time signal about a bug the carry rule already owns. If you adapt this design so that
+late joiners *do* act on the computed role map, revisit the trade.
+</details>
+
+The general form outlives this example: **whatever fields of a participant's slot other
+clients depend on, every push must carry forward** — and *only* those. The correct pushes above still
+happily erase `status` and the role plugin's `rounds` key, because nothing downstream reads
+them. The rule is not "preserve everything", it is "preserve what other clients depend on".
+At every `push_data`, the review question is: *what does this push erase?*
+
+</Step>
+
+<Step title="The two turns">
+
+The proposer's flow is two trials inside a conditional timeline:
+
+```js
+const proposerOfferTrial = {
+  type: jsPsychHtmlButtonResponse,
+  stimulus: `...You are the Proposer... Choose how much to offer...`,
+  choices: Array.from({ length: POT + 1 }, (_, index) => `$${index}`),
+  on_finish: (data) => {
+    proposerOffer = data.response; // button index equals dollar amount
+  },
+};
+
+const proposerWaitTrial = {
+  type: jsPsychMultiplayerSync,
+  push_data: () => ({ offer: proposerOffer, joinedAt: myJoinedAt }),
+  wait_for: (group) => group[responderId]?.decision !== undefined,
+  timeout: PARTNER_TIMEOUT_MS,
+  on_timeout: () => {
+    partnerLeft = true;
+  },
+  message: () => `<p>You offered the Responder <strong>$${proposerOffer}</strong>…</p>`,
+  on_finish: (data) => {
+    if (data.timed_out) return;
+    responderDecision = data.group[responderId].decision;
+  },
+};
+
+const proposerTimeline = {
+  timeline: [proposerOfferTrial, proposerWaitTrial],
+  conditional_function: () => myRole === "proposer",
+};
+```
+
+The first trial is ordinary single-player jsPsych. All the multiplayer work is in the
+second: one barrier that **sends the offer and waits for the decision** in a single
+declarative step. Its `wait_for` targets the responder's slot specifically, using the ID
+captured in step 4. Note that `push_data` is a *function* here — the offer does not exist
+until runtime, so it is evaluated when the trial starts.
+
+The responder mirrors this, with the wait on the other side of the input:
+
+```js
+const responderWaitTrial = {
+  type: jsPsychMultiplayerSync,
+  wait_for: (group) => group[proposerId]?.offer !== undefined,
+  timeout: PARTNER_TIMEOUT_MS,
+  on_timeout: () => { partnerLeft = true; },
+  message: "<p>Waiting for the Proposer's offer…</p>",
+  on_finish: (data) => {
+    if (data.timed_out) return;
+    proposerOffer = data.group[proposerId].offer;
+  },
+};
+```
+
+This barrier pushes nothing (`push_data` omitted) — the responder has nothing to say yet.
+Then an ordinary button trial collects accept/reject, and a final barrier publishes it:
+
+```js
+const responderSendDecisionTrial = {
+  type: jsPsychMultiplayerSync,
+  push_data: () => ({ decision: responderDecision, joinedAt: myJoinedAt }),
+  wait_for: (group) => group[responderId]?.decision !== undefined,
+  message: "<p>Sending your decision…</p>",
+};
+```
+
+Its `wait_for` checks the responder's **own** slot — it just confirms the decision landed
+in shared state before moving on. Like the lobby it carries no timeout: a wait on a
+client's own data either succeeds promptly or something is wrong at a level a timeout would
+not fix.
+
+Both roles' timelines hang off `conditional_function`s checking `myRole`, so one file
+serves both players; which client runs which branch is decided entirely by the role trial's
+consensus.
+
+</Step>
+
+<Step title="Dropouts, spectators, and the other edge paths">
+
+The happy path ends in a shared outcome screen: both clients hold `proposerOffer` and
+`responderDecision` locally, so each renders its own perspective on the result.
+
+The unhappy path is what distinguishes a demo from a deployable design. In open
+recruitment, a partner can close their tab mid-round. Every barrier that waits on the
+**other** player's data therefore sets:
+
+```js
+timeout: PARTNER_TIMEOUT_MS,   // 60 s — one tunable constant at the top of the file
+on_timeout: () => { partnerLeft = true; },
+```
+
+If the timeout elapses, the barrier finishes with `timed_out: true` in its data (which is
+why both `on_finish` handlers bail out early on that flag — the group snapshot will not
+contain what they came for), and downstream conditionals route around the outcome:
+
+```js
+const partnerLeftScreen = { timeline: [/* "The other player left…" */],
+                            conditional_function: () => partnerLeft };
+const outcome = { timeline: [outcomeTrial],
+                  conditional_function: () => !partnerLeft };
+```
+
+So the stranded player gets a clean exit instead of an infinite spinner.
+
+:::caution Each client times out independently
+There is no handshake in which the two clients agree that one of them has left. If a present-but-slow responder ponders
+past `PARTNER_TIMEOUT_MS`, the proposer concludes they left while the responder completes
+the round normally, and the two walk away with contradictory end-states. Keep the timeout
+generous relative to your slowest plausible participant, and consider capping decision
+screens with a `trial_duration` below it.
+:::
+
+Open recruitment produces one more character: the third player. The lobby admits *at least*
+two, so someone can arrive after the pair formed. Rather than a hard cap, the role trial's
+`overflow_role: "spectator"` assigns a role the timeline routes to a graceful exit:
+
+```js
+const gameFull = { timeline: [/* "Sorry, this game is already full…" */],
+                   conditional_function: () => myRole === "spectator" };
+```
+
+— and thanks to the `joinedAt` rule, that late spectator computed the *same*
+proposer/responder pair as the players themselves, so its arrival can never destabilize the
+game.
+
+Two final guards: if role assignment itself times out (a peer vanished between lobby and
+role trial), `myRole` stays undefined and a "could not form a group" screen shows; and
+every path — played, spectated, or stranded — funnels into a closing screen, so no
+participant is ever left on a blank page.
+
+One last piece of hygiene: when a client is done with the session, leave it explicitly —
+`on_finish: () => jsPsych.multiplayer.disconnect()` on the final trial (or at experiment
+end) releases the participant's slot and cancels any live subscriptions, which is how the
+example's exit screens end.
+
+</Step>
+
+<Step title="Deploy it for real data collection">
+
+The local adapter is same-origin, same-browser, same-machine — a development and demo tool,
+**not** a data-collection backend. Deploying for real participants means swapping the
+backend, and this is where the architecture pays off. Against
+[`examples/ultimatum-game-jatos.html`](https://github.com/jspsych/jspsych-multiplayer/blob/main/examples/ultimatum-game-jatos.html),
+the *entire* diff in experiment logic is the connection code:
+
+```js
+// Local (two tabs, no server):
+const localAdapter = new jsPsychAdapterMultiplayerLocal({ persistParticipant: true });
+jsPsych.multiplayer.connect(localAdapter).then(() => {
+  jsPsych.run([...]);
+});
+
+// JATOS (real, cross-device study):
+jatos.onLoad(async () => {
+  const jsPsych = initJsPsych({ on_finish: () => jatos.endStudy() });
+  await jsPsych.multiplayer.connect(new jsPsychAdapterMultiplayerJatos());
+  jsPsych.run([...]);
+});
+```
+
+(Plus the `<script src="jatos.js">` tag JATOS injects, and loading the JATOS adapter bundle
+instead of the local one.) The coordination that makes this a *multiplayer* experiment —
+lobby, role consensus, barriers, timeout handling — is identical across both files, because
+none of it is backend-specific.
+
+That is the development loop these packages are designed for: **iterate on game logic in
+two tabs on your laptop; change one object to run the study.** The same swap works for any
+adapter implementing the adapter interface — see
+[Choosing an adapter](/guides/choosing-an-adapter).
+
+</Step>
+
+</Steps>
+
+## The data you get
+
+Each multiplayer trial records structured data alongside the usual jsPsych fields. From a
+real run (proposer's tab, abridged):
+
+```json
+{ "trial_type": "multiplayer-sync", "wait_time": 1, "timed_out": false, "wait_error": null,
+  "group": { "031cc…": { "status": "ready" }, "dbad5…": { "status": "ready" } } }
+
+{ "trial_type": "multiplayer-role", "role": "proposer", "assigned_self": true, "timed_out": false,
+  "role_map": { "031cc…": { "role": "proposer" }, "dbad5…": { "role": "responder" } },
+  "group": { "031cc…": { "status": "ready", "joinedAt": 1783619087856 },
+             "dbad5…": { "status": "ready", "joinedAt": 1783619087857 } } }
+
+{ "trial_type": "multiplayer-sync", "wait_time": 2359, "timed_out": false,
+  "group": { "031cc…": { "offer": 9,           "joinedAt": 1783619087856 },
+             "dbad5…": { "decision": "accept", "joinedAt": 1783619087857 } } }
+```
+
+Everything you would analyze is here: the barrier's `wait_time` (how long this client
+actually waited), `timed_out` / `wait_error` for data-quality filtering, the full
+`role_map` (so you can verify both clients agreed), and — because barriers snapshot the
+group they resolved over — the offer and decision themselves, with `joinedAt` visibly
+riding along in every mid-game slot.
+
+## Where to go next
+
+- **Adapt the game.** Multi-round ultimatum, different pot sizes, a strategy-method
+  variant — the round logic is plain jsPsych. Only remember step 5's rule when you add
+  pushes.
+- **More players.** The role plugin's `roles` array and `overflow_role` generalize beyond
+  pairs; `participantsByRole()` returns ID lists per role.
+- **Real-time interaction.** The barriers here are turn-based. For continuously live
+  interaction see `plugin-multiplayer-chat` and its
+  [`chat-room.html`](https://github.com/jspsych/jspsych-multiplayer/blob/main/examples/chat-room.html)
+  example, which runs on the same local adapter.
+
+### References
+
+Güth, W., Schmittberger, R., & Schwarze, B. (1982). An experimental analysis of ultimatum
+bargaining. *Journal of Economic Behavior & Organization*, 3(4), 367–388.
+
+The ultimatum-game demo is adapted from the author's demo in
+[jsPsych#3694](https://github.com/jspsych/jsPsych/pull/3694) (MIT-licensed).

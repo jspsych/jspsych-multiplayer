@@ -12,7 +12,9 @@
   "unpkg": "dist/index.browser.min.js",
   "files": [
     "src",
-    "dist"
+    "dist",
+    "database.rules.json",
+    "firebase.json"
   ],
   "source": "src/index.ts",
   "scripts": {

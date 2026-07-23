@@ -76,9 +76,10 @@ function makeJsPsych(api: MockApi) {
   const jsPsych = {
     multiplayer: api,
     finishTrial: (data: Record<string, any>) => finished.push(data),
-    // Passthrough double for the pluginAPI timer registry the plugin now schedules through.
+    // Real jsPsych routes timeouts through pluginAPI.setTimeout so they're cleared on abort;
+    // the double just delegates to the global timer to preserve timing behavior.
     pluginAPI: {
-      setTimeout: (cb: () => void, ms: number) => setTimeout(cb, ms),
+      setTimeout: (cb: (...args: any[]) => void, delay: number) => setTimeout(cb, delay),
     },
   };
   return { jsPsych, finished };
