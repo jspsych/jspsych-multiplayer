@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Reference Game — Clark & Wilkes-Gibbs 1986 replication (full-board) — jsPsych multiplayer</title>
+    <!-- jsPsych core MUST carry the multiplayer API (jsPsych#3694). SHA-pinned to the #3694 preview
+         build (see examples/README.md "Running it" to re-pin). -->
+    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@151ab520542a8e48bcc4d5b21c74cdffae8b48c6/packages/jspsych/dist/index.browser.min.js"></script>
+    <script src="https://unpkg.com/@jspsych/plugin-survey-text"></script>
+    <script src="https://unpkg.com/@jspsych/plugin-html-keyboard-response"></script>
+    <!-- STUDY PROTOTYPE: on the LOCAL adapter for two-tab piloting on one machine. For the paid Prolific
+         run, swap adapter-multiplayer-local → adapter-multiplayer-firebase (and pair via a real waiting
+         room); nothing else in this file changes. -->
+    <script src="../packages/adapter-multiplayer-local/dist/index.browser.min.js?v=1"></script>
+    <script src="../packages/plugin-multiplayer-sync/dist/index.browser.min.js?v=1"></script>
+    <script src="../packages/plugin-multiplayer-role/dist/index.browser.min.js?v=1"></script>
+    <script src="../packages/plugin-multiplayer-reference-game/dist/index.browser.min.js?v=1"></script>
+    <script src="tangrams.js"></script>
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@151ab520542a8e48bcc4d5b21c74cdffae8b48c6/packages/jspsych/css/jspsych.css"
+    />
+  </head>
+
+  <body></body>
+  <script>
+    // ===============================================================================================
+    // REFERENCE GAME — replication of Clark & Wilkes-Gibbs (1986), "Referring as a collaborative
+    // process" (Cognition 22:1–39); the original full-board tangram arrangement task.
+    //
+    // Faithful design (from the paper), with ONE necessary web substitution:
+    //   • 12 tangrams (the canonical set), 2 rows of 6. Director's board is the TARGET order; the
+    //     matcher's is scrambled and must be rearranged to match.
+    //   • FULL BOARD: every tangram is an ordered target; the director describes all 12 in order and
+    //     the matcher reproduces that order, then submits for a score out of 12.
+    //   • 6 trials, the same 12 figures re-randomized into a new target order each trial.
+    //   • Director/matcher roles fixed for the whole game.
+    //   • Free, UNRESTRICTED, bidirectional communication — the original was SPOKEN dialogue behind an
+    //     opaque screen; on the web we substitute unrestricted two-way TEXT CHAT. This modality swap is
+    //     the one unavoidable deviation from 1986 and is noted as such in the paper. (Both may send, no
+    //     count/length limit — reference shortening only holds if the matcher can talk back.)
+    //   • After each trial, feedback reveals the correct order to both (original: mismatches reported).
+    //
+    // Key replication DVs (logged per round): message_count / messages_sent (the words-per-figure
+    // effect: 41→8 across trials 1→6 in the original), accuracy / n_correct (original error rate 2%).
+    // ===============================================================================================
+
+    const MIN_PLAYERS = 2;
+    const N = 12; // full board of 12 tangrams
+    // Faithful is 6 trials. Lower for a quick two-tab smoke test, then restore to 6.
+    const TRIALS = 6;
+
+    const jsPsych = initJsPsych();
+    const localAdapter = new jsPsychAdapterMultiplayerLocal({ persistParticipant: true });
+
+    const SHAPES = Tangrams.STIMULI; // 12 canonical tangrams
+    // 6 trials, each a fresh random order of all 12. Deterministic (fixed seed) so both tabs agree;
+    // for a real study, seed from the shared session id so each dyad gets its own orders.
+    const SCHEDULE = Tangrams.fullBoardSchedule(TRIALS);
+
+    let myName = "";
+    let myRole;
+    let partnerId;
+
+    const nameTrial = {
+      type: jsPsychSurveyText,
+      questions: [{ prompt: "Choose a display name:", required: true, name: "name" }],
+      on_finish: (data) => {
+        myName = (data.response.name || "").trim() || "Anonymous";
+      },
+    };
+
+    const lobbyTrial = {
+      type: jsPsychMultiplayerSync,
+      push_data: () => ({ name: myName, joinedAt: Date.now() }),
+      message: `<p>Waiting for ${MIN_PLAYERS} players to join…</p>
+                <p>Open this page in another tab (keep the <code>?mp_session=</code> in the URL) to add a player.</p>`,
+      wait_for: (group) =>
+        Object.values(group).filter((entry) => entry && entry.name).length >= MIN_PLAYERS,
+    };
+
+    const roleTrial = {
+      type: jsPsychMultiplayerRole,
+      roles: ["director", "matcher"],
+      strategy: "random",
+      overflow_role: "spectator",
+      ready: (group) =>
+        Object.keys(group).length >= MIN_PLAYERS &&
+        Object.values(group).every((entry) => entry && entry.joinedAt != null),
+      save_group: true,
+      message: "<p>Pairing you with your partner…</p>",
+      on_finish: () => {
+        myRole = jsPsychMultiplayerRole.getMyRole();
+        const byRole = jsPsychMultiplayerRole.participantsByRole();
+        partnerId = myRole === "director" ? byRole.matcher?.[0] : byRole.director?.[0];
+      },
+    };
+
+    const spectatorScreen = {
+      timeline: [
+        {
+          type: jsPsychHtmlKeyboardResponse,
+          stimulus: "<p>This game is already full. Thanks for your interest!</p>",
+          choices: "NO_KEYS",
+          trial_duration: 4000,
+          on_finish: () => jsPsych.multiplayer.disconnect(),
+        },
+      ],
+      conditional_function: () => myRole === "spectator",
+    };
+
+    const gameRound = {
+      type: jsPsychMultiplayerReferenceGame,
+      stimuli: SHAPES,
+      columns: 6, // 2 rows of 6, as in the original
+      role: () => jsPsychMultiplayerRole.getMyRole(),
+      partner_id: () => partnerId,
+      round: jsPsych.timelineVariable("round"),
+      targets: jsPsych.timelineVariable("targets"), // all 12 ids, ordered → full-board match
+      ordered: true,
+      scramble_mode: "independent",
+      reveal_target_to: "director", // only the director sees the target order
+      // Unrestricted two-way text chat (web substitute for the original spoken dialogue).
+      chat_role: "both",
+      max_messages: null,
+      max_length: null,
+      submit_label: "Submit board",
+      show_running_score: true,
+      round_timeout: 180000, // full board takes longer; bound it in case the partner leaves
+      prompt: (role) =>
+        role === "director"
+          ? "<p><strong>You are the Director.</strong> Describe your tangrams in badge order (1, 2, 3, …) so your partner can arrange theirs the same way. You can talk back and forth as much as you need.</p>"
+          : "<p><strong>You are the Matcher.</strong> For each numbered slot, click the slot and then the tangram your partner says goes there. Fill every slot, then submit.</p>",
+    };
+
+    const gameLoop = {
+      timeline: [gameRound],
+      timeline_variables: SCHEDULE,
+      conditional_function: () => myRole === "director" || myRole === "matcher",
+    };
+
+    const doneTrial = {
+      type: jsPsychHtmlKeyboardResponse,
+      stimulus: () => {
+        const completed = jsPsych.data
+          .get()
+          .filter({ trial_type: "multiplayer-reference-game", ended_by: "submit" });
+        const played = completed.count();
+        const total = completed.select("n_correct").sum();
+        return `<h2>Game complete!</h2>
+                <p>Together you scored <strong>${total} / ${played * N}</strong> across ${played} trial${
+          played === 1 ? "" : "s"
+        }.</p>
+                <p>You may close this tab. <button id="dl">Download data (JSON)</button></p>`;
+      },
+      choices: "NO_KEYS",
+      on_load: () => {
+        document
+          .getElementById("dl")
+          ?.addEventListener("click", () =>
+            jsPsych.data.get().localSave("json", "reference-game-cwg-data.json")
+          );
+      },
+    };
+
+    jsPsych.multiplayer.connect(localAdapter).then(() => {
+      jsPsych.run([nameTrial, lobbyTrial, roleTrial, spectatorScreen, gameLoop, doneTrial]);
+    });
+  </script>
+</html>

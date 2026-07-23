@@ -645,3 +645,36 @@ condition: every object is an ordered **target**, so the director's board shows 
 and the matcher reproduces that order by assigning each shape to a slot, then submitting for a score
 out of N. Shows that "sequential" and "unconstrained" are one plugin with `targets` turned from
 length-1 to length-N. Run it the same two-tab way.
+
+## `reference-game-hawkins.html` and `reference-game-cwg.html`
+
+Two **faithful replication** builds of the reference game, distinct from the two demos above: where
+`reference-game.html` / `reference-game-match.html` are lightweight teaching demos (synthetic shapes,
+short schedules), these two are **study artifacts** parameterised to reproduce a specific published
+paper, sharing the canonical 12-tangram stimulus set via [`tangrams.js`](tangrams.js). The tangrams in
+[`assets/tangrams/`](assets/tangrams/) are the exact set from
+[hawkrobe/tangrams](https://github.com/hawkrobe/tangrams) (Hawkins, Frank & Goodman 2020), themselves
+reproduced from Clark & Wilkes-Gibbs (1986) — so both builds are directly comparable to both papers.
+
+| | `reference-game-hawkins.html` | `reference-game-cwg.html` |
+| --- | --- | --- |
+| Replicates | Hawkins, Frank & Goodman (2020), *Cognitive Science* 44 | Clark & Wilkes-Gibbs (1986), *Cognition* 22:1–39 |
+| Condition | Sequential — **single** target, one click | Full-board — all **12** tangrams as an ordered target |
+| Schedule | 6 blocks × 12 = **72 trials** (`sequentialSchedule`) | **6 trials**, fresh full-board order each (`fullBoardSchedule`) |
+| Fidelity note | Near-exact (the paper was already web + text chat) | Text chat **substitutes** for the original **spoken** dialogue — the one deliberate deviation, noted in-file |
+
+Both fix director/matcher for the whole game, reveal the target to the director only ("cued"), and use
+**unrestricted two-way chat** (`chat_role: "both"`, no count/length limits) — faithful to both papers,
+and load-bearing for the reference-shortening effect. `tangrams.js` builds each schedule
+**deterministically** (seeded), so both tabs agree on the target order; for a real multi-dyad study,
+seed from the shared session id so each dyad gets its own order. The faithful schedules are long for
+manual piloting — lower `BLOCKS` (Hawkins) / `TRIALS` (C&WG) at the top of each file for a quick
+smoke test, then restore.
+
+> **Status: needs more testing.** These are wired and serve/load, but have **not** been fully
+> play-tested end-to-end across a whole schedule. Treat them as drafts pending two-tab verification.
+
+Like the demos they run on `adapter-multiplayer-local` for two-tab piloting; the header comment marks
+the **one-line swap to `adapter-multiplayer-firebase`** (plus a real waiting room) for the paid
+Prolific run. Run them the same two-tab way (build packages, serve the repo, copy the `?mp_session=…`
+URL into a second tab).
