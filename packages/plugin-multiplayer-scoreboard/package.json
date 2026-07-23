@@ -1,6 +1,6 @@
 {
   "name": "@jspsych-multiplayer/plugin-multiplayer-scoreboard",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "jsPsych plugin: end-of-game scoreboard — rank every player's final score from the shared multiplayer session",
   "type": "module",
   "main": "dist/index.cjs",

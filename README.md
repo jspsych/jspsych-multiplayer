@@ -46,10 +46,14 @@ The contributed packages can be found in the `/packages` directory. Plugins are 
 Plugin | Contributor | Description
 ----------- | ----------- | -----------
 [multiplayer-chat](https://github.com/jspsych/jspsych-multiplayer/blob/main/packages/plugin-multiplayer-chat/README.md) | [Hannah Tsukamoto](https://github.com/htsukamoto5) | jsPsych plugin: real-time chat room for the multiplayer API 
+[multiplayer-choice](https://github.com/jspsych/jspsych-multiplayer/blob/main/packages/plugin-multiplayer-choice/README.md) | [Mandy Liao](https://github.com/Mandyx22) | jsPsych plugin: simultaneous group decision — everyone picks an option, barrier until all have chosen, then reveal who chose what or an anonymous tally 
+[multiplayer-countdown](https://github.com/jspsych/jspsych-multiplayer/blob/main/packages/plugin-multiplayer-countdown/README.md) | [Hannah Tsukamoto](https://github.com/htsukamoto5) | jsPsych plugin: a synchronized group countdown / count-up timer for the multiplayer API 
 [multiplayer-draw](https://github.com/jspsych/jspsych-multiplayer/blob/main/packages/plugin-multiplayer-draw/README.md) | [Hannah Tsukamoto](https://github.com/htsukamoto5) | jsPsych plugin: real-time collaborative drawing canvas for the multiplayer API 
+[multiplayer-match](https://github.com/jspsych/jspsych-multiplayer/blob/main/packages/plugin-multiplayer-match/README.md) | [Mandy Liao](https://github.com/Mandyx22) | jsPsych plugin: partition a multiplayer group into matched sub-groups (pairs/triads) by deterministic consensus 
 [multiplayer-ready](https://github.com/jspsych/jspsych-multiplayer/blob/main/packages/plugin-multiplayer-ready/README.md) | [Mandy Liao](https://github.com/Mandyx22) | jsPsych plugin: participant-facing ready/check-in barrier for the multiplayer API 
 [multiplayer-reference-game](https://github.com/jspsych/jspsych-multiplayer/blob/main/packages/plugin-multiplayer-reference-game/README.md) | [Mandy Liao](https://github.com/Mandyx22) | jsPsych plugin: repeated referential communication game (director/matcher "tangrams") for the multiplayer API 
 [multiplayer-role](https://github.com/jspsych/jspsych-multiplayer/blob/main/packages/plugin-multiplayer-role/README.md) | [Hannah Tsukamoto](https://github.com/htsukamoto5) | jsPsych plugin: assign multiplayer group roles by deterministic consensus 
+[multiplayer-scoreboard](https://github.com/jspsych/jspsych-multiplayer/blob/main/packages/plugin-multiplayer-scoreboard/README.md) | [Mandy Liao](https://github.com/Mandyx22) | jsPsych plugin: end-of-game scoreboard — rank every player's final score from the shared multiplayer session 
 [multiplayer-sync](https://github.com/jspsych/jspsych-multiplayer/blob/main/packages/plugin-multiplayer-sync/README.md) | [Hannah Tsukamoto](https://github.com/htsukamoto5) | jsPsych plugin: synchronization barrier (push → wait) for the multiplayer API 
 
 
@@ -57,6 +61,7 @@ Plugin | Contributor | Description
 
 Adapter | Contributor | Description
 ----------- | ----------- | -----------
+[multiplayer-firebase](https://github.com/jspsych/jspsych-multiplayer/blob/main/packages/adapter-multiplayer-firebase/README.md) | [Hannah Tsukamoto](https://github.com/htsukamoto5) | Firebase Realtime Database adapter for the jsPsych multiplayer API (real cross-device multiplayer, ~zero backend) 
 [multiplayer-jatos](https://github.com/jspsych/jspsych-multiplayer/blob/main/packages/adapter-multiplayer-jatos/README.md) | [Hannah Tsukamoto](https://github.com/htsukamoto5) | JATOS group study adapter for the jsPsych multiplayer API 
 [multiplayer-local](https://github.com/jspsych/jspsych-multiplayer/blob/main/packages/adapter-multiplayer-local/README.md) | [Hannah Tsukamoto](https://github.com/htsukamoto5) | Zero-infrastructure localStorage adapter for the jsPsych multiplayer API (local dev/demo only) 
 
