@@ -125,6 +125,12 @@
       max_length: null,
       submit_label: "Submit board",
       show_running_score: true,
+      // Full ordered log of the matcher's pre-submit actions ({ t, action, slot, object_id }, matcher
+      // only, local until submit). A superset: per shape you can recover both first placement ("clicked")
+      // and final placement, plus every reassign/clear — grounding latency, placement-vs-description
+      // order, revision behavior. The core word-count DV doesn't need it, but it's ~free and matches
+      // the Hawkins file.
+      save_interaction_history: true,
       round_timeout: 180000, // full board takes longer; bound it in case the partner leaves
       prompt: (role) =>
         role === "director"
