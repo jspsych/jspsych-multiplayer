@@ -105,7 +105,7 @@ describe("computeElapsed", () => {
     const duration = 8000;
     const now = 5000;
     expect(computeElapsed(startedAt, duration, now)).toBe(
-      duration - computeRemaining(startedAt, duration, now)
+      duration - computeRemaining(startedAt, duration, now),
     );
   });
 });

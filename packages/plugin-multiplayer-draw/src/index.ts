@@ -187,7 +187,7 @@ class MultiplayerDrawPlugin implements JsPsychPlugin<Info> {
     if (!hasDuration && !hasEndButton && typeof trial.end_when !== "function") {
       console.warn(
         "multiplayer-draw: no `duration`, `end_button_label`, or `end_when` set — the trial has no " +
-          "way to end. Provide at least one end condition."
+          "way to end. Provide at least one end condition.",
       );
     }
 
@@ -203,8 +203,8 @@ class MultiplayerDrawPlugin implements JsPsychPlugin<Info> {
                   `<button type="button" class="jspsych-multiplayer-draw-color${
                     i === 0 ? " is-selected" : ""
                   }" data-color="${escapeAttr(c)}" style="background:${escapeAttr(
-                    c
-                  )}" aria-label="Color ${escapeAttr(c)}"></button>`
+                    c,
+                  )}" aria-label="Color ${escapeAttr(c)}"></button>`,
               )
               .join("")}
           </span>
@@ -217,10 +217,10 @@ class MultiplayerDrawPlugin implements JsPsychPlugin<Info> {
                   `<button type="button" class="jspsych-multiplayer-draw-size${
                     i === Math.floor(brushSizes.length / 2) ? " is-selected" : ""
                   }" data-width="${w}"><span class="jspsych-multiplayer-draw-dot" style="display:block;width:${Math.round(
-                    4 + (w / Math.max(...brushSizes, 1e-9)) * 14
+                    4 + (w / Math.max(...brushSizes, 1e-9)) * 14,
                   )}px;height:${Math.round(
-                    4 + (w / Math.max(...brushSizes, 1e-9)) * 14
-                  )}px;border-radius:50%;background:currentColor"></span></button>`
+                    4 + (w / Math.max(...brushSizes, 1e-9)) * 14,
+                  )}px;border-radius:50%;background:currentColor"></span></button>`,
               )
               .join("")}
           </span>
@@ -239,10 +239,10 @@ class MultiplayerDrawPlugin implements JsPsychPlugin<Info> {
       </div>`;
 
     const canvasWrap = display_element.querySelector(
-      ".jspsych-multiplayer-draw-canvas-wrap"
+      ".jspsych-multiplayer-draw-canvas-wrap",
     ) as HTMLElement;
     const canvas = display_element.querySelector(
-      ".jspsych-multiplayer-draw-canvas"
+      ".jspsych-multiplayer-draw-canvas",
     ) as HTMLCanvasElement;
     const ctx = canvas.getContext("2d") as CanvasRenderingContext2D;
     // Suppress text selection and touch scrolling/panning on the canvas so a drag always draws
@@ -251,10 +251,10 @@ class MultiplayerDrawPlugin implements JsPsychPlugin<Info> {
     canvas.style.userSelect = "none";
     (canvas.style as CSSStyleDeclaration & { webkitUserSelect?: string }).webkitUserSelect = "none";
     const roster = display_element.querySelector(
-      ".jspsych-multiplayer-draw-roster"
+      ".jspsych-multiplayer-draw-roster",
     ) as HTMLElement | null;
     const endButton = display_element.querySelector(
-      ".jspsych-multiplayer-draw-end"
+      ".jspsych-multiplayer-draw-end",
     ) as HTMLButtonElement | null;
     if (endButton && hasEndButton) endButton.textContent = trial.end_button_label as string;
 
@@ -495,16 +495,16 @@ class MultiplayerDrawPlugin implements JsPsychPlugin<Info> {
     const colorButtons = [...display_element.querySelectorAll(".jspsych-multiplayer-draw-color")];
     const sizeButtons = [...display_element.querySelectorAll(".jspsych-multiplayer-draw-size")];
     const penButton = display_element.querySelector(
-      ".jspsych-multiplayer-draw-pen"
+      ".jspsych-multiplayer-draw-pen",
     ) as HTMLButtonElement;
     const eraserButton = display_element.querySelector(
-      ".jspsych-multiplayer-draw-eraser"
+      ".jspsych-multiplayer-draw-eraser",
     ) as HTMLButtonElement;
     const undoButton = display_element.querySelector(
-      ".jspsych-multiplayer-draw-undo"
+      ".jspsych-multiplayer-draw-undo",
     ) as HTMLButtonElement;
     const redoButton = display_element.querySelector(
-      ".jspsych-multiplayer-draw-redo"
+      ".jspsych-multiplayer-draw-redo",
     ) as HTMLButtonElement;
 
     const updateUndoRedoButtons = () => {

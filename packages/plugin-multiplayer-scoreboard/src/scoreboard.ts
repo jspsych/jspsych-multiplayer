@@ -58,7 +58,7 @@ export interface BuildOptions {
  */
 export function readScoreEntry(
   slot: Record<string, unknown> | undefined,
-  dataKey: string
+  dataKey: string,
 ): ScoreEntry | null {
   if (!slot) return null;
   const raw = slot[dataKey];

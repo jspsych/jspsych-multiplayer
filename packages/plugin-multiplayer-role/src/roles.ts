@@ -116,7 +116,7 @@ function orderParticipants(snapshot: Snapshot, opts: AssignOptions, ctx: Ctx): s
 
   if (opts.rankBy) {
     return [...ids].sort(
-      (a, b) => opts.rankBy!(snapshot[b], b, ctx) - opts.rankBy!(snapshot[a], a, ctx) || byId(a, b)
+      (a, b) => opts.rankBy!(snapshot[b], b, ctx) - opts.rankBy!(snapshot[a], a, ctx) || byId(a, b),
     );
   }
 
@@ -125,7 +125,7 @@ function orderParticipants(snapshot: Snapshot, opts: AssignOptions, ctx: Ctx): s
       // Reflects pushed `joinedAt` (subject to per-client clocks) but is consensus-consistent because
       // every client reads the same pushed values. Falls back to id order if joinedAt is absent.
       return [...ids].sort(
-        (a, b) => (snapshot[a]?.joinedAt ?? 0) - (snapshot[b]?.joinedAt ?? 0) || byId(a, b)
+        (a, b) => (snapshot[a]?.joinedAt ?? 0) - (snapshot[b]?.joinedAt ?? 0) || byId(a, b),
       );
     case "rotate": {
       const base = [...ids];
@@ -159,7 +159,7 @@ export function assignRoles(snapshot: Snapshot, opts: AssignOptions): RoleMap {
   if (opts.roles == null || (Array.isArray(opts.roles) && opts.roles.length === 0)) {
     throw new Error(
       "assignRoles: the `roles` option is required — pass an array like " +
-        '["proposer","responder"] or a count map like { leader: 1, follower: 3 }.'
+        '["proposer","responder"] or a count map like { leader: 1, follower: 3 }.',
     );
   }
   if (!Array.isArray(opts.roles)) {
@@ -167,13 +167,13 @@ export function assignRoles(snapshot: Snapshot, opts: AssignOptions): RoleMap {
     if (entries.length === 0) {
       throw new Error(
         "assignRoles: `roles` is an empty object — declare at least one role, e.g. " +
-          "{ leader: 1, follower: 3 } (an empty count map would send every participant to overflow)."
+          "{ leader: 1, follower: 3 } (an empty count map would send every participant to overflow).",
       );
     }
     for (const [role, n] of entries) {
       if (!Number.isInteger(n) || n < 0) {
         throw new Error(
-          `assignRoles: the count for role "${role}" must be a non-negative integer, got ${n}.`
+          `assignRoles: the count for role "${role}" must be a non-negative integer, got ${n}.`,
         );
       }
     }
@@ -195,7 +195,7 @@ export function assignRoles(snapshot: Snapshot, opts: AssignOptions): RoleMap {
       if (!declared.has(role)) {
         throw new Error(
           `assignRoles: role_from returned "${role}" for ${id}, which is not a declared role ` +
-            `(${[...declared].join(", ")}).`
+            `(${[...declared].join(", ")}).`,
         );
       }
       map[id] = { role };
@@ -216,7 +216,7 @@ export function assignRoles(snapshot: Snapshot, opts: AssignOptions): RoleMap {
     } else {
       throw new Error(
         `assignRoles: ${ordered.length} participants but only ${slots.length} role slots; ` +
-          `set overflowRole to handle extras.`
+          `set overflowRole to handle extras.`,
       );
     }
   });

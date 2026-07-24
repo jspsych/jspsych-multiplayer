@@ -50,7 +50,7 @@ export interface WinnerResult {
  */
 export function readChoice(
   slot: Record<string, unknown> | undefined,
-  dataKey: string
+  dataKey: string,
 ): Choice | null {
   if (!slot) return null;
   const raw = slot[dataKey];
@@ -72,7 +72,7 @@ export function readChoice(
 export function countChosen(
   group: GroupSessionData,
   dataKey: string,
-  optionCount?: number
+  optionCount?: number,
 ): number {
   let n = 0;
   for (const slot of Object.values(group)) {

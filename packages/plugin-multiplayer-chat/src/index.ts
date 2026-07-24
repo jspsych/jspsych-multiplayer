@@ -145,7 +145,7 @@ class MultiplayerChatPlugin implements JsPsychPlugin<Info> {
     if (!hasDuration && trial.end_button_label == null && typeof trial.end_when !== "function") {
       console.warn(
         "multiplayer-chat: no `duration`, `end_button_label`, or `end_when` set — the trial has no " +
-          "way to end. Provide at least one end condition."
+          "way to end. Provide at least one end condition.",
       );
     }
 
@@ -227,14 +227,14 @@ class MultiplayerChatPlugin implements JsPsychPlugin<Info> {
 
     const log = display_element.querySelector(".jspsych-multiplayer-chat-log") as HTMLElement;
     const roster = display_element.querySelector(
-      ".jspsych-multiplayer-chat-roster"
+      ".jspsych-multiplayer-chat-roster",
     ) as HTMLElement | null;
     const form = display_element.querySelector(".jspsych-multiplayer-chat-form") as HTMLFormElement;
     const input = display_element.querySelector(
-      ".jspsych-multiplayer-chat-input"
+      ".jspsych-multiplayer-chat-input",
     ) as HTMLInputElement;
     const endButton = display_element.querySelector(
-      ".jspsych-multiplayer-chat-end"
+      ".jspsych-multiplayer-chat-end",
     ) as HTMLButtonElement | null;
     if (endButton && trial.end_button_label != null) endButton.textContent = trial.end_button_label;
 
@@ -283,7 +283,7 @@ class MultiplayerChatPlugin implements JsPsychPlugin<Info> {
 
           row.append(who, body);
           return row;
-        })
+        }),
       );
 
       if (roster) {

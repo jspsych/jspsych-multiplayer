@@ -84,7 +84,7 @@ export default class JatosAdapter implements MultiplayerAdapter {
       throw new Error(
         "JatosAdapter: the jatos global is not defined. " +
           "Ensure jatos.js is loaded before creating a JatosAdapter. " +
-          "This adapter only works when the experiment is running inside JATOS."
+          "This adapter only works when the experiment is running inside JATOS.",
       );
     }
     // Key by studyResultId: it is unique per study run, whereas workerId can repeat
@@ -116,8 +116,8 @@ export default class JatosAdapter implements MultiplayerAdapter {
           new Error(
             `JatosAdapter: timed out after ${this.connectTimeoutMs} ms waiting for the ` +
               "group channel to open. JATOS reported neither success nor failure — the server may " +
-              "be unreachable or the handshake was dropped."
-          )
+              "be unreachable or the handshake was dropped.",
+          ),
         );
       }, this.connectTimeoutMs);
 
@@ -185,7 +185,7 @@ export default class JatosAdapter implements MultiplayerAdapter {
       throw new Error(
         this.channelClosed
           ? "JatosAdapter: push() called after the group channel closed."
-          : "JatosAdapter: push() called before connect(); call connect() first."
+          : "JatosAdapter: push() called before connect(); call connect() first.",
       );
     }
     // JATOS group session uses optimistic concurrency: concurrent writes from
@@ -217,7 +217,7 @@ export default class JatosAdapter implements MultiplayerAdapter {
           // payload too large, etc.) isn't hidden behind the generic message. JATOS errors
           // are untyped strings, so we can't assert which it was — hence "may include".
           const wrapped = new Error(
-            "JatosAdapter: push failed after 8 attempts (may include repeated group session version conflicts)"
+            "JatosAdapter: push failed after 8 attempts (may include repeated group session version conflicts)",
           );
           (wrapped as Error & { cause?: unknown }).cause = lastError;
           throw wrapped;
@@ -255,7 +255,7 @@ export default class JatosAdapter implements MultiplayerAdapter {
       if (typeof jatos.leaveGroup === "function") {
         jatos.leaveGroup(
           () => resolve(),
-          () => resolve()
+          () => resolve(),
         );
       } else {
         resolve();

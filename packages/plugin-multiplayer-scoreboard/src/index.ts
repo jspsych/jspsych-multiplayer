@@ -152,7 +152,7 @@ class MultiplayerScoreboardPlugin implements JsPsychPlugin<Info> {
     if (me == null) {
       throw new Error(
         "plugin-multiplayer-scoreboard: no participantId — the multiplayer adapter must be connected " +
-          "(await jsPsych.multiplayer.connect(adapter)) before this trial runs."
+          "(await jsPsych.multiplayer.connect(adapter)) before this trial runs.",
       );
     }
 
@@ -161,14 +161,14 @@ class MultiplayerScoreboardPlugin implements JsPsychPlugin<Info> {
     if (trial.button_label == null) {
       console.warn(
         "plugin-multiplayer-scoreboard: `button_label` is null — the board has no button, so the " +
-          "trial can never end. Provide a `button_label`."
+          "trial can never end. Provide a `button_label`.",
       );
     }
     if (trial.group_size == null) {
       console.warn(
         "plugin-multiplayer-scoreboard: no `group_size` — the board reveals as soon as this client " +
           "reports, so it may be partial. Set `group_size` (the exact count) unless an upstream " +
-          "barrier already gathered every peer's score."
+          "barrier already gathered every peer's score.",
       );
     }
     // `score` is meant to be auto-computed from this client's own prior data (a dynamic `score`
@@ -178,7 +178,7 @@ class MultiplayerScoreboardPlugin implements JsPsychPlugin<Info> {
       console.warn(
         "plugin-multiplayer-scoreboard: `score` did not resolve to a finite number, so this client " +
           "won't be ranked on the board. `score` should be a number or a function returning one, e.g. " +
-          "() => jsPsych.data.get().select('points').sum()."
+          "() => jsPsych.data.get().select('points').sum().",
       );
     }
 
@@ -220,7 +220,7 @@ class MultiplayerScoreboardPlugin implements JsPsychPlugin<Info> {
     me: string,
     api: MultiplayerApiLike,
     payload: Record<string, unknown>,
-    isReady: (g: GroupSessionData) => boolean
+    isReady: (g: GroupSessionData) => boolean,
   ) {
     try {
       await api.push(payload);
@@ -250,7 +250,7 @@ class MultiplayerScoreboardPlugin implements JsPsychPlugin<Info> {
       timeoutMs,
       // Register the timer through the pluginAPI so jsPsych cancels it if the trial is ended
       // externally (abortExperiment / endCurrentTimeline / forced finishTrial).
-      (cb, ms) => this.jsPsych.pluginAPI.setTimeout(cb, ms)
+      (cb, ms) => this.jsPsych.pluginAPI.setTimeout(cb, ms),
     );
 
     if (outcome.kind === "ready") {
@@ -282,7 +282,7 @@ class MultiplayerScoreboardPlugin implements JsPsychPlugin<Info> {
     me: string,
     group: GroupSessionData,
     timedOut: boolean,
-    error: string | null = null
+    error: string | null = null,
   ) {
     const rows = buildLeaderboard(group, {
       dataKey: trial.data_key,
@@ -309,7 +309,7 @@ class MultiplayerScoreboardPlugin implements JsPsychPlugin<Info> {
       });
 
     const button = display_element.querySelector(
-      ".jspsych-multiplayer-scoreboard-button"
+      ".jspsych-multiplayer-scoreboard-button",
     ) as HTMLButtonElement | null;
     // If there's no button the trial cannot end (already warned in trial()); leave it displayed.
     button?.addEventListener("click", finish, { once: true });
@@ -319,7 +319,7 @@ class MultiplayerScoreboardPlugin implements JsPsychPlugin<Info> {
     trial: TrialType<Info>,
     group: GroupSessionData,
     rows: LeaderboardRow[],
-    timedOut: boolean
+    timedOut: boolean,
   ): string {
     // A throwing experimenter callback must fall back to the raw label/score, never propagate — an
     // uncaught throw here would abort rendering and leave the participant soft-locked on the waiting
@@ -331,7 +331,7 @@ class MultiplayerScoreboardPlugin implements JsPsychPlugin<Info> {
         } catch (err) {
           console.error(
             "plugin-multiplayer-scoreboard: `display_label` threw; using the pushed label instead",
-            err
+            err,
           );
         }
       }
@@ -344,7 +344,7 @@ class MultiplayerScoreboardPlugin implements JsPsychPlugin<Info> {
         } catch (err) {
           console.error(
             "plugin-multiplayer-scoreboard: `score_format` threw; using the raw score instead",
-            err
+            err,
           );
         }
       }
@@ -387,7 +387,7 @@ class MultiplayerScoreboardPlugin implements JsPsychPlugin<Info> {
         ${
           trial.button_label != null
             ? `<button type="button" class="jspsych-multiplayer-scoreboard-button">${escapeHtml(
-                trial.button_label
+                trial.button_label,
               )}</button>`
             : ""
         }
@@ -436,7 +436,7 @@ async function raceWaitAgainstTimeout(
   timeoutMs: number | undefined,
   // Returns `number` (pluginAPI.setTimeout's numeric handle), which clearTimeout accepts under both
   // DOM and Node typings.
-  scheduleTimeout: (cb: () => void, ms: number) => number
+  scheduleTimeout: (cb: () => void, ms: number) => number,
 ): Promise<WaitOutcome> {
   let timer: number | undefined;
   const timedOut =
@@ -448,7 +448,7 @@ async function raceWaitAgainstTimeout(
 
   const settled: Promise<WaitOutcome> = (async () => startWaiting())().then(
     (group) => ({ kind: "ready" as const, group }),
-    (err) => ({ kind: "error" as const, err })
+    (err) => ({ kind: "error" as const, err }),
   );
 
   if (timedOut === null) return settled;

@@ -36,7 +36,7 @@ describe("readStrokes", () => {
     const good = stroke({ authorId: "a", seq: 0 });
     const result = readStrokes(
       { draw_strokes: [good, { authorId: "a" }, null, 42] },
-      "draw_strokes"
+      "draw_strokes",
     );
     expect(result).toHaveLength(1);
     expect(result[0]).toMatchObject({ authorId: "a", seq: 0 });

@@ -98,7 +98,7 @@ function orderParticipants(snapshot: Snapshot, opts: MatchOptions): string[] {
       // Reflects pushed `joinedAt` (subject to per-client clocks) but is consensus-consistent because
       // every client reads the same pushed values. Falls back to id order when joinedAt is absent.
       return [...ids].sort(
-        (a, b) => (snapshot[a]?.joinedAt ?? 0) - (snapshot[b]?.joinedAt ?? 0) || byId(a, b)
+        (a, b) => (snapshot[a]?.joinedAt ?? 0) - (snapshot[b]?.joinedAt ?? 0) || byId(a, b),
       );
     case "random": {
       const seed = opts.seed ?? `${ids.join("|")}#${round}`; // shared seed, per round, no coordinator
@@ -124,7 +124,7 @@ export function buildMatches(snapshot: Snapshot, opts: MatchOptions = {}): Match
   const groupSize = opts.groupSize ?? 2;
   if (!Number.isInteger(groupSize) || groupSize < 2) {
     throw new Error(
-      `buildMatches: groupSize must be an integer >= 2 (got ${groupSize}). Use 2 for dyads, 3 for triads, etc.`
+      `buildMatches: groupSize must be an integer >= 2 (got ${groupSize}). Use 2 for dyads, 3 for triads, etc.`,
     );
   }
   // Validate the string enums up front rather than letting an unknown value fall through to a silent
@@ -134,13 +134,13 @@ export function buildMatches(snapshot: Snapshot, opts: MatchOptions = {}): Match
   const strategy = opts.strategy ?? "ordered";
   if (strategy !== "ordered" && strategy !== "join_order" && strategy !== "random") {
     throw new Error(
-      `buildMatches: unknown strategy "${strategy}" — use "ordered", "join_order", or "random".`
+      `buildMatches: unknown strategy "${strategy}" — use "ordered", "join_order", or "random".`,
     );
   }
   const leftover = opts.leftover ?? "error";
   if (leftover !== "error" && leftover !== "spectator" && leftover !== "smaller_group") {
     throw new Error(
-      `buildMatches: unknown leftover "${leftover}" — use "error", "spectator", or "smaller_group".`
+      `buildMatches: unknown leftover "${leftover}" — use "error", "spectator", or "smaller_group".`,
     );
   }
 
@@ -152,7 +152,7 @@ export function buildMatches(snapshot: Snapshot, opts: MatchOptions = {}): Match
     throw new Error(
       `buildMatches: ${n} participants is not a multiple of groupSize ${groupSize}. Ensure a ` +
         `divisible group, or set leftover to "spectator" (leave extras unmatched) or ` +
-        `"smaller_group" (put extras in one undersized group).`
+        `"smaller_group" (put extras in one undersized group).`,
     );
   }
 

@@ -413,7 +413,7 @@ describe("multiplayer-chat plugin", () => {
     // The peer's push drives the subscribe callback; the predicate's throw must not escape into
     // the adapter's notify loop (here: pushAs) or finish the trial.
     expect(() =>
-      api.pushAs("peer", { chat_messages: [{ senderId: "peer", seq: 0, text: "hi", ts: 5 }] })
+      api.pushAs("peer", { chat_messages: [{ senderId: "peer", seq: 0, text: "hi", ts: 5 }] }),
     ).not.toThrow();
     expect(finished).toHaveLength(0);
 
@@ -448,7 +448,7 @@ describe("multiplayer-chat plugin", () => {
 
     const { displayElement, expectFinished, getData } = await startTimeline(
       [{ type: MultiplayerChatPlugin, end_button_label: "Done" }],
-      jsPsych
+      jsPsych,
     );
 
     send(displayElement, "through the pipeline");

@@ -116,7 +116,7 @@ const clickCell = (el: HTMLElement, id: string) =>
   cell(el, id).dispatchEvent(new MouseEvent("click", { bubbles: true }));
 const clickSlot = (el: HTMLElement, n: number) =>
   (el.querySelector(`.${P}-slot[data-slot="${n}"]`) as HTMLButtonElement).dispatchEvent(
-    new MouseEvent("click", { bubbles: true })
+    new MouseEvent("click", { bubbles: true }),
   );
 const submitBtn = (el: HTMLElement) => el.querySelector(`.${P}-submit`) as HTMLButtonElement;
 const feedbackText = (el: HTMLElement) =>
@@ -342,7 +342,7 @@ describe("multiplayer-reference-game: chat, timeout, and the real pipeline", () 
     const input = el.querySelector(`.${P}-chat-input`) as HTMLInputElement;
     input.value = "<img src=x onerror=alert(1)>";
     (el.querySelector(`.${P}-chat-form`) as HTMLFormElement).dispatchEvent(
-      new Event("submit", { cancelable: true })
+      new Event("submit", { cancelable: true }),
     );
     await flush();
 
@@ -396,7 +396,7 @@ describe("multiplayer-reference-game: chat, timeout, and the real pipeline", () 
           feedback: false,
         },
       ],
-      jsPsych
+      jsPsych,
     );
 
     clickCell(displayElement, "c");
@@ -417,7 +417,7 @@ describe("multiplayer-reference-game: review-fix regressions", () => {
     });
     const { jsPsych } = makeJsPsych(api);
     expect(() => run(jsPsych, display(), { ...base, partner_id: "director" })).toThrow(
-      /round 0 already/i
+      /round 0 already/i,
     );
   });
 
@@ -485,7 +485,7 @@ describe("multiplayer-reference-game: review-fix regressions", () => {
     });
     clickCell(el, "b"); // submit
     (el.querySelector(`.${P}-continue`) as HTMLButtonElement).dispatchEvent(
-      new MouseEvent("click", { bubbles: true })
+      new MouseEvent("click", { bubbles: true }),
     );
     expect(finished[0].ended_by).toBe("submit");
   });

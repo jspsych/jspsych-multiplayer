@@ -59,14 +59,14 @@ Adapter | Contributor | Description
       adapterList = adapterList.concat(
         `[${adapterName}](${packageReadmeLink}) | ${authorRender} | ${
           info.description ? info.description : `_Description for ${adapterName}._`
-        } \n`
+        } \n`,
       );
     } else {
       const pluginName = packageName.replace(/^plugin-/g, "");
       pluginList = pluginList.concat(
         `[${pluginName}](${packageReadmeLink}) | ${authorRender} | ${
           info.description ? info.description : `_Description for ${pluginName}._`
-        } \n`
+        } \n`,
       );
     }
   });

@@ -42,7 +42,7 @@ export async function createRealBackend(options: {
   if (!options.firebaseConfig) {
     throw new Error(
       "FirebaseAdapter: provide either `firebaseConfig` (to initialize a Firebase app) or an " +
-        "already-initialized `database` instance."
+        "already-initialized `database` instance.",
     );
   }
   // A dedicated, named app so we never collide with a host page's default Firebase app.
@@ -62,7 +62,7 @@ class RealBackend implements FirebaseBackend {
     private readonly db: Database,
     private readonly auth: Auth,
     public readonly ownsApp: boolean,
-    private readonly app?: FirebaseApp
+    private readonly app?: FirebaseApp,
   ) {}
 
   async signIn(): Promise<string> {
@@ -81,13 +81,13 @@ class RealBackend implements FirebaseBackend {
   onValue(
     path: string,
     onData: (snapshot: RawSessionSnapshot | null) => void,
-    onError: (error: Error) => void
+    onError: (error: Error) => void,
   ): Unsubscribe {
     const nodeRef = ref(this.db, path);
     const listener = onValue(
       nodeRef,
       (snap) => onData((snap.val() as RawSessionSnapshot | null) ?? null),
-      (error) => onError(error)
+      (error) => onError(error),
     );
     return () => off(nodeRef, "value", listener);
   }

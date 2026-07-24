@@ -40,7 +40,7 @@ export interface FirebaseBackend {
   onValue(
     path: string,
     onData: (snapshot: RawSessionSnapshot | null) => void,
-    onError: (error: Error) => void
+    onError: (error: Error) => void,
   ): Unsubscribe;
 
   /** Arm a server-side `remove(path)` to fire if this client's connection drops. Resolves once the

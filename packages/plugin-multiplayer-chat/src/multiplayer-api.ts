@@ -72,7 +72,7 @@ export function resolveMultiplayerApi(jsPsych: unknown): MultiplayerApiLike {
   if (!api || typeof api.getAll !== "function") {
     throw new Error(
       "No multiplayer API found on the jsPsych instance. This plugin needs jsPsych core with " +
-        "multiplayer support (jsPsych#3694); see https://multiplayer.jspsych.org."
+        "multiplayer support (jsPsych#3694); see https://multiplayer.jspsych.org.",
     );
   }
   return api;

@@ -125,7 +125,7 @@ describe("multiplayer-sync plugin", () => {
         timeout: null,
         minimum_wait: 0,
       } as never,
-      on_load
+      on_load,
     );
 
     expect(on_load).toHaveBeenCalledTimes(1);
@@ -146,7 +146,7 @@ describe("multiplayer-sync plugin", () => {
         timeout: null,
         on_timeout,
         minimum_wait: 0,
-      } as never)
+      } as never),
     ).rejects.toThrow(/connection lost/);
 
     // A push (infrastructure) failure must NOT be relabeled as a timeout.
@@ -242,7 +242,7 @@ describe("multiplayer-sync plugin", () => {
         timeout: 40,
         on_timeout,
         minimum_wait: 0,
-      } as never)
+      } as never),
     ).rejects.toThrow(/adapter disconnected/);
 
     expect(on_timeout).not.toHaveBeenCalled();
@@ -267,7 +267,7 @@ describe("multiplayer-sync plugin", () => {
         message: "<p>Waiting…</p>",
         timeout: 40,
         minimum_wait: 0,
-      } as never)
+      } as never),
     ).resolves.toBeUndefined();
 
     expect(finished[0].timed_out).toBe(true);
@@ -354,7 +354,7 @@ describe("multiplayer-sync plugin", () => {
           wait_for: (group: GroupSessionData) => Object.keys(group).length >= 1,
         },
       ],
-      jsPsych
+      jsPsych,
     );
 
     await expectFinished();
@@ -389,7 +389,7 @@ describe("multiplayer-sync plugin", () => {
           wait_for: (group: GroupSessionData) => Object.keys(group).length >= 1,
         },
       ],
-      jsPsych
+      jsPsych,
     );
 
     await expectFinished();

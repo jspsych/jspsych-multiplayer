@@ -318,7 +318,7 @@ describe("multiplayer-countdown plugin", () => {
 
     const { getData, expectFinished } = await startTimeline(
       [{ type: MultiplayerCountdownPlugin, name: "smoke", duration: 1000, save_group: true }],
-      jsPsych
+      jsPsych,
     );
     await expectFinished();
 

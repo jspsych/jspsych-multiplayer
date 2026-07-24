@@ -149,7 +149,7 @@ class MultiplayerReadyPlugin implements JsPsychPlugin<Info> {
     if (typeof expected !== "number" || !Number.isInteger(expected) || expected < 1) {
       throw new Error(
         "multiplayer-ready: the `expected_players` parameter is required and must be a positive " +
-          "integer (the total group size, including this participant)."
+          "integer (the total group size, including this participant).",
       );
     }
 
@@ -173,7 +173,7 @@ class MultiplayerReadyPlugin implements JsPsychPlugin<Info> {
     // click is intentionally unbounded (the `timeout` param bounds only the later group wait).
     const rt = await new Promise<number>((resolve) => {
       const button = display_element.querySelector<HTMLButtonElement>(
-        "#jspsych-multiplayer-ready-btn"
+        "#jspsych-multiplayer-ready-btn",
       );
       button?.addEventListener("click", () => resolve(Math.round(performance.now() - start)), {
         once: true,
@@ -201,7 +201,7 @@ class MultiplayerReadyPlugin implements JsPsychPlugin<Info> {
       const elapsed = performance.now() - waitStart;
       if (elapsed < min) {
         await new Promise<void>((resolve) =>
-          this.jsPsych.pluginAPI.setTimeout(resolve, min - elapsed)
+          this.jsPsych.pluginAPI.setTimeout(resolve, min - elapsed),
         );
       }
     };

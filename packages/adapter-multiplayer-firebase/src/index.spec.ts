@@ -281,7 +281,7 @@ describe("FirebaseAdapter — uid-as-key mode", () => {
 
   it("throws when constructed with both useUidAsParticipantId and a custom participantId", () => {
     expect(() => new FirebaseAdapter({ useUidAsParticipantId: true, participantId: "me" })).toThrow(
-      /incompatible/
+      /incompatible/,
     );
   });
 });
@@ -296,13 +296,13 @@ describe("FirebaseAdapter — key validation", () => {
     ["open-bracket", "a[b"],
   ])("rejects a participantId containing a %s", (_label, id) => {
     expect(() => new FirebaseAdapter({ sessionId: SESSION, participantId: id })).toThrow(
-      /must not contain/
+      /must not contain/,
     );
   });
 
   it("rejects a sessionId containing a forbidden char", () => {
     expect(() => new FirebaseAdapter({ sessionId: "a/b", participantId: "me" })).toThrow(
-      /must not contain/
+      /must not contain/,
     );
   });
 });

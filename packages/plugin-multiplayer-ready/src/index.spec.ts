@@ -132,7 +132,7 @@ describe("multiplayer-ready plugin", () => {
         push_data: null,
         timeout: null,
       } as never,
-      on_load
+      on_load,
     );
 
     expect(on_load).toHaveBeenCalledTimes(1);
@@ -160,7 +160,7 @@ describe("multiplayer-ready plugin", () => {
     } as never);
 
     expect(el.querySelector(".jspsych-multiplayer-ready-prompt")!.innerHTML).toContain(
-      "matched with one other player"
+      "matched with one other player",
     );
 
     clickReady(el);
@@ -262,7 +262,7 @@ describe("multiplayer-ready plugin", () => {
         waiting_message: "<p>Waiting…</p>",
         push_data: null,
         timeout: null,
-      } as never)
+      } as never),
     ).rejects.toThrow(/expected_players/);
   });
 
@@ -355,7 +355,7 @@ describe("multiplayer-ready plugin", () => {
           const err = new Error("wait timed out after 40ms");
           err.name = MULTIPLAYER_TIMEOUT_ERROR_NAME;
           setTimeout(() => reject(err), 40);
-        })
+        }),
     );
     jest.spyOn(api, "getAll").mockImplementation(() => {
       throw new Error("connect() must be called before using multiplayer methods");
@@ -480,7 +480,7 @@ describe("multiplayer-ready plugin", () => {
           stimulus: "<p>Ready?</p>",
         },
       ],
-      jsPsych
+      jsPsych,
     );
 
     displayElement.querySelector<HTMLButtonElement>("#jspsych-multiplayer-ready-btn")!.click();

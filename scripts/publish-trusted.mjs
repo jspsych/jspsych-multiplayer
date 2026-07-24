@@ -42,7 +42,7 @@ for (const { name, version } of packages) {
   } catch {
     // `npm view` exits non-zero (E404) when the package doesn't exist on the registry yet.
     console.log(
-      `skip ${name}: not on the registry yet — needs a one-time trusted-publishing bootstrap.`
+      `skip ${name}: not on the registry yet — needs a one-time trusted-publishing bootstrap.`,
     );
     continue;
   }

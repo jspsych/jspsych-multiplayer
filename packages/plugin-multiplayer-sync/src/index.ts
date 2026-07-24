@@ -118,7 +118,7 @@ class MultiplayerSyncPlugin implements JsPsychPlugin<Info> {
     if (typeof trial.wait_for !== "function") {
       throw new Error(
         "multiplayer-sync: the `wait_for` parameter is required and must be a function " +
-          "(a predicate over the group session)."
+          "(a predicate over the group session).",
       );
     }
 
@@ -143,7 +143,7 @@ class MultiplayerSyncPlugin implements JsPsychPlugin<Info> {
       const elapsed = performance.now() - start;
       if (elapsed < trial.minimum_wait) {
         await new Promise<void>((resolve) =>
-          this.jsPsych.pluginAPI.setTimeout(resolve, trial.minimum_wait - elapsed)
+          this.jsPsych.pluginAPI.setTimeout(resolve, trial.minimum_wait - elapsed),
         );
       }
     };

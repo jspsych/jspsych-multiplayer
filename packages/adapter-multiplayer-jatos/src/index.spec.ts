@@ -18,7 +18,7 @@ import JatosAdapter from ".";
 function makeMockJatos(
   // Pass null to simulate a context where studyResultId is not populated.
   studyResultId: string | number | null = "w1",
-  workerId: string | number = "worker-99"
+  workerId: string | number = "worker-99",
 ) {
   const store: Record<string, unknown> = {};
   let callbacks: Record<string, ((arg?: unknown) => void) | undefined> = {};

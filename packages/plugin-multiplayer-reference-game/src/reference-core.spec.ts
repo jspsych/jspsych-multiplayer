@@ -148,10 +148,10 @@ describe("reference-core: scoring", () => {
 
   it("all_or_nothing yields k or 0 while `correct` still reflects a true full match", () => {
     expect(
-      scoreAssignment({ 1: "a", 2: "c" }, ["a", "b"], { ordered: true, scoring: "all_or_nothing" })
+      scoreAssignment({ 1: "a", 2: "c" }, ["a", "b"], { ordered: true, scoring: "all_or_nothing" }),
     ).toMatchObject({ nCorrect: 0, correct: false });
     expect(
-      scoreAssignment({ 1: "a", 2: "b" }, ["a", "b"], { ordered: true, scoring: "all_or_nothing" })
+      scoreAssignment({ 1: "a", 2: "b" }, ["a", "b"], { ordered: true, scoring: "all_or_nothing" }),
     ).toMatchObject({ nCorrect: 2, correct: true });
   });
 

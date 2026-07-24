@@ -87,13 +87,13 @@ export default class LocalAdapter implements MultiplayerAdapter {
     if (this.sessionId.includes(":")) {
       throw new Error(
         `LocalAdapter: sessionId must not contain ":" (got "${this.sessionId}") — it is the ` +
-          "reserved storage-key namespace separator."
+          "reserved storage-key namespace separator.",
       );
     }
     if (this.participantId.includes(":")) {
       throw new Error(
         `LocalAdapter: participantId must not contain ":" (got "${this.participantId}") — it is ` +
-          "the reserved storage-key namespace separator."
+          "the reserved storage-key namespace separator.",
       );
     }
     // Store a factory, not a signal instance: disconnect() closes the signal (releasing the
@@ -106,7 +106,7 @@ export default class LocalAdapter implements MultiplayerAdapter {
       : () =>
           createDefaultSignal(
             `${this.keyPrefix}:${this.sessionId}`,
-            slotPrefix(this.keyPrefix, this.sessionId)
+            slotPrefix(this.keyPrefix, this.sessionId),
           );
   }
 
@@ -123,7 +123,7 @@ export default class LocalAdapter implements MultiplayerAdapter {
   push(data: Record<string, unknown>): Promise<void> {
     if (!this.connected) {
       return Promise.reject(
-        new Error("LocalAdapter: push() called before connect(); call connect() first.")
+        new Error("LocalAdapter: push() called before connect(); call connect() first."),
       );
     }
     try {
@@ -210,7 +210,7 @@ function resolveLocalStorage(): SlotStorage {
     throw new Error(
       "LocalAdapter: localStorage is not available in this environment. " +
         "Serve the experiment over http(s) (e.g. `npx http-server`) rather than opening it from a " +
-        "file:// URL, or pass a `storage` option."
+        "file:// URL, or pass a `storage` option.",
     );
   }
   return localStorage;
@@ -240,7 +240,7 @@ function resolveSessionId(): string {
 function resolveParticipantId(
   keyPrefix: string,
   sessionId: string,
-  persist: boolean | undefined
+  persist: boolean | undefined,
 ): string {
   if (!persist || typeof sessionStorage === "undefined") {
     return generateId();

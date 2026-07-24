@@ -143,7 +143,7 @@ class MultiplayerMatchPlugin implements JsPsychPlugin<Info> {
     if (me == null) {
       throw new Error(
         "plugin-multiplayer-match: no participantId — the multiplayer adapter must be connected " +
-          "(await jsPsych.multiplayer.connect(adapter)) before this trial runs."
+          "(await jsPsych.multiplayer.connect(adapter)) before this trial runs.",
       );
     }
 
@@ -156,7 +156,7 @@ class MultiplayerMatchPlugin implements JsPsychPlugin<Info> {
         "plugin-multiplayer-match: no `expected_players` and no custom `ready` — the group can be " +
           "partitioned as soon as this client has pushed, over a partial group. Set `expected_players` " +
           "(the exact count) or supply a `ready` predicate unless an upstream barrier guarantees all " +
-          "peers have already pushed into this session."
+          "peers have already pushed into this session.",
       );
     }
 

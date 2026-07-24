@@ -5,7 +5,7 @@ const reorder = (s: Snapshot): Snapshot =>
   Object.fromEntries(
     Object.keys(s)
       .reverse()
-      .map((k) => [k, s[k]])
+      .map((k) => [k, s[k]]),
   );
 
 const roleOf = (m: RoleMap, id: string) => m[id].role;
@@ -84,13 +84,13 @@ describe("assignRoles — input validation", () => {
 
   it("throws a clear error on a negative role count (not an opaque Array RangeError)", () => {
     expect(() => assignRoles({ p1: {} }, { roles: { leader: -1 } })).toThrow(
-      /count for role "leader" must be a non-negative integer/
+      /count for role "leader" must be a non-negative integer/,
     );
   });
 
   it("throws a clear error on a non-integer role count", () => {
     expect(() => assignRoles({ p1: {} }, { roles: { leader: 1.5 } })).toThrow(
-      /count for role "leader" must be a non-negative integer/
+      /count for role "leader" must be a non-negative integer/,
     );
   });
 
@@ -190,11 +190,11 @@ describe("assignRoles — rotate (balanced / Latin-square)", () => {
       for (let round = 1; round < n; round++) {
         const prev = roleOf(
           assignRoles(four, { roles, strategy: "rotate", balanced: true, round: round - 1 }),
-          id
+          id,
         );
         const cur = roleOf(
           assignRoles(four, { roles, strategy: "rotate", balanced: true, round }),
-          id
+          id,
         );
         transitions[`${prev}->${cur}`] = (transitions[`${prev}->${cur}`] ?? 0) + 1;
       }
@@ -208,7 +208,7 @@ describe("assignRoles — rotate (balanced / Latin-square)", () => {
   it("handles edge sizes (n = 1, n = 2) without error", () => {
     const one: Snapshot = { solo: {} };
     expect(
-      roleOf(assignRoles(one, { roles: ["only"], strategy: "rotate", balanced: true }), "solo")
+      roleOf(assignRoles(one, { roles: ["only"], strategy: "rotate", balanced: true }), "solo"),
     ).toBe("only");
     const two: Snapshot = { a: {}, b: {} };
     const r0 = assignRoles(two, {
@@ -259,7 +259,7 @@ describe("assignRoles — roleFrom", () => {
 
   it("throws on a value outside the declared roles", () => {
     expect(() =>
-      assignRoles(snapshot, { roles: ["treatment", "control"], roleFrom: () => "typo" })
+      assignRoles(snapshot, { roles: ["treatment", "control"], roleFrom: () => "typo" }),
     ).toThrow(/not a declared role/);
   });
 

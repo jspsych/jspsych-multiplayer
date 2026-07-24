@@ -141,7 +141,7 @@ export type PaintInstruction =
  */
 export function planAuthorPaint(
   authorStrokes: Stroke[],
-  state: AuthorPaintState
+  state: AuthorPaintState,
 ): { instructions: PaintInstruction[]; nextState: AuthorPaintState; needsFullRepaint: boolean } {
   const byId = new Map(authorStrokes.map((s) => [s.id, s]));
 
@@ -186,7 +186,7 @@ export function planAuthorPaint(
 /** Build the full-repaint instruction (all authors, globally `ts`-ordered) and the fresh paint state. */
 export function planRepaint(
   group: GroupSessionData,
-  dataKey: string
+  dataKey: string,
 ): { instruction: PaintInstruction; nextStates: Map<string, AuthorPaintState> } {
   const strokes = orderedStrokes(group, dataKey);
   const nextStates = new Map<string, AuthorPaintState>();
@@ -212,7 +212,7 @@ export function planRepaint(
 export function shouldRecordPoint(
   last: Point | undefined,
   candidate: Point,
-  minDistance: number
+  minDistance: number,
 ): boolean {
   if (!last) return true;
   const dx = candidate.x - last.x;
