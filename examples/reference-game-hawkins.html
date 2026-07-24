@@ -39,6 +39,15 @@
     //   • Full immediate feedback to both: the director sees the matcher's click, the matcher sees the
     //     intended tangram.
     //
+    // KNOWN DEVIATION (pending plugin support): in Hawkins Exp. 2 the matcher could not click a tangram
+    // until the director had sent a message (verified in hawkrobe/tangrams game.client.js: the click
+    // handler is gated behind `if (globalGame.messageSent)`), which guarantees a referring expression on
+    // every trial and stops the matcher blind-guessing to rush through. plugin-multiplayer-reference-game
+    // has no such gate yet, so HERE the matcher can click before any message is sent — you will see
+    // zero-message rounds in pilot data. Tracked as a `require_message_before_response` param on the
+    // plugin; set it here (and delete this note) once that lands. This is the ONLY known departure from
+    // the paper — every other parameter above was verified against the paper + hawkrobe/tangrams code.
+    //
     // Key replication DVs (logged per round): message_count / messages_sent (words-per-reference proxy),
     // accuracy / correct, rt. Expected: descriptions shorten strongly across blocks; accuracy near
     // ceiling by the final block.

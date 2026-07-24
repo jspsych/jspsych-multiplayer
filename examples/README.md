@@ -661,7 +661,7 @@ reproduced from Clark & Wilkes-Gibbs (1986) — so both builds are directly comp
 | Replicates | Hawkins, Frank & Goodman (2020), *Cognitive Science* 44 | Clark & Wilkes-Gibbs (1986), *Cognition* 22:1–39 |
 | Condition | Sequential — **single** target, one click | Full-board — all **12** tangrams as an ordered target |
 | Schedule | 6 blocks × 12 = **72 trials** (`sequentialSchedule`) | **6 trials**, fresh full-board order each (`fullBoardSchedule`) |
-| Fidelity note | Near-exact (the paper was already web + text chat) | Text chat **substitutes** for the original **spoken** dialogue — the one deliberate deviation, noted in-file |
+| Fidelity note | Near-exact (the paper was already web + text chat); one gate not yet supported — see below | Text chat **substitutes** for the original **spoken** dialogue — the one deliberate deviation, noted in-file |
 
 Both fix director/matcher for the whole game, reveal the target to the director only ("cued"), and use
 **unrestricted two-way chat** (`chat_role: "both"`, no count/length limits) — faithful to both papers,
@@ -671,8 +671,18 @@ seed from the shared session id so each dyad gets its own order. The faithful sc
 manual piloting — lower `BLOCKS` (Hawkins) / `TRIALS` (C&WG) at the top of each file for a quick
 smoke test, then restore.
 
-> **Status: needs more testing.** These are wired and serve/load, but have **not** been fully
-> play-tested end-to-end across a whole schedule. Treat them as drafts pending two-tab verification.
+Both configs were verified parameter-by-parameter against the papers **and** the original
+[hawkrobe/tangrams](https://github.com/hawkrobe/tangrams) experiment code (which pins the details the
+prose leaves ambiguous — e.g. the code confirms director and matcher grids are *independently*
+scrambled, `notMatchingLocs`, and that the schedule is 72 rounds / 6 per tangram for the sequential
+build and `numRounds = 6` full boards for the unconstrained build). Both have been play-tested two-tab
+at full faithful schedule length, collecting both participants' data.
+
+> **One known deviation (Hawkins build).** Hawkins Exp. 2 blocked the matcher from clicking until the
+> director had sent a message (`game.client.js`: `if (globalGame.messageSent)`), guaranteeing a
+> referring expression on every trial. `plugin-multiplayer-reference-game` has no such gate yet, so the
+> Hawkins build here lets the matcher click before any message is sent. Tracked for a
+> `require_message_before_response` plugin param; the C&WG build is unaffected.
 
 Like the demos they run on `adapter-multiplayer-local` for two-tab piloting; the header comment marks
 the **one-line swap to `adapter-multiplayer-firebase`** (plus a real waiting room) for the paid
