@@ -172,9 +172,11 @@ const info = <const>{
      * one chat message this round — faithful to Hawkins, Frank & Goodman (2020) Exp. 2, whose client
      * gated the matcher's click behind `messageSent`, so a referring expression exists on every trial
      * (and the matcher can't blind-guess to rush through). While gated, matcher grid clicks are ignored
-     * and a brief hint is shown. No effect on the director, and inert when `chat_enabled` is false
-     * (gating with no channel would deadlock, so it is skipped with a warning). Applies to both the
-     * `click` and `assign_slots` response modes.
+     * (logged as `gated_click` in `interaction_history`) and a brief hint is shown. No effect on the
+     * director, and inert when `chat_enabled` is false (gating with no channel would deadlock, so it is
+     * skipped with a warning). Applies to both the `click` and `assign_slots` response modes. Note that
+     * any `selection_timeout` keeps running while gated, so a silent director can burn the matcher's
+     * response clock; prefer `round_timeout` with this flag.
      */
     require_message_before_response: {
       type: ParameterType.BOOL,
@@ -305,9 +307,10 @@ const info = <const>{
       default: false,
     },
     /**
-     * Record the ordered log of the matcher's PRE-SUBMIT actions (every assign / reassign / clear,
-     * with timestamps relative to trial start) as `interaction_history`. The log stays LOCAL until
-     * submit — only the final assignment is ever pushed. Off by default to avoid bloat.
+     * Record the ordered log of the matcher's PRE-SUBMIT actions (every assign / reassign / clear, plus
+     * any `gated_click` when `require_message_before_response` blocks a too-early click, with timestamps
+     * relative to trial start) as `interaction_history`. The log stays LOCAL until submit — only the
+     * final assignment is ever pushed. Off by default to avoid bloat.
      */
     save_interaction_history: {
       type: ParameterType.BOOL,
@@ -487,7 +490,7 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
       ids.some((id) => typeof id !== "string")
     ) {
       throw new Error(
-        "multiplayer-reference-game: `stimuli` is required and every entry needs a string `id`."
+        "multiplayer-reference-game: `stimuli` is required and every entry needs a string `id`.",
       );
     }
     if (k === 0) {
@@ -500,7 +503,7 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
     for (const t of targets) {
       if (!idSet.has(t)) {
         throw new Error(
-          `multiplayer-reference-game: target "${t}" does not match any stimulus id.`
+          `multiplayer-reference-game: target "${t}" does not match any stimulus id.`,
         );
       }
     }
@@ -510,14 +513,14 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
     if (role !== "director" && role !== "matcher") {
       throw new Error(
         `multiplayer-reference-game: \`role\` must be "director" or "matcher" (got ${JSON.stringify(
-          trial.role
-        )}). Typically: role: () => jsPsychMultiplayerRole.getMyRole().`
+          trial.role,
+        )}). Typically: role: () => jsPsychMultiplayerRole.getMyRole().`,
       );
     }
     if (typeof round !== "number" || !Number.isFinite(round)) {
       throw new Error(
         "multiplayer-reference-game: `round` is required and must be a number. Use a UNIQUE index " +
-          "per round, e.g. round: jsPsych.timelineVariable('round')."
+          "per round, e.g. round: jsPsych.timelineVariable('round').",
       );
     }
     // Fail loud on a reused round index: per-round data is keyed by `round`, so if this round already
@@ -528,7 +531,7 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
       throw new Error(
         `multiplayer-reference-game: round ${round} already has a submitted assignment in this ` +
           "participant's slot — round indices must be unique across the timeline (did `round` default " +
-          "or repeat?)."
+          "or repeat?).",
       );
     }
 
@@ -558,11 +561,18 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
     // round gets its own key so the panel starts empty (old rounds' arrays stay in the slot,
     // harmlessly, under their own keys).
     const chatKey = trial.chat_persists ? `${dataKey}_chat` : `${dataKey}_chat_r${round}`;
+    // With `chat_persists` the chat log spans rounds, so at round start it ALREADY holds earlier
+    // rounds' director messages. Only messages that arrive DURING this round should open the
+    // `require_message_before_response` gate ("has sent a message this round"), so snapshot the ids
+    // present now and ignore them. Without `chat_persists`, chatKey is round-scoped and this is empty.
+    const gatePriorIds = new Set(
+      trial.chat_persists ? mergeMessages(api.getAll(), chatKey).map((m) => m.id) : [],
+    );
     const seedBase = (trial.seed as string | null) ?? null;
     const columns =
       trial.rows != null && trial.rows > 0
         ? Math.ceil(stimuli.length / trial.rows)
-        : trial.columns ?? 6;
+        : (trial.columns ?? 6);
 
     // Warn when the trial has NO bounded end path: without `round_timeout` (or `selection_timeout`), a
     // partner who never responds — or disconnects — leaves the trial (especially the director, which
@@ -573,13 +583,13 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
     if (!hasRoundTimeout && !hasSelectionTimeout) {
       console.warn(
         "multiplayer-reference-game: no `round_timeout` or `selection_timeout` set — if the partner " +
-          "never responds (or disconnects) this trial cannot end. Set `round_timeout` to bound the round."
+          "never responds (or disconnects) this trial cannot end. Set `round_timeout` to bound the round.",
       );
     }
     if (trial.require_message_before_response && !chatOn) {
       console.warn(
         "multiplayer-reference-game: `require_message_before_response` needs a chat channel but " +
-          "`chat_enabled` is false — ignoring it (gating with no way to message would deadlock the matcher)."
+          "`chat_enabled` is false — ignoring it (gating with no way to message would deadlock the matcher).",
       );
     }
 
@@ -597,7 +607,7 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
         throw new Error(
           "multiplayer-reference-game: cannot auto-detect the partner — " +
             `${others.length} other participants are present. Set \`partner_id\` explicitly ` +
-            "(e.g. from plugin-multiplayer-role) so the trial does not guess."
+            "(e.g. from plugin-multiplayer-role) so the trial does not guess.",
         );
       }
       partner = others.length === 1 ? others[0] : null;
@@ -857,8 +867,8 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
           (k > 1 ? "s, in badge order, " : " ") +
           "to your partner."
         : k > 1
-        ? "Click a numbered slot, then the object your partner describes for it. Fill every slot, then submit."
-        : "Click the object your partner describes.";
+          ? "Click a numbered slot, then the object your partner describes for it. Fill every slot, then submit."
+          : "Click the object your partner describes.";
 
     // --- Trial state -----------------------------------------------------------------------------
     const start = performance.now();
@@ -905,8 +915,12 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
       if (!chatLog) return;
       const transcript = mergeMessages(group, chatKey);
       // Any message not from me came from the partner; on the matcher's client that is the director.
-      // Once true, clear the "wait for your partner" gate hint the blocked click may have shown.
-      if (!partnerHasMessaged && transcript.some((m) => m.senderId !== me)) {
+      // `gatePriorIds` excludes messages carried over from earlier rounds (chat_persists), so only a
+      // NEW director message this round opens the gate. Once true, clear the blocked-click hint.
+      if (
+        !partnerHasMessaged &&
+        transcript.some((m) => m.senderId !== me && !gatePriorIds.has(m.id))
+      ) {
         partnerHasMessaged = true;
         setGateHint(false);
       }
@@ -928,7 +942,7 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
 
           row.append(who, body);
           return row;
-        })
+        }),
       );
 
       if (pinnedToBottom) chatLog.scrollTop = chatLog.scrollHeight;
@@ -991,19 +1005,23 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
 
     // Show/clear the "wait for your partner's message" hint shown when a click is gated by
     // require_message_before_response. A dedicated element, so it never collides with chat send errors.
-    const setGateHint = (show: boolean) => {
+    // A function declaration (not a const arrow) so renderChat, which is hoisted, can call it safely.
+    // role="status" + aria-live so a screen-reader user hears why their click was ignored.
+    function setGateHint(show: boolean) {
       let hint = display_element.querySelector(`.${P}-gate-hint`) as HTMLElement | null;
       if (show) {
         if (!hint) {
           hint = document.createElement("div");
           hint.className = `${P}-gate-hint`;
+          hint.setAttribute("role", "status");
+          hint.setAttribute("aria-live", "polite");
           grid.before(hint);
         }
         hint.textContent = "Wait for your partner's description before choosing.";
       } else {
         hint?.remove();
       }
-    };
+    }
 
     // --- Matcher interaction ---------------------------------------------------------------------
     const updateMatcherUi = () => {
@@ -1073,8 +1091,16 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
       if (submitted) return;
 
       // Faithful to Hawkins Exp. 2: the matcher cannot respond until the director has spoken. Inert
-      // without a chat channel (would otherwise deadlock — see the setup warning).
+      // without a chat channel (would otherwise deadlock — see the setup warning). The blocked click
+      // is logged as a `gated_click` (matcher trying to jump the gun — a behavioral signal for the
+      // replication) but never mutates the assignment.
       if (trial.require_message_before_response && chatOn && !partnerHasMessaged) {
+        history.push({
+          t: now(),
+          action: "gated_click",
+          slot: responseMode === "click" ? 1 : activeSlot,
+          object_id: objectId,
+        });
         setGateHint(true);
         return;
       }
@@ -1237,7 +1263,7 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
         round,
         targets: [...targets],
         assignment:
-          finalAssignment == null ? null : k === 1 ? finalAssignment[1] ?? null : finalAssignment,
+          finalAssignment == null ? null : k === 1 ? (finalAssignment[1] ?? null) : finalAssignment,
         n_correct: finalScore?.nCorrect ?? null,
         n_targets: k,
         accuracy: finalScore?.accuracy ?? null,
@@ -1258,7 +1284,7 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
               round,
               partner,
               seedBase,
-              me
+              me,
             )
           : null;
       }

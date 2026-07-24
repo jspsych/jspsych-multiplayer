@@ -117,7 +117,7 @@ const clickCell = (el: HTMLElement, id: string) =>
   cell(el, id).dispatchEvent(new MouseEvent("click", { bubbles: true }));
 const clickSlot = (el: HTMLElement, n: number) =>
   (el.querySelector(`.${P}-slot[data-slot="${n}"]`) as HTMLButtonElement).dispatchEvent(
-    new MouseEvent("click", { bubbles: true })
+    new MouseEvent("click", { bubbles: true }),
   );
 const submitBtn = (el: HTMLElement) => el.querySelector(`.${P}-submit`) as HTMLButtonElement;
 const feedbackText = (el: HTMLElement) =>
@@ -159,7 +159,12 @@ describe("multiplayer-reference-game: single-target (sequential) click task", ()
     const { jsPsych, finished } = makeJsPsych(api);
     const el = display();
 
-    run(jsPsych, el, { ...base, partner_id: "director", require_message_before_response: true });
+    run(jsPsych, el, {
+      ...base,
+      partner_id: "director",
+      require_message_before_response: true,
+      save_interaction_history: true,
+    });
 
     // No director message yet: the click is ignored (no submission) and a hint is shown.
     clickCell(el, "b");
@@ -182,6 +187,44 @@ describe("multiplayer-reference-game: single-target (sequential) click task", ()
     clickCell(el, "b");
     expect(finished).toHaveLength(1);
     expect(finished[0]).toMatchObject({ correct: true, ended_by: "submit" });
+    // The two blocked clicks are logged as gated_click events before the final assign.
+    const actions = finished[0].interaction_history.map((e: any) => e.action);
+    expect(actions).toEqual(["gated_click", "gated_click", "assign"]);
+  });
+
+  it("with chat_persists, a prior round's message does NOT pre-open the gate", () => {
+    const api = new MockApi("matcher");
+    // chat_persists shares one log across rounds; seed it with the previous round's director message.
+    api.pushAs("director", {
+      joinedAt: 1,
+      reference_game_chat: [{ senderId: "director", seq: 0, text: "round-0 desc", ts: 1 }],
+    });
+    const { jsPsych, finished } = makeJsPsych(api);
+    const el = display();
+
+    run(jsPsych, el, {
+      ...base,
+      partner_id: "director",
+      require_message_before_response: true,
+      chat_persists: true,
+      round: 1,
+    });
+
+    // The carried-over message must not count for this new round — the click is still gated.
+    clickCell(el, "b");
+    expect(finished).toHaveLength(0);
+
+    // A fresh director message THIS round opens the gate.
+    api.pushAs("director", {
+      joinedAt: 1,
+      reference_game_chat: [
+        { senderId: "director", seq: 0, text: "round-0 desc", ts: 1 },
+        { senderId: "director", seq: 1, text: "this round's target", ts: 9 },
+      ],
+    });
+    clickCell(el, "b");
+    expect(finished).toHaveLength(1);
+    expect(finished[0]).toMatchObject({ ended_by: "submit" });
   });
 
   it("clicking a distractor records an incorrect submission", () => {
@@ -374,7 +417,7 @@ describe("multiplayer-reference-game: chat, timeout, and the real pipeline", () 
     const input = el.querySelector(`.${P}-chat-input`) as HTMLInputElement;
     input.value = "<img src=x onerror=alert(1)>";
     (el.querySelector(`.${P}-chat-form`) as HTMLFormElement).dispatchEvent(
-      new Event("submit", { cancelable: true })
+      new Event("submit", { cancelable: true }),
     );
     await flush();
 
@@ -428,7 +471,7 @@ describe("multiplayer-reference-game: chat, timeout, and the real pipeline", () 
           feedback: false,
         },
       ],
-      jsPsych
+      jsPsych,
     );
 
     clickCell(displayElement, "c");
@@ -449,7 +492,7 @@ describe("multiplayer-reference-game: review-fix regressions", () => {
     });
     const { jsPsych } = makeJsPsych(api);
     expect(() => run(jsPsych, display(), { ...base, partner_id: "director" })).toThrow(
-      /round 0 already/i
+      /round 0 already/i,
     );
   });
 
@@ -517,7 +560,7 @@ describe("multiplayer-reference-game: review-fix regressions", () => {
     });
     clickCell(el, "b"); // submit
     (el.querySelector(`.${P}-continue`) as HTMLButtonElement).dispatchEvent(
-      new MouseEvent("click", { bubbles: true })
+      new MouseEvent("click", { bubbles: true }),
     );
     expect(finished[0].ended_by).toBe("submit");
   });
