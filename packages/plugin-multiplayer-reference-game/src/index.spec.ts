@@ -85,6 +85,7 @@ const base = {
   chat_role: "both",
   max_messages: null,
   max_length: null,
+  require_message_before_response: false,
   placeholder: "Type…",
   chat_persists: false,
   chat_position: "below",
@@ -116,7 +117,7 @@ const clickCell = (el: HTMLElement, id: string) =>
   cell(el, id).dispatchEvent(new MouseEvent("click", { bubbles: true }));
 const clickSlot = (el: HTMLElement, n: number) =>
   (el.querySelector(`.${P}-slot[data-slot="${n}"]`) as HTMLButtonElement).dispatchEvent(
-    new MouseEvent("click", { bubbles: true }),
+    new MouseEvent("click", { bubbles: true })
   );
 const submitBtn = (el: HTMLElement) => el.querySelector(`.${P}-submit`) as HTMLButtonElement;
 const feedbackText = (el: HTMLElement) =>
@@ -150,6 +151,37 @@ describe("multiplayer-reference-game: single-target (sequential) click task", ()
       ended_by: "submit",
     });
     expect(finished[0].rt).toEqual(expect.any(Number));
+  });
+
+  it("require_message_before_response blocks the matcher until the DIRECTOR has messaged", () => {
+    const api = new MockApi("matcher");
+    api.pushAs("director", { joinedAt: 1 });
+    const { jsPsych, finished } = makeJsPsych(api);
+    const el = display();
+
+    run(jsPsych, el, { ...base, partner_id: "director", require_message_before_response: true });
+
+    // No director message yet: the click is ignored (no submission) and a hint is shown.
+    clickCell(el, "b");
+    expect(finished).toHaveLength(0);
+    expect(el.querySelector(`.${P}-gate-hint`)).not.toBeNull();
+
+    // The matcher's OWN message must not open the gate — only the director's counts.
+    api.pushAs("matcher", {
+      reference_game_chat_r0: [{ senderId: "matcher", seq: 0, text: "which one?", ts: 1 }],
+    });
+    clickCell(el, "b");
+    expect(finished).toHaveLength(0);
+
+    // Director speaks → gate opens, hint clears, and the next click submits normally.
+    api.pushAs("director", {
+      joinedAt: 1,
+      reference_game_chat_r0: [{ senderId: "director", seq: 0, text: "the star shape", ts: 5 }],
+    });
+    expect(el.querySelector(`.${P}-gate-hint`)).toBeNull();
+    clickCell(el, "b");
+    expect(finished).toHaveLength(1);
+    expect(finished[0]).toMatchObject({ correct: true, ended_by: "submit" });
   });
 
   it("clicking a distractor records an incorrect submission", () => {
@@ -342,7 +374,7 @@ describe("multiplayer-reference-game: chat, timeout, and the real pipeline", () 
     const input = el.querySelector(`.${P}-chat-input`) as HTMLInputElement;
     input.value = "<img src=x onerror=alert(1)>";
     (el.querySelector(`.${P}-chat-form`) as HTMLFormElement).dispatchEvent(
-      new Event("submit", { cancelable: true }),
+      new Event("submit", { cancelable: true })
     );
     await flush();
 
@@ -396,7 +428,7 @@ describe("multiplayer-reference-game: chat, timeout, and the real pipeline", () 
           feedback: false,
         },
       ],
-      jsPsych,
+      jsPsych
     );
 
     clickCell(displayElement, "c");
@@ -417,7 +449,7 @@ describe("multiplayer-reference-game: review-fix regressions", () => {
     });
     const { jsPsych } = makeJsPsych(api);
     expect(() => run(jsPsych, display(), { ...base, partner_id: "director" })).toThrow(
-      /round 0 already/i,
+      /round 0 already/i
     );
   });
 
@@ -485,7 +517,7 @@ describe("multiplayer-reference-game: review-fix regressions", () => {
     });
     clickCell(el, "b"); // submit
     (el.querySelector(`.${P}-continue`) as HTMLButtonElement).dispatchEvent(
-      new MouseEvent("click", { bubbles: true }),
+      new MouseEvent("click", { bubbles: true })
     );
     expect(finished[0].ended_by).toBe("submit");
   });

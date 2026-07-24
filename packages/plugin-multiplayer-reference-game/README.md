@@ -61,6 +61,7 @@ Only `stimuli`, `targets`, and `role` are required; everything else has a sensib
 | `chat_role`     | string  | `"both"`         | Who may SEND: `"director"`, `"matcher"`, or `"both"` (everyone always reads).          |
 | `max_messages`  | integer | `null`           | Cap on messages this participant may send this round. `null` = no cap.                 |
 | `max_length`    | integer | `null`           | Max characters per message. `null` = no limit.                                        |
+| `require_message_before_response` | boolean | `false` | If true, the matcher can't commit a selection until the director has sent a message this round (a referring expression per trial, à la Hawkins et al. 2020 Exp. 2). Gated clicks are ignored with a hint; inert (warns) when `chat_enabled` is false. |
 | `placeholder`   | string  | `"Type a message…"` | Placeholder text in the empty input.                                               |
 | `chat_persists` | boolean | `false`          | Carry the transcript across rounds (one shared log) vs. a fresh per-round log.         |
 | `chat_position` | string  | `"below"`        | Chat panel placement: `"below"` or `"beside"` the grid.                               |
