@@ -20,7 +20,7 @@ let _myScore: number | undefined;
 export function setMyStanding(
   leaderboard?: LeaderboardRow[],
   myRank?: number,
-  myScore?: number
+  myScore?: number,
 ): void {
   _leaderboard = leaderboard;
   _myRank = myRank;

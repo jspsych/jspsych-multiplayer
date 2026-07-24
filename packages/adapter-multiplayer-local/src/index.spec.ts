@@ -256,7 +256,12 @@ describe("LocalAdapter", () => {
     const { storage, bus } = makeBrowser();
     expect(
       () =>
-        new LocalAdapter({ sessionId: "a:b", storage, signal: bus.newSignal(), participantId: "p" })
+        new LocalAdapter({
+          sessionId: "a:b",
+          storage,
+          signal: bus.newSignal(),
+          participantId: "p",
+        }),
     ).toThrow(/sessionId must not contain ":"/);
   });
 
@@ -269,7 +274,7 @@ describe("LocalAdapter", () => {
           storage,
           signal: bus.newSignal(),
           participantId: "a:b",
-        })
+        }),
     ).toThrow(/participantId must not contain ":"/);
   });
 

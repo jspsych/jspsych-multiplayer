@@ -32,9 +32,7 @@ export type ScrambleMode = "independent" | "shared" | "matcher_only";
 
 /** `per_slot` counts correct slots; `all_or_nothing` scores k or 0; a function computes n_correct itself. */
 export type ScoringSpec =
-  | "per_slot"
-  | "all_or_nothing"
-  | ((assignment: SlotAssignment, targets: string[]) => number);
+  "per_slot" | "all_or_nothing" | ((assignment: SlotAssignment, targets: string[]) => number);
 
 export interface ScoreResult {
   nCorrect: number;
@@ -122,7 +120,7 @@ export function independentOrders(
   round: number,
   idA: string,
   idB: string,
-  seed?: string | null
+  seed?: string | null,
 ): Record<string, string[]> {
   const base = seed ?? "";
   const [lo, hi] = idA < idB ? [idA, idB] : [idB, idA];
@@ -160,7 +158,7 @@ export function displayOrder(
   round: number,
   participantId: string,
   seed?: string | null,
-  partnerId?: string | null
+  partnerId?: string | null,
 ): string[] {
   const base = seed ?? "";
   switch (mode) {
@@ -193,7 +191,7 @@ export function assignObject(
   prev: SlotAssignment,
   slot: number,
   objectId: string | null,
-  t: number
+  t: number,
 ): { next: SlotAssignment; events: InteractionEvent[] } {
   const next: SlotAssignment = { ...prev };
   const events: InteractionEvent[] = [];
@@ -256,7 +254,7 @@ export function nextUnfilledSlot(assignment: SlotAssignment, k: number, from = 0
 export function scoreAssignment(
   assignment: SlotAssignment,
   targets: string[],
-  opts: { ordered?: boolean; scoring?: ScoringSpec } = {}
+  opts: { ordered?: boolean; scoring?: ScoringSpec } = {},
 ): ScoreResult {
   const k = targets.length;
   const ordered = opts.ordered ?? k > 1;
@@ -307,7 +305,7 @@ function countCorrect(assignment: SlotAssignment, targets: string[], ordered: bo
 export function readRoundData(
   slot: Record<string, unknown> | undefined,
   dataKey: string,
-  round: number
+  round: number,
 ): Record<string, unknown> | undefined {
   const rounds = slot?.[dataKey];
   if (typeof rounds !== "object" || rounds === null || Array.isArray(rounds)) return undefined;
@@ -328,7 +326,7 @@ export function mergeRoundData(
   prev: Record<string, unknown>,
   dataKey: string,
   round: number,
-  data: Record<string, unknown>
+  data: Record<string, unknown>,
 ): Record<string, unknown> {
   const rounds = prev[dataKey];
   const existing =
@@ -347,7 +345,7 @@ export function readSubmission(
   group: Record<string, Record<string, unknown>>,
   participantId: string,
   dataKey: string,
-  round: number
+  round: number,
 ): Submission | undefined {
   const roundData = readRoundData(group[participantId], dataKey, round);
   const raw = roundData?.assignment;

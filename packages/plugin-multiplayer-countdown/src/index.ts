@@ -164,14 +164,14 @@ class MultiplayerCountdownPlugin implements JsPsychPlugin<Info> {
       throw new Error(
         "multiplayer-countdown: the `name` parameter is required and must be a non-empty string. " +
           "It namespaces this countdown's start timestamp and must be unique per countdown in a " +
-          "timeline (identical across clients, distinct from other countdowns)."
+          "timeline (identical across clients, distinct from other countdowns).",
       );
     }
     const duration = trial.duration;
     if (typeof duration !== "number" || !Number.isFinite(duration) || duration <= 0) {
       throw new Error(
         "multiplayer-countdown: the `duration` parameter is required and must be a positive number " +
-          "of milliseconds."
+          "of milliseconds.",
       );
     }
     const mode: Mode = trial.mode === "countup" ? "countup" : "countdown";
@@ -197,7 +197,7 @@ class MultiplayerCountdownPlugin implements JsPsychPlugin<Info> {
         console.error(
           "multiplayer-countdown: failed to push this participant's start timestamp; this client " +
             "will not contribute to the shared consensus start time.",
-          err
+          err,
         );
       });
     }
@@ -220,7 +220,7 @@ class MultiplayerCountdownPlugin implements JsPsychPlugin<Info> {
       `<div class="jspsych-multiplayer-countdown-sr" aria-live="assertive"></div>` +
       `</div>`;
     const timeEl = display_element.querySelector(
-      ".jspsych-multiplayer-countdown-time"
+      ".jspsych-multiplayer-countdown-time",
     ) as HTMLElement;
     const srEl = display_element.querySelector(".jspsych-multiplayer-countdown-sr") as HTMLElement;
 
@@ -290,7 +290,7 @@ class MultiplayerCountdownPlugin implements JsPsychPlugin<Info> {
         `multiplayer-countdown: the countdown named "${name}" had already expired when this trial ` +
           "started. This usually means the `name` was reused by an earlier countdown in the " +
           "timeline (its start timestamp persists in the group session), or this participant joined " +
-          "after the group's countdown had already ended."
+          "after the group's countdown had already ended.",
       );
       end();
       return;

@@ -175,21 +175,21 @@ class MultiplayerChoicePlugin implements JsPsychPlugin<Info> {
     if (me == null) {
       throw new Error(
         "plugin-multiplayer-choice: no participantId — the multiplayer adapter must be connected " +
-          "(await jsPsych.multiplayer.connect(adapter)) before this trial runs."
+          "(await jsPsych.multiplayer.connect(adapter)) before this trial runs.",
       );
     }
 
     const choices = trial.choices;
     if (!Array.isArray(choices) || choices.length === 0) {
       throw new Error(
-        "plugin-multiplayer-choice: `choices` is required and must be a non-empty array of option labels."
+        "plugin-multiplayer-choice: `choices` is required and must be a non-empty array of option labels.",
       );
     }
     const expected = trial.expected_players;
     if (typeof expected !== "number" || !Number.isInteger(expected) || expected < 1) {
       throw new Error(
         "plugin-multiplayer-choice: `expected_players` is required and must be a positive integer " +
-          "(the group size, including this participant, that must choose before the barrier lifts)."
+          "(the group size, including this participant, that must choose before the barrier lifts).",
       );
     }
     const revealMode = trial.reveal_mode;
@@ -198,8 +198,8 @@ class MultiplayerChoicePlugin implements JsPsychPlugin<Info> {
       // anonymity semantics without warning.
       throw new Error(
         `plugin-multiplayer-choice: \`reveal_mode\` must be "players" or "tally" (got ${JSON.stringify(
-          revealMode
-        )}).`
+          revealMode,
+        )}).`,
       );
     }
 
@@ -283,7 +283,7 @@ class MultiplayerChoicePlugin implements JsPsychPlugin<Info> {
         index,
         tallyResult,
         winnerResult,
-        myPayoff
+        myPayoff,
       );
     } else {
       await this.showPlayersReveal(display_element, trial, me, choicesByPlayer, myPayoff);
@@ -295,7 +295,7 @@ class MultiplayerChoicePlugin implements JsPsychPlugin<Info> {
   private collectChoice(
     display_element: HTMLElement,
     trial: TrialType<Info>,
-    on_load?: () => void
+    on_load?: () => void,
   ): Promise<{ index: number; rt: number }> {
     return new Promise((resolve) => {
       const optionsHtml = (trial.choices as string[])
@@ -324,7 +324,7 @@ class MultiplayerChoicePlugin implements JsPsychPlugin<Info> {
 
       const shownAt = performance.now();
       const optionEls = display_element.querySelectorAll<HTMLElement>(
-        ".jspsych-multiplayer-choice-option"
+        ".jspsych-multiplayer-choice-option",
       );
       let picked = false;
       // Listen on the CONTAINER (which always exists and is in `choices` order), not the inner
@@ -354,7 +354,7 @@ class MultiplayerChoicePlugin implements JsPsychPlugin<Info> {
   private computePayoff(
     trial: TrialType<Info>,
     choices: Record<string, Choice>,
-    me: string
+    me: string,
   ): number | null {
     if (typeof trial.payoff !== "function") return null;
     try {
@@ -370,7 +370,7 @@ class MultiplayerChoicePlugin implements JsPsychPlugin<Info> {
   private payoffLine(myPayoff: number | null): string {
     return myPayoff != null
       ? `<p class="jspsych-multiplayer-choice-reveal-payoff">Your payoff: ${escapeHtml(
-          String(myPayoff)
+          String(myPayoff),
         )}</p>`
       : "";
   }
@@ -381,7 +381,7 @@ class MultiplayerChoicePlugin implements JsPsychPlugin<Info> {
     trial: TrialType<Info>,
     me: string,
     choices: Record<string, Choice>,
-    myPayoff: number | null
+    myPayoff: number | null,
   ): Promise<void> {
     const nameOf = (id: string): string => {
       if (typeof trial.player_label === "function") {
@@ -390,7 +390,7 @@ class MultiplayerChoicePlugin implements JsPsychPlugin<Info> {
         } catch (err) {
           console.error(
             "plugin-multiplayer-choice: `player_label` threw; using the participantId instead",
-            err
+            err,
           );
         }
       }
@@ -419,7 +419,7 @@ class MultiplayerChoicePlugin implements JsPsychPlugin<Info> {
     myIndex: number,
     counts: OptionTally[],
     result: WinnerResult,
-    myPayoff: number | null
+    myPayoff: number | null,
   ): Promise<void> {
     const total = result.totalVotes;
     const tiedIndices = new Set(result.tied.map((option) => option.index));
@@ -454,7 +454,7 @@ class MultiplayerChoicePlugin implements JsPsychPlugin<Info> {
     }
 
     const body = `<ul class="jspsych-multiplayer-choice-tally-list">${items}</ul>${summary}${this.payoffLine(
-      myPayoff
+      myPayoff,
     )}`;
     return this.showReveal(display_element, trial, body, " is-tally");
   }
@@ -464,7 +464,7 @@ class MultiplayerChoicePlugin implements JsPsychPlugin<Info> {
     display_element: HTMLElement,
     trial: TrialType<Info>,
     bodyHtml: string,
-    modifierClass: string
+    modifierClass: string,
   ): Promise<void> {
     return new Promise((resolve) => {
       display_element.innerHTML = `
@@ -475,7 +475,7 @@ class MultiplayerChoicePlugin implements JsPsychPlugin<Info> {
           ${
             trial.continue_label != null
               ? `<button type="button" class="jspsych-btn jspsych-multiplayer-choice-continue">${escapeHtml(
-                  trial.continue_label
+                  trial.continue_label,
                 )}</button>`
               : ""
           }
@@ -489,7 +489,7 @@ class MultiplayerChoicePlugin implements JsPsychPlugin<Info> {
       };
 
       const button = display_element.querySelector(
-        ".jspsych-multiplayer-choice-continue"
+        ".jspsych-multiplayer-choice-continue",
       ) as HTMLButtonElement | null;
       button?.addEventListener("click", end, { once: true });
 
@@ -501,7 +501,7 @@ class MultiplayerChoicePlugin implements JsPsychPlugin<Info> {
       if (trial.continue_label == null && !hasRevealDuration) {
         console.warn(
           "plugin-multiplayer-choice: `reveal` is on but neither `continue_label` nor " +
-            "`reveal_duration` is set — the reveal screen has no way to advance."
+            "`reveal_duration` is set — the reveal screen has no way to advance.",
         );
       }
     });

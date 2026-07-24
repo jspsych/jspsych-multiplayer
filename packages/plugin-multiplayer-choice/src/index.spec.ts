@@ -82,7 +82,7 @@ const flush = () => new Promise((r) => setTimeout(r, 0));
 /** Click the i-th option button on the choice screen. */
 function clickOption(el: HTMLElement, i: number) {
   const buttons = el.querySelectorAll<HTMLButtonElement>(
-    ".jspsych-multiplayer-choice-option button"
+    ".jspsych-multiplayer-choice-option button",
   );
   buttons[i].click();
 }
@@ -146,7 +146,7 @@ describe("plugin-multiplayer-choice — guards", () => {
     const api = new MockApi(null);
     const { jsPsych } = makeJsPsych(api);
     await expect(
-      new MultiplayerChoicePlugin(jsPsych as never).trial(display(), { ...base } as never)
+      new MultiplayerChoicePlugin(jsPsych as never).trial(display(), { ...base } as never),
     ).rejects.toThrow(/participantId/i);
   });
 
@@ -157,7 +157,7 @@ describe("plugin-multiplayer-choice — guards", () => {
       new MultiplayerChoicePlugin(jsPsych as never).trial(display(), {
         ...base,
         choices: [],
-      } as never)
+      } as never),
     ).rejects.toThrow(/choices/i);
   });
 
@@ -168,7 +168,7 @@ describe("plugin-multiplayer-choice — guards", () => {
       new MultiplayerChoicePlugin(jsPsych as never).trial(display(), {
         ...base,
         expected_players: 0,
-      } as never)
+      } as never),
     ).rejects.toThrow(/expected_players/i);
   });
 
@@ -180,7 +180,7 @@ describe("plugin-multiplayer-choice — guards", () => {
       new MultiplayerChoicePlugin(jsPsych as never).trial(display(), {
         ...base,
         reveal_mode: "anonymous",
-      } as never)
+      } as never),
     ).rejects.toThrow(/reveal_mode/i);
   });
 });
@@ -323,7 +323,7 @@ describe("plugin-multiplayer-choice — reveal:false, timeout, payoff, and robus
     await flush();
 
     expect(el.querySelector(".jspsych-multiplayer-choice-reveal-payoff")?.textContent).toContain(
-      "0"
+      "0",
     );
     clickContinue(el);
     await done;
@@ -568,7 +568,7 @@ describe("plugin-multiplayer-choice — tally mode (anonymous poll)", () => {
     expect(el.textContent).toContain("Winner");
     expect(el.querySelector(".jspsych-multiplayer-choice-reveal-item")).toBeNull(); // no attributed list
     expect(
-      el.querySelector(".jspsych-multiplayer-choice-reveal")?.classList.contains("is-tally")
+      el.querySelector(".jspsych-multiplayer-choice-reveal")?.classList.contains("is-tally"),
     ).toBe(true);
 
     clickContinue(el);
@@ -690,7 +690,7 @@ describe("plugin-multiplayer-choice — tally mode (anonymous poll)", () => {
     await flush();
 
     expect(el.querySelector(".jspsych-multiplayer-choice-reveal-payoff")?.textContent).toContain(
-      "7"
+      "7",
     );
     clickContinue(el);
     await done;
@@ -716,7 +716,7 @@ describe("plugin-multiplayer-choice — real jsPsych pipeline (startTimeline smo
 
     const { displayElement, expectFinished, getData } = await startTimeline(
       [{ type: MultiplayerChoicePlugin, choices: ["Cooperate", "Defect"], expected_players: 2 }],
-      jsPsych
+      jsPsych,
     );
 
     await flush();

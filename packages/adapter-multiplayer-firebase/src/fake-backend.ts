@@ -130,7 +130,7 @@ export class FakeBackend implements FirebaseBackend {
   set(path: string, value: string): Promise<void> {
     if (this.denyWrite?.(path)) {
       return Promise.reject(
-        new Error("PERMISSION_DENIED: Client doesn't have permission to access the desired data.")
+        new Error("PERMISSION_DENIED: Client doesn't have permission to access the desired data."),
       );
     }
     this.rtdb.set(path, value); // fires the echo synchronously, before we resolve
@@ -145,11 +145,11 @@ export class FakeBackend implements FirebaseBackend {
   onValue(
     path: string,
     onData: (snapshot: RawSessionSnapshot | null) => void,
-    onError: (error: Error) => void
+    onError: (error: Error) => void,
   ): Unsubscribe {
     if (this.denyReads) {
       onError(
-        new Error("PERMISSION_DENIED: Client doesn't have permission to access the desired data.")
+        new Error("PERMISSION_DENIED: Client doesn't have permission to access the desired data."),
       );
       return () => {};
     }

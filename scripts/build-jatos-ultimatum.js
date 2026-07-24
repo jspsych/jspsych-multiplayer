@@ -83,7 +83,7 @@ const { distDir, assetsDir, jasFileName } = buildAssetsAndMetadata({
 
 const html = rewriteAssetPaths(
   readFileSync(resolve(root, "examples/ultimatum-game-jatos.html"), "utf8"),
-  pathRewrites
+  pathRewrites,
 );
 writeFileSync(resolve(assetsDir, "index.html"), html);
 console.log(`  wrote   index.html`);

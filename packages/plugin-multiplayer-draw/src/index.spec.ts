@@ -464,7 +464,7 @@ describe("multiplayer-draw plugin", () => {
             ts: 5,
           },
         ],
-      })
+      }),
     ).not.toThrow();
 
     const roster = el.querySelector(".jspsych-multiplayer-draw-roster") as HTMLElement;
@@ -481,7 +481,7 @@ describe("multiplayer-draw plugin", () => {
       ...base,
       show_roster: true,
       roster_label: (id: string, group: GroupSessionData) =>
-        id === "me" ? "You" : (group[id] as any)?.name ?? id,
+        id === "me" ? "You" : ((group[id] as any)?.name ?? id),
     } as never);
 
     const roster = el.querySelector(".jspsych-multiplayer-draw-roster") as HTMLElement;
@@ -524,7 +524,7 @@ describe("multiplayer-draw plugin", () => {
     // only calls from here on. Otherwise the init repaint would satisfy the assertion by itself.
     const clearSpy = jest.spyOn(
       canvasOf(el).getContext("2d") as CanvasRenderingContext2D,
-      "clearRect"
+      "clearRect",
     );
     clearSpy.mockClear();
 
@@ -687,7 +687,7 @@ describe("multiplayer-draw plugin", () => {
               ts: 1,
             },
           ],
-        })
+        }),
       ).not.toThrow();
       jest.advanceTimersByTime(60);
 
@@ -725,7 +725,7 @@ describe("multiplayer-draw plugin", () => {
             ts: 1,
           },
         ],
-      })
+      }),
     ).not.toThrow();
     expect(finished).toHaveLength(0);
   });
@@ -766,7 +766,7 @@ describe("multiplayer-draw plugin", () => {
 
     const { displayElement, expectFinished, getData } = await startTimeline(
       [{ type: MultiplayerDrawPlugin, end_button_label: "Done" }],
-      jsPsych
+      jsPsych,
     );
 
     drawStroke(displayElement, [10, 10], [50, 50]);

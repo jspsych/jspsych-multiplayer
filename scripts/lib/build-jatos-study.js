@@ -28,7 +28,7 @@ export function nodeModulesAsset(root, specifier) {
     throw new Error(
       `Missing ${specifier} in node_modules.\n` +
         `  jsPsych core and the stock plugins are devDependencies of the repo root (they are not ` +
-        `packages built in this repo) — run \`npm install\` at the repo root to install them.`
+        `packages built in this repo) — run \`npm install\` at the repo root to install them.`,
     );
   }
   return path;
@@ -47,7 +47,7 @@ export function multiplayerAsset(root, packageName) {
       `Missing built output for ${packageName} (${path}).\n` +
         `  \`dist/\` is gitignored, so run \`npm run build\` at the repo root first. If it already ` +
         `exists but you changed package source since, rebuild anyway — a stale dist/ silently ships ` +
-        `old behaviour.`
+        `old behaviour.`,
     );
   }
   return path;
@@ -81,7 +81,7 @@ export function rewriteAssetPaths(html, pathRewrites) {
       `These asset paths were not found in the example's HTML:\n` +
         missed.map((m) => `    ${m}`).join("\n") +
         `\n  The example's <script>/<link> tags changed. Update this build script's ` +
-        `pathRewrites to match, or the archive will ship broken references.`
+        `pathRewrites to match, or the archive will ship broken references.`,
     );
   }
   return out;
@@ -200,6 +200,6 @@ export function printPre3694Caveat() {
   console.log(
     `\n  NOTE: the bundled jsPsych core is a published release, which does NOT yet carry the\n` +
       `  multiplayer API (jsPsych#3694). The archive imports into JATOS fine, but the study will\n` +
-      `  fail at connect() until #3694 ships — or until you swap jspsych.js for a #3694 build.`
+      `  fail at connect() until #3694 ships — or until you swap jspsych.js for a #3694 build.`,
   );
 }

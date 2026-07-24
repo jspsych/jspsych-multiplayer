@@ -99,7 +99,7 @@ describe("plugin-multiplayer-role — package surface", () => {
   it("the static assignRoles actually works (sanity check of the public path)", () => {
     const map = MultiplayerRolePlugin.assignRoles(
       { b: {}, a: {} },
-      { roles: ["first", "second"], strategy: "join_order" }
+      { roles: ["first", "second"], strategy: "join_order" },
     );
     expect(map.a.role).toBe("first");
     expect(map.b.role).toBe("second");
@@ -120,7 +120,7 @@ describe("plugin-multiplayer-role — trial wrapper", () => {
     const { jsPsych } = makeJsPsych(api);
     const plugin = new MultiplayerRolePlugin(jsPsych as never);
     expect(() => plugin.trial(display(), { roles: ["a"], strategy: () => ({}) } as never)).toThrow(
-      /ready/i
+      /ready/i,
     );
   });
 
@@ -507,7 +507,7 @@ describe("plugin-multiplayer-role — real jsPsych pipeline (startTimeline smoke
           group_size: 2,
         },
       ],
-      jsPsych
+      jsPsych,
     );
 
     await finished;

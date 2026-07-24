@@ -103,7 +103,7 @@ export function appendOwnMessage(
   text: string,
   senderId: string,
   seq: number,
-  now: number
+  now: number,
 ): ChatMessage[] {
   return [...own, { id: makeMessageId(senderId, seq), senderId, seq, text, ts: now }];
 }

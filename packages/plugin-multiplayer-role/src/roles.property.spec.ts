@@ -154,7 +154,7 @@ describe("property: every assignment is a bijection over the declared roles", ()
           expect(
             Object.values(m)
               .map((a) => a.role)
-              .sort()
+              .sort(),
           ).toEqual(expectedRoles);
         }
       });

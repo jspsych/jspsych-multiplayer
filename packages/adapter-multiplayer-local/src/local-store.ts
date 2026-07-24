@@ -39,7 +39,7 @@ export function slotKey(keyPrefix: string, sessionId: string, participantId: str
 export function participantIdFromKey(
   keyPrefix: string,
   sessionId: string,
-  key: string
+  key: string,
 ): string | null {
   const prefix = slotPrefix(keyPrefix, sessionId);
   return key.startsWith(prefix) ? key.slice(prefix.length) : null;
@@ -50,7 +50,7 @@ export function readSlot(
   storage: SlotStorage,
   keyPrefix: string,
   sessionId: string,
-  participantId: string
+  participantId: string,
 ): Record<string, unknown> | undefined {
   const raw = storage.getItem(slotKey(keyPrefix, sessionId, participantId));
   if (raw === null) return undefined;
@@ -66,7 +66,7 @@ export function readSlot(
 export function readAllSlots(
   storage: SlotStorage,
   keyPrefix: string,
-  sessionId: string
+  sessionId: string,
 ): GroupSessionData {
   const all: GroupSessionData = {};
   // Snapshot the keys first: reading is side-effect-free, but iterating by live index while the
@@ -96,7 +96,7 @@ export function writeSlot(
   keyPrefix: string,
   sessionId: string,
   participantId: string,
-  data: Record<string, unknown>
+  data: Record<string, unknown>,
 ): void {
   storage.setItem(slotKey(keyPrefix, sessionId, participantId), JSON.stringify(data));
 }
@@ -106,7 +106,7 @@ export function removeSlot(
   storage: SlotStorage,
   keyPrefix: string,
   sessionId: string,
-  participantId: string
+  participantId: string,
 ): void {
   storage.removeItem(slotKey(keyPrefix, sessionId, participantId));
 }

@@ -2,10 +2,10 @@ import { GroupSessionData, buildLeaderboard, countReported, readScoreEntry } fro
 
 // A snapshot where each participant stored their entry under the default data_key "score".
 const snap = (
-  entries: Record<string, { score?: unknown; label?: string } | Record<string, unknown>>
+  entries: Record<string, { score?: unknown; label?: string } | Record<string, unknown>>,
 ) =>
   Object.fromEntries(
-    Object.entries(entries).map(([id, e]) => [id, { score: e }])
+    Object.entries(entries).map(([id, e]) => [id, { score: e }]),
   ) as GroupSessionData;
 
 describe("readScoreEntry", () => {
@@ -77,7 +77,7 @@ describe("buildLeaderboard", () => {
   it("standard tie ranking shares a rank and leaves a gap (1,2,2,4)", () => {
     const rows = buildLeaderboard(
       snap({ a: { score: 50 }, b: { score: 30 }, c: { score: 30 }, d: { score: 10 } }),
-      { dataKey: "score", tieMethod: "standard" }
+      { dataKey: "score", tieMethod: "standard" },
     );
     expect(rows.map((r) => r.rank)).toEqual([1, 2, 2, 4]);
   });
@@ -85,7 +85,7 @@ describe("buildLeaderboard", () => {
   it("dense tie ranking shares a rank with no gap (1,2,2,3)", () => {
     const rows = buildLeaderboard(
       snap({ a: { score: 50 }, b: { score: 30 }, c: { score: 30 }, d: { score: 10 } }),
-      { dataKey: "score", tieMethod: "dense" }
+      { dataKey: "score", tieMethod: "dense" },
     );
     expect(rows.map((r) => r.rank)).toEqual([1, 2, 2, 3]);
   });
@@ -115,7 +115,7 @@ describe("buildLeaderboard", () => {
   it("uses the pushed label, falling back to the participantId", () => {
     const rows = buildLeaderboard(
       { a: { score: { score: 1, label: "Alice" } }, b: { score: { score: 2 } } },
-      { dataKey: "score" }
+      { dataKey: "score" },
     );
     expect(rows.find((r) => r.participantId === "a")!.label).toBe("Alice");
     expect(rows.find((r) => r.participantId === "b")!.label).toBe("b");

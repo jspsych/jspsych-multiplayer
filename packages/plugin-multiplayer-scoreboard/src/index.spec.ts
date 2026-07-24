@@ -96,7 +96,7 @@ describe("plugin-multiplayer-scoreboard — package surface", () => {
   it("the static buildLeaderboard actually works (sanity check of the public path)", () => {
     const rows = MultiplayerScoreboardPlugin.buildLeaderboard(
       { a: { score: { score: 5 } }, b: { score: { score: 9 } } },
-      { dataKey: "score" }
+      { dataKey: "score" },
     );
     expect(rows.map((r) => r.participantId)).toEqual(["b", "a"]);
   });
@@ -121,7 +121,7 @@ describe("plugin-multiplayer-scoreboard — trial wrapper", () => {
     const { jsPsych } = makeJsPsych(api);
     const plugin = new MultiplayerScoreboardPlugin(jsPsych as never);
     expect(() => plugin.trial(display(), { ...base, score: 1, group_size: 1 } as never)).toThrow(
-      /participantId/i
+      /participantId/i,
     );
   });
 
@@ -517,7 +517,7 @@ describe("plugin-multiplayer-scoreboard — real jsPsych pipeline (startTimeline
 
     const { getData, expectFinished, finished, displayElement } = await startTimeline(
       [{ type: MultiplayerScoreboardPlugin, score: 20, group_size: 3 }],
-      jsPsych
+      jsPsych,
     );
 
     await flush();

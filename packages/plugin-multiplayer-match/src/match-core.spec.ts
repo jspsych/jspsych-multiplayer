@@ -47,7 +47,7 @@ describe("buildMatches — pairing", () => {
         c: { joinedAt: 30 },
         d: { joinedAt: 20 },
       }),
-      { strategy: "join_order" }
+      { strategy: "join_order" },
     );
     // Join order is b(10), d(20), c(30), a(40) -> pairs (b,d) and (c,a).
     expect(groupsOf(map)).toEqual([
@@ -107,14 +107,14 @@ describe("buildMatches — validation & edges", () => {
 
   it("rejects an unknown strategy rather than silently ordering by id", () => {
     expect(() => buildMatches(snap(["a", "b"]), { strategy: "rotate" as never })).toThrow(
-      /unknown strategy/
+      /unknown strategy/,
     );
   });
 
   it("rejects an unknown leftover value rather than silently acting like smaller_group", () => {
     // A typo must not slip past the "error"/"spectator" checks and quietly make an undersized group.
     expect(() => buildMatches(snap(["a", "b", "c"]), { leftover: "spectators" as never })).toThrow(
-      /unknown leftover/
+      /unknown leftover/,
     );
   });
 

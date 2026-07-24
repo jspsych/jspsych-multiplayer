@@ -114,7 +114,7 @@ describe("plugin-multiplayer-match — trial wrapper", () => {
     const { jsPsych } = makeJsPsych(api);
     const plugin = new MultiplayerMatchPlugin(jsPsych as never);
     expect(() => plugin.trial(display(), { ...base, expected_players: 2 } as never)).toThrow(
-      /participantId/i
+      /participantId/i,
     );
   });
 
@@ -367,7 +367,7 @@ describe("plugin-multiplayer-match — real jsPsych pipeline (startTimeline smok
 
     const { getData, expectFinished } = await startTimeline(
       [{ type: MultiplayerMatchPlugin, expected_players: 2, group_size: 2 }],
-      jsPsych
+      jsPsych,
     );
     await expectFinished();
 

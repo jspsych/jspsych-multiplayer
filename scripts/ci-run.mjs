@@ -21,7 +21,7 @@ const packagesDir = fileURLToPath(new URL("../packages/", import.meta.url));
 const hasPackages =
   existsSync(packagesDir) &&
   readdirSync(packagesDir).some((entry) =>
-    existsSync(fileURLToPath(new URL(`../packages/${entry}/package.json`, import.meta.url)))
+    existsSync(fileURLToPath(new URL(`../packages/${entry}/package.json`, import.meta.url))),
   );
 
 if (!hasPackages) {

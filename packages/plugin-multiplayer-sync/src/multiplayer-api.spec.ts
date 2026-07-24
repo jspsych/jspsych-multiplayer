@@ -23,7 +23,7 @@ describe("resolveMultiplayerApi", () => {
   it("throws a directing error when neither location carries the API", () => {
     // A plain released jsPsych: pluginAPI exists but has none of the multiplayer members.
     expect(() => resolveMultiplayerApi({ pluginAPI: { clearAllTimeouts: () => {} } })).toThrow(
-      /No multiplayer API found/
+      /No multiplayer API found/,
     );
     expect(() => resolveMultiplayerApi({})).toThrow(/No multiplayer API found/);
   });

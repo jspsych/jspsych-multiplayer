@@ -129,7 +129,7 @@ class MultiplayerRolePlugin implements JsPsychPlugin<Info> {
     if (me == null) {
       throw new Error(
         "plugin-multiplayer-role: no participantId — the multiplayer adapter must be connected " +
-          "(await jsPsych.multiplayer.connect(adapter)) before this trial runs."
+          "(await jsPsych.multiplayer.connect(adapter)) before this trial runs.",
       );
     }
 
@@ -139,7 +139,7 @@ class MultiplayerRolePlugin implements JsPsychPlugin<Info> {
     if (typeof trial.strategy === "function" && trial.ready == null) {
       throw new Error(
         "plugin-multiplayer-role: a custom `strategy` function requires an explicit `ready` " +
-          "predicate (the readiness gate cannot be derived from an opaque strategy)."
+          "predicate (the readiness gate cannot be derived from an opaque strategy).",
       );
     }
 
@@ -152,7 +152,7 @@ class MultiplayerRolePlugin implements JsPsychPlugin<Info> {
         "plugin-multiplayer-role: no `group_size` and no custom `ready` — readiness can resolve as " +
           "soon as this client has pushed, assigning over a partial group. Set `group_size` (the exact " +
           "count) or supply a `ready` predicate unless an upstream barrier guarantees all peers have " +
-          "already pushed into this session."
+          "already pushed into this session.",
       );
     }
 
@@ -235,7 +235,7 @@ class MultiplayerRolePlugin implements JsPsychPlugin<Info> {
             throw error;
           }
           return this.handleTimeout(trial);
-        }
+        },
       );
   }
 

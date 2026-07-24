@@ -110,7 +110,7 @@ export default class FirebaseAdapter implements MultiplayerAdapter {
     if (options.useUidAsParticipantId && options.participantId !== undefined) {
       throw new Error(
         "FirebaseAdapter: `useUidAsParticipantId` is incompatible with a supplied `participantId` " +
-          "— the uid becomes the id in that mode. Pass one or the other, not both."
+          "— the uid becomes the id in that mode. Pass one or the other, not both.",
       );
     }
 
@@ -181,7 +181,7 @@ export default class FirebaseAdapter implements MultiplayerAdapter {
             "site data), or the security rules are missing the memberships block (see the README's " +
             `recommended rules). Underlying error: ${
               err instanceof Error ? err.message : String(err)
-            }`
+            }`,
         );
       }
     }
@@ -213,8 +213,8 @@ export default class FirebaseAdapter implements MultiplayerAdapter {
           new Error(
             `FirebaseAdapter: connect() timed out after ${this.connectTimeoutMs}ms waiting for the ` +
               "first session snapshot. Check the database URL, network, and that your security " +
-              "rules grant read access to this session (see the README rules recipe)."
-          )
+              "rules grant read access to this session (see the README rules recipe).",
+          ),
         );
       }, this.connectTimeoutMs);
 
@@ -231,10 +231,10 @@ export default class FirebaseAdapter implements MultiplayerAdapter {
             new Error(
               "FirebaseAdapter: the session listener was cancelled — this is almost always a " +
                 "security-rules denial. Grant read access to this session (see the README rules " +
-                `recipe). Underlying error: ${error.message}`
-            )
+                `recipe). Underlying error: ${error.message}`,
+            ),
           );
-        }
+        },
       );
     });
 
@@ -429,7 +429,7 @@ function validateKey(label: string, value: string): void {
   if (match) {
     throw new Error(
       `FirebaseAdapter: ${label} must not contain "${match[0]}" (got "${value}"). RTDB keys forbid ` +
-        '. # $ [ ] / and we also reserve ":" for cross-adapter id portability with the local adapter.'
+        '. # $ [ ] / and we also reserve ":" for cross-adapter id portability with the local adapter.',
     );
   }
 }
