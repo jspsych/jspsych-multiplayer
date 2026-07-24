@@ -32,7 +32,7 @@
     "husky": "^7.0.1",
     "import-sort-style-module": "^6.0.0",
     "jspsych": "8.2.3",
-    "lint-staged": "^17.0.8",
+    "lint-staged": "^17.2.0",
     "prettier": "^2.3.2",
     "prettier-plugin-import-sort": "^0.0.7"
   },
