@@ -303,8 +303,9 @@ class MultiplayerDrawPlugin implements JsPsychPlugin<Info> {
     const start = performance.now();
     let ended = false;
     let unsubscribe: Unsubscribe | null = null;
-    let endTimer: ReturnType<typeof setTimeout> | null = null;
-    let resizeTimer: ReturnType<typeof setTimeout> | null = null;
+    // `number`, not ReturnType<typeof setTimeout>: pluginAPI.setTimeout returns a numeric handle.
+    let endTimer: number | null = null;
+    let resizeTimer: number | null = null;
 
     // --- Painting -------------------------------------------------------------------------------
     function strokeSegment(stroke: Stroke, fromPointIndex: number) {
@@ -581,7 +582,7 @@ class MultiplayerDrawPlugin implements JsPsychPlugin<Info> {
     // tracking does not, since the pixel canvas was cleared) -------------------------------------
     const onResize = () => {
       if (resizeTimer != null) clearTimeout(resizeTimer);
-      resizeTimer = setTimeout(() => {
+      resizeTimer = this.jsPsych.pluginAPI.setTimeout(() => {
         sizeCanvas();
         doFullRepaint(localGroup());
       }, 100);
@@ -651,7 +652,7 @@ class MultiplayerDrawPlugin implements JsPsychPlugin<Info> {
     });
 
     if (hasDuration) {
-      endTimer = setTimeout(() => end("duration"), trial.duration as number);
+      endTimer = this.jsPsych.pluginAPI.setTimeout(() => end("duration"), trial.duration as number);
     }
   }
 }

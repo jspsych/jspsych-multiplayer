@@ -496,7 +496,7 @@ class MultiplayerChoicePlugin implements JsPsychPlugin<Info> {
       const hasRevealDuration =
         typeof trial.reveal_duration === "number" && trial.reveal_duration > 0;
       if (hasRevealDuration) {
-        setTimeout(end, trial.reveal_duration as number);
+        this.jsPsych.pluginAPI.setTimeout(end, trial.reveal_duration as number);
       }
       if (trial.continue_label == null && !hasRevealDuration) {
         console.warn(
