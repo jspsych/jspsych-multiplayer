@@ -6,7 +6,7 @@ factory used by the other jsPsych-family satellite sites.
 
 This is a **standalone project, deliberately not a workspace of the repo root** — it has its
 own `package.json` and lockfile, so the docs dependency tree stays out of the published
-packages' graph. Run every command below from `website/`.
+packages' graph. Run every command below from `docs/`.
 
 ```sh
 npm install
@@ -15,16 +15,16 @@ npm run build # production build into build/
 npm run serve # preview the production build
 ```
 
-Deployment is automatic: pushing to `main` with changes under `website/` triggers
+Deployment is automatic: pushing to `main` with changes under `docs/` triggers
 `.github/workflows/publish-docs.yml`, which builds and publishes to GitHub Pages. The custom
 domain comes from `static/CNAME`.
 
 ## What goes here
 
-Only **user-facing** documentation. Internal design notes live untracked in the repo-root
-`docs/` directory and are neither committed nor published.
+Only **user-facing** documentation. Internal design notes live next to what they document —
+e.g. `examples/group-quiz/DESIGN.md` — and are not published here.
 
-Content lives in `docs/`, in four groups matching the navbar: the single `introduction.md`
+Content lives in `docs/docs/`, in four groups matching the navbar: the single `introduction.md`
 page, plus `tutorials/`, `guides/`, and `reference/`. `sidebars.ts` defines one sidebar per
 tab. Tutorials are `.mdx` and use the local `<Steps>/<Step>` component from
 `src/components/Steps`.
