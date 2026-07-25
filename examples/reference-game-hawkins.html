@@ -39,15 +39,16 @@
     //     exact channel, and what makes the reference-shortening effect possible.
     //   • Full immediate feedback to both: the director sees the matcher's click, the matcher sees the
     //     intended tangram.
+    //   • The matcher cannot click until the director has sent a message that round
+    //     (require_message_before_response), so a referring expression exists on every trial and the
+    //     matcher can't blind-guess to rush through — verified in hawkrobe/tangrams game.client.js,
+    //     where the click handler is gated behind `if (globalGame.messageSent)`.
     //
-    // KNOWN DEVIATION (pending plugin support): in Hawkins Exp. 2 the matcher could not click a tangram
-    // until the director had sent a message (verified in hawkrobe/tangrams game.client.js: the click
-    // handler is gated behind `if (globalGame.messageSent)`), which guarantees a referring expression on
-    // every trial and stops the matcher blind-guessing to rush through. plugin-multiplayer-reference-game
-    // has no such gate yet, so HERE the matcher can click before any message is sent — you will see
-    // zero-message rounds in pilot data. Tracked as a `require_message_before_response` param on the
-    // plugin; set it here (and delete this note) once that lands. This is the ONLY known departure from
-    // the paper — every other parameter above was verified against the paper + hawkrobe/tangrams code.
+    // Every parameter above was verified against the paper + hawkrobe/tangrams code. The one departure
+    // is not a design choice: `round_timeout` (60s) has no counterpart in the original, which ran
+    // untimed. It exists so a disconnected or absent partner cannot hang the trial forever. Rounds it
+    // ends are recorded as `ended_by: "timeout"` with a null assignment — filter on that when
+    // analysing, and raise it if piloting shows real trials running long.
     //
     // Key replication DVs (logged per round): message_count / messages_sent (words-per-reference proxy),
     // accuracy / correct, rt. Expected: descriptions shorten strongly across blocks; accuracy near
@@ -154,8 +155,11 @@
       chat_role: "both",
       max_messages: null,
       max_length: null,
+      // Exp. 2's click gate: no selection until the director has described the target this round.
+      // Guarantees a referring expression per trial and blocks blind-guessing.
+      require_message_before_response: true,
       show_running_score: true,
-      round_timeout: 60000, // bound the round; ends it if the partner leaves
+      round_timeout: 60000, // NOT in the original — bounds the round if the partner leaves (see header)
       save_interaction_history: true,
       prompt: (role) =>
         role === "director"

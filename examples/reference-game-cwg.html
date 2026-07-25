@@ -37,9 +37,15 @@
     //   • Director/matcher roles fixed for the whole game.
     //   • Free, UNRESTRICTED, bidirectional communication — the original was SPOKEN dialogue behind an
     //     opaque screen; on the web we substitute unrestricted two-way TEXT CHAT. This modality swap is
-    //     the one unavoidable deviation from 1986 and is noted as such in the paper. (Both may send, no
-    //     count/length limit — reference shortening only holds if the matcher can talk back.)
+    //     the one unavoidable DESIGN deviation from 1986 and is noted as such in the paper. (Both may
+    //     send, no count/length limit — reference shortening only holds if the matcher can talk back.)
     //   • After each trial, feedback reveals the correct order to both (original: mismatches reported).
+    //
+    // The other departure is not a design choice: `round_timeout` (180s) has no counterpart in the
+    // original, which ran untimed. It exists so a disconnected or absent partner cannot hang the trial
+    // forever. Rounds it ends are recorded as `ended_by: "timeout"` with a null assignment — filter on
+    // that when analysing. Watch it in piloting: trial 1 of a 12-figure board is the longest in the
+    // study, and a cap that truncates it would bite exactly where the effect is largest.
     //
     // Key replication DVs (logged per round): message_count / messages_sent (the words-per-figure
     // effect: 41→8 across trials 1→6 in the original), accuracy / n_correct (original error rate 2%).
@@ -151,7 +157,7 @@
       // order, revision behavior. The core word-count DV doesn't need it, but it's ~free and matches
       // the Hawkins file.
       save_interaction_history: true,
-      round_timeout: 180000, // full board takes longer; bound it in case the partner leaves
+      round_timeout: 180000, // NOT in the original — bounds the round if the partner leaves (see header)
       prompt: (role) =>
         role === "director"
           ? "<p><strong>You are the Director.</strong> Describe your tangrams in badge order (1, 2, 3, …) so your partner can arrange theirs the same way. You can talk back and forth as much as you need.</p>"

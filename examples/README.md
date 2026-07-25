@@ -661,7 +661,7 @@ reproduced from Clark & Wilkes-Gibbs (1986) — so both builds are directly comp
 | Replicates | Hawkins, Frank & Goodman (2020), *Cognitive Science* 44 | Clark & Wilkes-Gibbs (1986), *Cognition* 22:1–39 |
 | Condition | Sequential — **single** target, one click | Full-board — all **12** tangrams as an ordered target |
 | Schedule | 6 blocks × 12 = **72 trials** (`sequentialSchedule`) | **6 trials**, fresh full-board order each (`fullBoardSchedule`) |
-| Fidelity note | Near-exact (the paper was already web + text chat); one gate not yet supported — see below | Text chat **substitutes** for the original **spoken** dialogue — the one deliberate deviation, noted in-file |
+| Fidelity note | Near-exact (the paper was already web + text chat), including Exp. 2's matcher-click gate | Text chat **substitutes** for the original **spoken** dialogue — the one deliberate deviation, noted in-file |
 
 Both fix director/matcher for the whole game, reveal the target to the director only ("cued"), and use
 **unrestricted two-way chat** (`chat_role: "both"`, no count/length limits) — faithful to both papers,
@@ -681,11 +681,15 @@ scrambled, `notMatchingLocs`, and that the schedule is 72 rounds / 6 per tangram
 build and `numRounds = 6` full boards for the unconstrained build). Both have been play-tested two-tab
 at full faithful schedule length, collecting both participants' data.
 
-> **One known deviation (Hawkins build).** Hawkins Exp. 2 blocked the matcher from clicking until the
-> director had sent a message (`game.client.js`: `if (globalGame.messageSent)`), guaranteeing a
-> referring expression on every trial. `plugin-multiplayer-reference-game` has no such gate yet, so the
-> Hawkins build here lets the matcher click before any message is sent. Tracked for a
-> `require_message_before_response` plugin param; the C&WG build is unaffected.
+The Hawkins build sets `require_message_before_response: true`, reproducing Exp. 2's gate on the
+matcher's click (`game.client.js`: `if (globalGame.messageSent)`) so a referring expression exists on
+every trial. The C&WG build leaves it off, matching its free-form protocol.
+
+> **`round_timeout` is not from either paper.** Both builds set one (60s Hawkins, 180s C&WG) purely so
+> a partner who disconnects or walks away cannot hang the trial forever — neither original was timed.
+> Rounds it ends are logged as `ended_by: "timeout"` with a null assignment, so they are easy to
+> exclude; raise the values if piloting shows genuine trials running long, especially C&WG's first
+> full-board trials, which are the longest in the study.
 
 Like the demos they run on `adapter-multiplayer-local` for two-tab piloting; the header comment marks
 the **one-line swap to `adapter-multiplayer-firebase`** (plus a real waiting room) for the paid
