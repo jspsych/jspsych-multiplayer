@@ -1,6 +1,12 @@
-# @jspsych-multiplayer/plugin-multiplayer-sync
+# @jspsych-multiplayer/plugin-multiplayer-ready
 
-## 0.1.1
+## 0.1.0
+
+### Minor Changes
+
+- [#30](https://github.com/jspsych/jspsych-multiplayer/pull/30) [`d54c569`](https://github.com/jspsych/jspsych-multiplayer/commit/d54c56931817af23fd2b221131c2416240aeb104) Thanks [@Mandyx22](https://github.com/Mandyx22)! - Add `plugin-multiplayer-ready`, a participant-facing ready / check-in barrier for the jsPsych multiplayer API.
+
+  It packages the common lobby / waiting-room pattern into a single declarative trial: show a prompt and a ready button, push `{ ready: true }` (optionally merged with `push_data`) into the shared group session when the participant clicks, display a waiting message, and end the trial once `expected_players` members are ready (or an optional `timeout` elapses while waiting for the rest of the group). Unlike `plugin-multiplayer-sync`, it owns the check-in UI and the "everyone is ready" condition, and standardizes on a `ready: true` flag so other plugins and examples can reliably gate on group readiness. Built against a local interface mirroring the multiplayer API (jsPsych#3694), so it carries no build-time dependency on the unreleased core.
 
 ### Patch Changes
 
@@ -10,14 +16,4 @@
 
 - [#53](https://github.com/jspsych/jspsych-multiplayer/pull/53) [`57ea69d`](https://github.com/jspsych/jspsych-multiplayer/commit/57ea69dd54502b1b138b6898b928c808178f74af) Thanks [@htsukamoto5](https://github.com/htsukamoto5)! - Resolve the multiplayer API via `resolveMultiplayerApi()`, preferring `jsPsych.multiplayer` (jsPsych#3694's current namespace) and falling back to `jsPsych.pluginAPI`, with a directing error when neither is present.
 
-- [#45](https://github.com/jspsych/jspsych-multiplayer/pull/45) [`a587023`](https://github.com/jspsych/jspsych-multiplayer/commit/a5870234c05c0125b3646d42d21140ebb05f8180) Thanks [@htsukamoto5](https://github.com/htsukamoto5)! - Finish gracefully when `getAll()` throws on the timeout path. On a genuine timeout the adapter may already be torn down (`getAll()` then throws `"connect() must be called…"`), which would otherwise escape and reject the trial instead of finishing it as `timed_out: true`. The snapshot read now falls back to an empty group session, matching the `safeGetAll` guard `plugin-multiplayer-ready` already had.
-
 - [#62](https://github.com/jspsych/jspsych-multiplayer/pull/62) [`d1552c0`](https://github.com/jspsych/jspsych-multiplayer/commit/d1552c0ef70fbd8bfcdebd3c9636d96cd66c3eb6) Thanks [@jodeleeuw](https://github.com/jodeleeuw)! - Register trial timers through `jsPsych.pluginAPI.setTimeout` so they are cancelled when a trial is ended externally (`abortExperiment`, `endCurrentTimeline`, forced `finishTrial`), instead of firing into a finished trial. The plugins previously used bare `setTimeout` and only cleared handles on their own end paths, so external termination — exactly what multiplayer sync timeouts and host-ended sessions do — left timers alive.
-
-## 0.1.0
-
-### Minor Changes
-
-- [#16](https://github.com/jspsych/jspsych-multiplayer/pull/16) [`66452d6`](https://github.com/jspsych/jspsych-multiplayer/commit/66452d6374fb90858d4d2520852714f6c83b6102) Thanks [@htsukamoto5](https://github.com/htsukamoto5)! - Add `plugin-multiplayer-sync`, a synchronization-barrier plugin for the jsPsych multiplayer API.
-
-  It packages the common **push → wait** pattern into a single declarative trial: optionally push this participant's data into the shared group session, show a waiting message, and end the trial once a condition over the group session is met (or an optional `timeout` elapses). This replaces the awkward idioms previously needed for synchronization points — a `call-function` trial with `async`/`done`, or a `NO_KEYS` keyboard-response trial with an `on_start` that awaits `pluginAPI.wait()`. The resolved snapshot is stored in the trial's `group` data so peer reads and role assignment (e.g. via `plugin-multiplayer-role`) happen in a normal `on_finish`. Ported from the reference implementation in jsPsych#3694; built against a local interface mirroring the multiplayer API so it carries no build-time dependency on the unreleased core.
