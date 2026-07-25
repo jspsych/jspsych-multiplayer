@@ -27,6 +27,15 @@ export interface ChatMessage {
   text: string;
   /** `Date.now()` on the SENDER's clock. Clocks are not synchronized across clients — see ordering. */
   ts: number;
+  /**
+   * The round the message was sent during, stamped by the sender. This is the ONLY reliable way to
+   * attribute a message to a round once `chat_persists` merges every round into one log: the two
+   * clients enter a round at different wall-clock moments, so "what was already in the log when my
+   * trial started" cannot distinguish an earlier round's message from this round's message that
+   * simply arrived first. `ts` can't substitute — it comes from the sender's unsynchronized clock.
+   * Optional so a transcript written by an older build still merges and renders.
+   */
+  round?: number;
 }
 
 /** A group-session snapshot: participantId -> that participant's pushed data. */
@@ -54,7 +63,8 @@ function isChatMessage(m: unknown): m is ChatMessage {
     typeof msg.senderId === "string" &&
     typeof msg.seq === "number" &&
     typeof msg.text === "string" &&
-    typeof msg.ts === "number"
+    typeof msg.ts === "number" &&
+    (msg.round === undefined || typeof msg.round === "number")
   );
 }
 
@@ -96,7 +106,7 @@ export function mergeMessages(group: GroupSessionData, dataKey: string): ChatMes
 /**
  * Append a new message to this participant's own array, returning a NEW array (the input is not
  * mutated). The caller assigns `seq` from its own monotonic counter and pushes the result back into
- * its slot.
+ * its slot, and stamps `round` so the message stays attributable once `chat_persists` merges rounds.
  */
 export function appendOwnMessage(
   own: ChatMessage[],
@@ -104,8 +114,19 @@ export function appendOwnMessage(
   senderId: string,
   seq: number,
   now: number,
+  round?: number,
 ): ChatMessage[] {
-  return [...own, { id: makeMessageId(senderId, seq), senderId, seq, text, ts: now }];
+  return [
+    ...own,
+    {
+      id: makeMessageId(senderId, seq),
+      senderId,
+      seq,
+      text,
+      ts: now,
+      ...(round != null && { round }),
+    },
+  ];
 }
 
 /** Code-unit string comparison — locale-independent so ordering never diverges across clients. */

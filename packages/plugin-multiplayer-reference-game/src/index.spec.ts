@@ -85,6 +85,7 @@ const base = {
   chat_role: "both",
   max_messages: null,
   max_length: null,
+  require_message_before_response: false,
   placeholder: "Type…",
   chat_persists: false,
   chat_position: "below",
@@ -150,6 +151,161 @@ describe("multiplayer-reference-game: single-target (sequential) click task", ()
       ended_by: "submit",
     });
     expect(finished[0].rt).toEqual(expect.any(Number));
+  });
+
+  it("require_message_before_response blocks the matcher until the DIRECTOR has messaged", () => {
+    const api = new MockApi("matcher");
+    api.pushAs("director", { joinedAt: 1 });
+    const { jsPsych, finished } = makeJsPsych(api);
+    const el = display();
+
+    run(jsPsych, el, {
+      ...base,
+      partner_id: "director",
+      require_message_before_response: true,
+      save_interaction_history: true,
+    });
+
+    // No director message yet: the click is ignored (no submission) and a hint is shown.
+    clickCell(el, "b");
+    expect(finished).toHaveLength(0);
+    expect(el.querySelector(`.${P}-gate-hint`)).not.toBeNull();
+
+    // The matcher's OWN message must not open the gate — only the director's counts.
+    api.pushAs("matcher", {
+      reference_game_chat_r0: [{ senderId: "matcher", seq: 0, text: "which one?", ts: 1 }],
+    });
+    clickCell(el, "b");
+    expect(finished).toHaveLength(0);
+
+    // Director speaks → gate opens, hint clears, and the next click submits normally.
+    api.pushAs("director", {
+      joinedAt: 1,
+      reference_game_chat_r0: [{ senderId: "director", seq: 0, text: "the star shape", ts: 5 }],
+    });
+    expect(el.querySelector(`.${P}-gate-hint`)).toBeNull();
+    clickCell(el, "b");
+    expect(finished).toHaveLength(1);
+    expect(finished[0]).toMatchObject({ correct: true, ended_by: "submit" });
+    // The two blocked clicks are logged as gated_click events before the final assign.
+    const actions = finished[0].interaction_history.map((e: any) => e.action);
+    expect(actions).toEqual(["gated_click", "gated_click", "assign"]);
+  });
+
+  it("with chat_persists, a prior round's message does NOT pre-open the gate", () => {
+    const api = new MockApi("matcher");
+    // chat_persists shares one log across rounds; seed it with the previous round's director message.
+    api.pushAs("director", {
+      joinedAt: 1,
+      reference_game_chat: [
+        { senderId: "director", seq: 0, text: "round-0 desc", ts: 1, round: 0 },
+      ],
+    });
+    const { jsPsych, finished } = makeJsPsych(api);
+    const el = display();
+
+    run(jsPsych, el, {
+      ...base,
+      partner_id: "director",
+      require_message_before_response: true,
+      chat_persists: true,
+      round: 1,
+    });
+
+    // The carried-over message must not count for this new round — the click is still gated.
+    clickCell(el, "b");
+    expect(finished).toHaveLength(0);
+
+    // A fresh director message THIS round opens the gate.
+    api.pushAs("director", {
+      joinedAt: 1,
+      reference_game_chat: [
+        { senderId: "director", seq: 0, text: "round-0 desc", ts: 1, round: 0 },
+        { senderId: "director", seq: 1, text: "this round's target", ts: 9, round: 1 },
+      ],
+    });
+    clickCell(el, "b");
+    expect(finished).toHaveLength(1);
+    expect(finished[0]).toMatchObject({ ended_by: "submit" });
+  });
+
+  it("with chat_persists, THIS round's message already in the log DOES open the gate", () => {
+    const api = new MockApi("matcher");
+    // The two clients do not enter a round together (e.g. a Continue button advances each side
+    // independently), so the director can describe round 1 before the matcher's round-1 trial is
+    // even constructed. That message must still count — keying off "what was already in the log"
+    // instead of the stamped round left the matcher gated until the director spoke a second time.
+    api.pushAs("director", {
+      joinedAt: 1,
+      reference_game_chat: [
+        { senderId: "director", seq: 0, text: "round-0 desc", ts: 1, round: 0 },
+        { senderId: "director", seq: 1, text: "round-1 desc", ts: 9, round: 1 },
+      ],
+    });
+    const { jsPsych, finished } = makeJsPsych(api);
+    const el = display();
+
+    run(jsPsych, el, {
+      ...base,
+      partner_id: "director",
+      require_message_before_response: true,
+      chat_persists: true,
+      round: 1,
+    });
+
+    clickCell(el, "b");
+    expect(finished).toHaveLength(1);
+    expect(finished[0]).toMatchObject({ ended_by: "submit" });
+  });
+
+  it("a NON-partner participant's message does not open the gate", () => {
+    const api = new MockApi("matcher");
+    api.pushAs("director", { joinedAt: 1 });
+    const { jsPsych, finished } = makeJsPsych(api);
+    const el = display();
+
+    run(jsPsych, el, {
+      ...base,
+      partner_id: "director",
+      require_message_before_response: true,
+    });
+
+    // A third slot (spectator, or a leftover session) chatting must not count as the director's
+    // referring expression.
+    api.pushAs("spectator", {
+      reference_game_chat_r0: [{ senderId: "spectator", seq: 0, text: "hello?", ts: 2 }],
+    });
+    clickCell(el, "b");
+    expect(finished).toHaveLength(0);
+
+    api.pushAs("director", {
+      joinedAt: 1,
+      reference_game_chat_r0: [{ senderId: "director", seq: 0, text: "the star shape", ts: 5 }],
+    });
+    clickCell(el, "b");
+    expect(finished).toHaveLength(1);
+  });
+
+  it("require_message_before_response is inert when chat_enabled is false", () => {
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+    const api = new MockApi("matcher");
+    api.pushAs("director", { joinedAt: 1 });
+    const { jsPsych, finished } = makeJsPsych(api);
+    const el = display();
+
+    run(jsPsych, el, {
+      ...base,
+      partner_id: "director",
+      require_message_before_response: true,
+      chat_enabled: false,
+    });
+
+    // Gating with no channel to message on would deadlock the matcher, so the flag is skipped.
+    clickCell(el, "b");
+    expect(finished).toHaveLength(1);
+    expect(el.querySelector(`.${P}-gate-hint`)).toBeNull();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("require_message_before_response"));
+    warn.mockRestore();
   });
 
   it("clicking a distractor records an incorrect submission", () => {

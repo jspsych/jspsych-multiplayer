@@ -61,6 +61,7 @@ Only `stimuli`, `targets`, and `role` are required; everything else has a sensib
 | `chat_role`     | string  | `"both"`         | Who may SEND: `"director"`, `"matcher"`, or `"both"` (everyone always reads).          |
 | `max_messages`  | integer | `null`           | Cap on messages this participant may send this round. `null` = no cap.                 |
 | `max_length`    | integer | `null`           | Max characters per message. `null` = no limit.                                        |
+| `require_message_before_response` | boolean | `false` | Matcher can't commit a selection until the director has sent a message this round (a referring expression per trial, à la Hawkins et al. 2020 Exp. 2). Gated clicks are ignored (logged as `gated_click`) with a hint; inert (warns) when `chat_enabled` is false. |
 | `placeholder`   | string  | `"Type a message…"` | Placeholder text in the empty input.                                               |
 | `chat_persists` | boolean | `false`          | Carry the transcript across rounds (one shared log) vs. a fresh per-round log.         |
 | `chat_position` | string  | `"below"`        | Chat panel placement: `"below"` or `"beside"` the grid.                               |
@@ -112,7 +113,7 @@ Only `stimuli`, `targets`, and `role` are required; everything else has a sensib
 | `accuracy`            | float    | `n_correct / n_targets`. `null` without a submission.                                                           |
 | `correct`             | boolean  | True iff every slot was right. `null` without a submission.                                                     |
 | `rt`                  | integer  | Matcher only: ms from trial start to submission. `null` for the director.                                       |
-| `chat_transcript`     | object[] | The transcript as this client saw it at trial end — only when `save_transcript`.                               |
+| `chat_transcript`     | object[] | The transcript as this client saw it at trial end — only when `save_transcript`. Each entry is `{ id, senderId, seq, text, ts, round }`. |
 | `message_count`       | integer  | Distinct messages in this trial's transcript at trial end.                                                      |
 | `messages_sent`       | integer  | How many of those this participant sent.                                                                        |
 | `my_order`            | string[] | This client's scrambled display order — only when `save_orders`.                                               |

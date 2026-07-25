@@ -47,7 +47,12 @@ export interface ScoreResult {
 export interface InteractionEvent {
   /** Milliseconds since trial start. */
   t: number;
-  action: "assign" | "reassign" | "clear";
+  /**
+   * `assign` / `reassign` / `clear` mutate the assignment. `gated_click` is a NON-mutating attempt:
+   * a click ignored because `require_message_before_response` gated it (the matcher trying to answer
+   * before the director has spoken) — a behavioral signal, never a state change.
+   */
+  action: "assign" | "reassign" | "clear" | "gated_click";
   /** 1-based slot the action applied to. */
   slot: number;
   /** The object assigned, or null for a clear. */
