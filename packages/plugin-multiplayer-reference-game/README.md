@@ -113,7 +113,7 @@ Only `stimuli`, `targets`, and `role` are required; everything else has a sensib
 | `accuracy`            | float    | `n_correct / n_targets`. `null` without a submission.                                                           |
 | `correct`             | boolean  | True iff every slot was right. `null` without a submission.                                                     |
 | `rt`                  | integer  | Matcher only: ms from trial start to submission. `null` for the director.                                       |
-| `chat_transcript`     | object[] | The transcript as this client saw it at trial end — only when `save_transcript`.                               |
+| `chat_transcript`     | object[] | The transcript as this client saw it at trial end — only when `save_transcript`. Each entry is `{ id, senderId, seq, text, ts, round }`. |
 | `message_count`       | integer  | Distinct messages in this trial's transcript at trial end.                                                      |
 | `messages_sent`       | integer  | How many of those this participant sent.                                                                        |
 | `my_order`            | string[] | This client's scrambled display order — only when `save_orders`.                                               |

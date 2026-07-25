@@ -174,9 +174,12 @@ const info = <const>{
      * (and the matcher can't blind-guess to rush through). While gated, matcher grid clicks are ignored
      * (logged as `gated_click` in `interaction_history`) and a brief hint is shown. No effect on the
      * director, and inert when `chat_enabled` is false (gating with no channel would deadlock, so it is
-     * skipped with a warning). Applies to both the `click` and `assign_slots` response modes. Note that
-     * any `selection_timeout` keeps running while gated, so a silent director can burn the matcher's
-     * response clock; prefer `round_timeout` with this flag.
+     * skipped with a warning). Applies to both the `click` and `assign_slots` response modes. Which
+     * round a message belongs to comes from the `round` stamped on it by its sender, so this stays
+     * exact under `chat_persists`: an earlier round's message never pre-opens the gate, and this
+     * round's message still counts when the director sends it before this trial is constructed. Note
+     * that any `selection_timeout` keeps running while gated, so a silent director can burn the
+     * matcher's response clock; prefer `round_timeout` with this flag.
      */
     require_message_before_response: {
       type: ParameterType.BOOL,
@@ -561,13 +564,6 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
     // round gets its own key so the panel starts empty (old rounds' arrays stay in the slot,
     // harmlessly, under their own keys).
     const chatKey = trial.chat_persists ? `${dataKey}_chat` : `${dataKey}_chat_r${round}`;
-    // With `chat_persists` the chat log spans rounds, so at round start it ALREADY holds earlier
-    // rounds' director messages. Only messages that arrive DURING this round should open the
-    // `require_message_before_response` gate ("has sent a message this round"), so snapshot the ids
-    // present now and ignore them. Without `chat_persists`, chatKey is round-scoped and this is empty.
-    const gatePriorIds = new Set(
-      trial.chat_persists ? mergeMessages(api.getAll(), chatKey).map((m) => m.id) : [],
-    );
     const seedBase = (trial.seed as string | null) ?? null;
     const columns =
       trial.rows != null && trial.rows > 0
@@ -875,8 +871,9 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
     let ended = false;
     let feedbackShown = false;
     let submitted = false; // matcher only: our push happened
-    // matcher only: has the partner (director) sent a message this round? Gates the first selection
-    // when require_message_before_response is set. Monotonic within a round (messages only accrue).
+    // matcher only: has the partner (director) sent a message this round? Gates selections when
+    // require_message_before_response is set; maintained by `updateGate`. Monotonic within a round
+    // (messages only accrue), so once open it never re-closes.
     let partnerHasMessaged = false;
     let assignment: SlotAssignment = {};
     let activeSlot = 1;
@@ -909,21 +906,37 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
       return senderId;
     };
 
+    // Open the `require_message_before_response` gate once the PARTNER has messaged THIS round.
+    //
+    // Deliberately independent of `renderChat`: the gate decides whether a click is honoured, so it
+    // must not depend on the chat panel's DOM existing. Both conditions are exact rather than
+    // inferred from what was in the log at trial start — the two clients enter a round at different
+    // moments, so a snapshot cannot tell an earlier round's message apart from this round's message
+    // that merely arrived before this trial was constructed (which would gate the matcher until the
+    // director spoke a second time).
+    //  - round: the sender stamps `round` on each message. Messages from a build that predates the
+    //    stamp are accepted only when `chat_persists` is off, where the round-scoped `chatKey` already
+    //    proves they belong to this round.
+    //  - sender: only the partner's message counts, so the matcher's own never opens their gate. If
+    //    the partner is unresolved (auto-detect with several candidates) fall back to any other
+    //    sender — a gate that can never open is the worse failure.
+    function updateGate(group: GroupSessionData) {
+      if (partnerHasMessaged || !trial.require_message_before_response || !chatOn) return;
+      const opens = mergeMessages(group, chatKey).some(
+        (m) =>
+          (partner != null ? m.senderId === partner : m.senderId !== me) &&
+          (m.round === round || (!trial.chat_persists && m.round == null)),
+      );
+      if (!opens) return;
+      partnerHasMessaged = true;
+      setGateHint(false);
+    }
+
     // Rebuild the transcript from scratch on each update. Idempotent (keyed by message id via
     // mergeMessages), so a subscribe replay that re-delivers seen messages changes nothing.
     function renderChat(group: GroupSessionData) {
       if (!chatLog) return;
       const transcript = mergeMessages(group, chatKey);
-      // Any message not from me came from the partner; on the matcher's client that is the director.
-      // `gatePriorIds` excludes messages carried over from earlier rounds (chat_persists), so only a
-      // NEW director message this round opens the gate. Once true, clear the blocked-click hint.
-      if (
-        !partnerHasMessaged &&
-        transcript.some((m) => m.senderId !== me && !gatePriorIds.has(m.id))
-      ) {
-        partnerHasMessaged = true;
-        setGateHint(false);
-      }
       const pinnedToBottom = chatLog.scrollHeight - chatLog.scrollTop - chatLog.clientHeight < 4;
 
       chatLog.replaceChildren(
@@ -977,7 +990,9 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
       // REPLACES the slot, so spreading preserves everything else (joinedAt, earlier rounds, …).
       const mine = api.get(me) ?? {};
       const own = mergeMessages({ [me]: mine }, chatKey).filter((m) => m.senderId === me);
-      const nextMessages = appendOwnMessage(own, text, me, nextSeq++, Date.now());
+      // Stamped with `round` so the partner can tell this round's messages from earlier ones once
+      // `chat_persists` merges every round into a single log (see `updateGate`).
+      const nextMessages = appendOwnMessage(own, text, me, nextSeq++, Date.now(), round);
 
       // Optimistic render: show our own message immediately instead of waiting for the adapter to
       // echo the push back through subscribe. The echo (or a replay) is harmless because renderChat
@@ -1304,7 +1319,9 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
 
     // Seed the chat from existing history, then subscribe. `subscribe` replays the current snapshot
     // on registration, so the seed is belt-and-suspenders — harmless because renderChat is
-    // idempotent (and enterFeedback is guarded).
+    // idempotent (and enterFeedback is guarded). The gate is seeded too: the partner may already have
+    // described this round before this trial was constructed, and that must count.
+    updateGate(api.getAll());
     renderChat(api.getAll());
 
     unsubscribe = api.subscribe((group) => {
@@ -1314,6 +1331,13 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
       if (partner == null && explicitPartner == null) {
         const others = Object.keys(group).filter((id) => id !== me);
         if (others.length === 1) partner = others[0];
+      }
+      try {
+        // Before renderChat: the gate governs whether clicks are honoured, so it must not be
+        // downstream of a chat-panel render failure.
+        updateGate(group);
+      } catch {
+        // A malformed frame must not leave the matcher permanently gated.
       }
       try {
         renderChat(group);
