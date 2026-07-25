@@ -541,7 +541,7 @@ push only their `choice`, and the host publishes `correctChoice` at reveal. The 
 on both roles (one file serves both), so a player can read it in devtools; for anything scored for
 real, serve it host-only. Full design notes, including why this demo hand-rolls its leaderboard,
 timer, and answer buttons instead of composing the scoreboard/countdown/choice plugins, are in
-[`docs/group-quiz-design.md`](../docs/group-quiz-design.md).
+[`group-quiz/DESIGN.md`](./group-quiz/DESIGN.md).
 
 ### Running it
 

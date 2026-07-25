@@ -1,7 +1,7 @@
 import type { Config } from "@docusaurus/types";
 import { defineJspsychConfig } from "@jspsych/docusaurus-preset";
 
-const editUrl = "https://github.com/jspsych/jspsych-multiplayer/tree/main/website/";
+const editUrl = "https://github.com/jspsych/jspsych-multiplayer/tree/main/docs/";
 
 // The announcement bar's content is raw HTML, so its link cannot go through
 // `useBaseUrl` the way an MDX link does — interpolate this instead of hardcoding "/".

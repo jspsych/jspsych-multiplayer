@@ -4,7 +4,7 @@
 // Deliberately dependency-free: the host view is vanilla JS driving the adapter directly (no
 // jsPsych, no plugins), so anything both sides share has to be plain functions over the group
 // session. That is why the leaderboard is computed here rather than through
-// plugin-multiplayer-scoreboard's `buildLeaderboard` static — see docs/group-quiz-design.md.
+// plugin-multiplayer-scoreboard's `buildLeaderboard` static — see DESIGN.md.
 //
 // questions.js (correct answers) is host-only and never loaded by players.
 

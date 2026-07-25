@@ -5,7 +5,7 @@ turn-based economic game (Güth, Schmittberger & Schwarze, 1982) — using the m
 this repository. Two players split a $10 pot: the **proposer** offers the **responder** some amount;
 the responder accepts (both keep the split) or rejects (both get nothing).
 
-The finished experiment is [`examples/ultimatum-game-local.html`](../examples/ultimatum-game-local.html)
+The finished experiment is [`examples/ultimatum-game-local.html`](./ultimatum-game-local.html)
 (added in [PR #31](https://github.com/jspsych/jspsych-multiplayer/pull/31)). You can run it yourself
 from **two browser tabs on one machine, with no server** — and by the end you'll know how to swap one
 line to deploy the identical experiment on JATOS for real, cross-device data collection.
@@ -78,7 +78,7 @@ writes — is what makes coordinator-free consensus possible.
 
 The tutorial is easier to follow if you've watched the game run. The short version (the full recipe,
 including how to get a pre-release build of the multiplayer API, lives in
-[`examples/README.md`](../examples/README.md) under "Running it"):
+[`examples/README.md`](./README.md) under "Running it"):
 
 ```sh
 npm install && npm run build   # build the packages (dist/ is gitignored, not checked in)
@@ -434,7 +434,7 @@ extra bookkeeping in the experiment code.
 The local adapter is same-origin, same-browser, same-machine — a development and demo tool, **not**
 a data-collection backend. Deploying the experiment for real participants means swapping the
 backend, and this is where the architecture pays off. Compare the local version against
-[`examples/ultimatum-game-jatos.html`](../examples/ultimatum-game-jatos.html), the JATOS variant: the *entire*
+[`examples/ultimatum-game-jatos.html`](./ultimatum-game-jatos.html), the JATOS variant: the *entire*
 diff in experiment logic is the connection code.
 
 ```js
@@ -474,7 +474,7 @@ experiment code.
 - **Real-time interaction.** The barriers here are turn-based (`wait_for` a condition once). For
   continuously live interaction, see the `subscribe`-based
   [`plugin-multiplayer-chat`](../packages/plugin-multiplayer-chat) and its
-  [`chat-room.html`](../examples/chat-room.html) example, which runs on the same local adapter.
+  [`chat-room.html`](./chat-room.html) example, which runs on the same local adapter.
 - **Package docs.** Each package's README covers its full parameter surface:
   [`plugin-multiplayer-sync`](../packages/plugin-multiplayer-sync),
   [`plugin-multiplayer-role`](../packages/plugin-multiplayer-role),
