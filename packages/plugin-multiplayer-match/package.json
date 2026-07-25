@@ -1,6 +1,6 @@
 {
   "name": "@jspsych-multiplayer/plugin-multiplayer-match",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "jsPsych plugin: partition a multiplayer group into matched sub-groups (pairs/triads) by deterministic consensus",
   "type": "module",
   "main": "dist/index.cjs",
