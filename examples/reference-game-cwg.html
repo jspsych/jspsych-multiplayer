@@ -7,6 +7,7 @@
     <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@151ab520542a8e48bcc4d5b21c74cdffae8b48c6/packages/jspsych/dist/index.browser.min.js"></script>
     <script src="https://unpkg.com/@jspsych/plugin-survey-text"></script>
     <script src="https://unpkg.com/@jspsych/plugin-html-keyboard-response"></script>
+    <script src="https://unpkg.com/@jspsych/plugin-preload"></script>
     <!-- STUDY PROTOTYPE: on the LOCAL adapter for two-tab piloting on one machine. For the paid Prolific
          run, swap adapter-multiplayer-local → adapter-multiplayer-firebase (and pair via a real waiting
          room); nothing else in this file changes. -->
@@ -53,9 +54,28 @@
     const localAdapter = new jsPsychAdapterMultiplayerLocal({ persistParticipant: true });
 
     const SHAPES = Tangrams.STIMULI; // 12 canonical tangrams
-    // 6 trials, each a fresh random order of all 12. Deterministic (fixed seed) so both tabs agree;
-    // for a real study, seed from the shared session id so each dyad gets its own orders.
-    const SCHEDULE = Tangrams.fullBoardSchedule(TRIALS);
+    // Seed the schedule from the SHARED SESSION ID, so each dyad gets its own target orders while the
+    // two partners still agree on them. A fixed seed would hand every dyad the identical orders,
+    // confounding item order with trial number — the very axis this study measures.
+    //
+    // Read AFTER the adapter is constructed, deliberately: on the first tab there is no `?mp_session=`
+    // yet, and the LocalAdapter constructor is what generates one and writes it into the URL. The
+    // second tab arrives with it already in the pasted link, so both compute the same schedule.
+    // Swapping to the Firebase adapter: seed from whatever identifies the dyad there (e.g. the room
+    // id) — the requirement is only that both partners derive the same value.
+    const SEED = new URLSearchParams(location.search).get("mp_session") ?? "cwg-fullboard";
+    // 6 trials, each a fresh random order of all 12. Deterministic given the seed, so both tabs agree
+    // without exchanging anything.
+    const SCHEDULE = Tangrams.fullBoardSchedule(TRIALS, SEED);
+
+    // The 12 tangrams are real PNGs, and `rt` is a reported DV — without this the first exposure to
+    // each image loads mid-trial. `stimuli` is an OBJECT parameter, so jsPsych's automatic media
+    // preloading cannot discover the `src` values; they have to be listed explicitly.
+    const preloadTrial = {
+      type: jsPsychPreload,
+      images: SHAPES.map((s) => s.src),
+      message: "<p>Loading…</p>",
+    };
 
     let myName = "";
     let myRole;
@@ -169,7 +189,17 @@
     };
 
     jsPsych.multiplayer.connect(localAdapter).then(() => {
-      jsPsych.run([nameTrial, lobbyTrial, roleTrial, spectatorScreen, gameLoop, doneTrial]);
+      // Preload FIRST, before pairing: a participant who is still fetching images while their
+      // partner waits in the lobby wastes the partner's time.
+      jsPsych.run([
+        preloadTrial,
+        nameTrial,
+        lobbyTrial,
+        roleTrial,
+        spectatorScreen,
+        gameLoop,
+        doneTrial,
+      ]);
     });
   </script>
 </html>

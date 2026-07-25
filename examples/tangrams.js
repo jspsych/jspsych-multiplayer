@@ -15,9 +15,10 @@
   const STIMULI = LETTERS.map((L) => ({ id: L, src: `assets/tangrams/tangram_${L}.png` }));
 
   // Small seeded PRNG (mulberry32). A schedule must be RANDOM-LOOKING yet DETERMINISTIC so that both
-  // tabs/partners, loading the same seed, agree on the target sequence — and so the paper gets a
-  // reproducible order. For a real multi-dyad study, derive the seed from the shared session id so
-  // each dyad differs while its two partners still agree (see the notes in each example).
+  // tabs/partners, loading the same seed, agree on the target sequence without exchanging it — and so
+  // any given run is reproducible from its seed alone. Both examples pass the shared session id
+  // (`?mp_session=`), so each dyad gets its own order while its two partners still agree; the default
+  // seeds below are a same-order-every-time fallback for opening a file with no session in the URL.
   function mulberry32(seedStr) {
     let h = 1779033703 ^ seedStr.length;
     for (let i = 0; i < seedStr.length; i++) {

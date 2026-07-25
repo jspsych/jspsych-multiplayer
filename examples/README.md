@@ -666,10 +666,13 @@ reproduced from Clark & Wilkes-Gibbs (1986) — so both builds are directly comp
 Both fix director/matcher for the whole game, reveal the target to the director only ("cued"), and use
 **unrestricted two-way chat** (`chat_role: "both"`, no count/length limits) — faithful to both papers,
 and load-bearing for the reference-shortening effect. `tangrams.js` builds each schedule
-**deterministically** (seeded), so both tabs agree on the target order; for a real multi-dyad study,
-seed from the shared session id so each dyad gets its own order. The faithful schedules are long for
-manual piloting — lower `BLOCKS` (Hawkins) / `TRIALS` (C&WG) at the top of each file for a quick
-smoke test, then restore.
+**deterministically** from a seed, and both files seed from the shared session id (`?mp_session=`):
+each dyad therefore gets its own trial order while its two partners still agree on it without
+exchanging anything — a single fixed order across dyads would confound item order with repetition
+block, which is the axis both papers measure. Both files also **preload** the 12 tangram PNGs before
+pairing, since `rt` is a reported DV and `stimuli` is an object parameter that jsPsych's automatic
+media preloading can't see into. The faithful schedules are long for manual piloting — lower `BLOCKS`
+(Hawkins) / `TRIALS` (C&WG) at the top of each file for a quick smoke test, then restore.
 
 Both configs were verified parameter-by-parameter against the papers **and** the original
 [hawkrobe/tangrams](https://github.com/hawkrobe/tangrams) experiment code (which pins the details the
