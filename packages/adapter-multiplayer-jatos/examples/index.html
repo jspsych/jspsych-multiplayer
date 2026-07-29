@@ -42,7 +42,7 @@
     // Connect the adapter (backed by the JATOS group session) before running the timeline. The IIFE
     // build exposes the adapter class as the global `jsPsychAdapterMultiplayerJatos`.
     jatos.onLoad(async () => {
-      await jsPsych.pluginAPI.connect(new jsPsychAdapterMultiplayerJatos());
+      await jsPsych.multiplayer.connect(new jsPsychAdapterMultiplayerJatos());
       await jsPsych.run(timeline);
     });
   </script>

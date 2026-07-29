@@ -27,11 +27,12 @@
 
     // 1. Connect a multiplayer adapter before running, e.g. the JATOS adapter:
     //      import JatosAdapter from "@jspsych-multiplayer/adapter-multiplayer-jatos";
-    //      await jsPsych.pluginAPI.connect(new JatosAdapter());
+    //      await jsPsych.multiplayer.connect(new JatosAdapter());
 
     // 2. A synchronization barrier (a "waiting room"): push this client's readiness into the shared
     //    group session, show a waiting message, and end the trial only once every expected
-    //    participant has arrived. `wait_for` is the same predicate you would pass to pluginAPI.wait().
+    //    participant has arrived. `wait_for` is the same predicate you would pass to
+    //    jsPsych.multiplayer.wait().
     const lobby = {
       type: jsPsychMultiplayerSync,
       push_data: { ready: true },
