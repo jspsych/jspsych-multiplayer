@@ -25,7 +25,7 @@
   "devDependencies": {
     "@changesets/changelog-github": "^0.7.0",
     "@changesets/cli": "^2.31.1",
-    "@jspsych/config": "^3.3.3",
+    "@jspsych/config": "^3.3.4",
     "@jspsych/plugin-call-function": "^2.1.0",
     "@jspsych/plugin-html-button-response": "^2.1.0",
     "@jspsych/plugin-html-keyboard-response": "^2.1.0",
