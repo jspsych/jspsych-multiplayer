@@ -50,7 +50,7 @@
   },
   "devDependencies": {
     "firebase": "^12.16.0",
-    "jspsych": "^8.0.0",
+    "jspsych": "^8.3.0",
     "@jspsych/config": "^3.2.2"
   }
 }
