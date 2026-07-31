@@ -117,7 +117,7 @@ const clickCell = (el: HTMLElement, id: string) =>
   cell(el, id).dispatchEvent(new MouseEvent("click", { bubbles: true }));
 const clickSlot = (el: HTMLElement, n: number) =>
   (el.querySelector(`.${P}-slot[data-slot="${n}"]`) as HTMLButtonElement).dispatchEvent(
-    new MouseEvent("click", { bubbles: true }),
+    new MouseEvent("click", { bubbles: true })
   );
 const submitBtn = (el: HTMLElement) => el.querySelector(`.${P}-submit`) as HTMLButtonElement;
 const feedbackText = (el: HTMLElement) =>
@@ -498,7 +498,7 @@ describe("multiplayer-reference-game: chat, timeout, and the real pipeline", () 
     const input = el.querySelector(`.${P}-chat-input`) as HTMLInputElement;
     input.value = "<img src=x onerror=alert(1)>";
     (el.querySelector(`.${P}-chat-form`) as HTMLFormElement).dispatchEvent(
-      new Event("submit", { cancelable: true }),
+      new Event("submit", { cancelable: true })
     );
     await flush();
 
@@ -552,7 +552,7 @@ describe("multiplayer-reference-game: chat, timeout, and the real pipeline", () 
           feedback: false,
         },
       ],
-      jsPsych,
+      jsPsych
     );
 
     clickCell(displayElement, "c");
@@ -573,7 +573,7 @@ describe("multiplayer-reference-game: review-fix regressions", () => {
     });
     const { jsPsych } = makeJsPsych(api);
     expect(() => run(jsPsych, display(), { ...base, partner_id: "director" })).toThrow(
-      /round 0 already/i,
+      /round 0 already/i
     );
   });
 
@@ -641,7 +641,7 @@ describe("multiplayer-reference-game: review-fix regressions", () => {
     });
     clickCell(el, "b"); // submit
     (el.querySelector(`.${P}-continue`) as HTMLButtonElement).dispatchEvent(
-      new MouseEvent("click", { bubbles: true }),
+      new MouseEvent("click", { bubbles: true })
     );
     expect(finished[0].ended_by).toBe("submit");
   });
@@ -672,5 +672,102 @@ describe("multiplayer-reference-game: review-fix regressions", () => {
     expect(mark.hidden).toBe(false);
     expect(mark.textContent).toBe("2"); // matcher's (wrong) slot also shown
     expect(mark.classList.contains("is-wrong")).toBe(true);
+  });
+});
+
+describe("multiplayer-reference-game: role-keyed feedback_content", () => {
+  // The original tangrams experiment shows each role ONE thing at feedback: the director sees the
+  // object the matcher clicked, the matcher sees the true target (game.client.js 's.feedback').
+  const roleKeyed = {
+    director: { reveal_target: false, show_score: false, show_partner_choice: true },
+    matcher: { reveal_target: true, show_score: false, show_partner_choice: false },
+  };
+  // target is "b" in `base`; have the matcher click "c" so target and choice are different cells.
+  const wrongSubmission = {
+    reference_game: { 0: { assignment: { 1: "c" }, rt: 300, n_correct: 0, n_targets: 1 } },
+  };
+
+  it("shows the director the matcher's choice and NOT the target", () => {
+    const api = new MockApi("director");
+    const { jsPsych } = makeJsPsych(api);
+    const el = display();
+    run(jsPsych, el, {
+      ...base,
+      role: "director",
+      partner_id: "matcher",
+      reveal_target_to: "none", // isolate feedback from the pre-feedback director hint
+      feedback: true,
+      feedback_content: roleKeyed,
+      feedback_duration: null,
+    });
+    api.pushAs("matcher", wrongSubmission);
+
+    expect(cell(el, "c").classList.contains("is-wrong")).toBe(true); // the click
+    expect(cell(el, "b").classList.contains("is-target")).toBe(false); // target stays hidden
+    expect(feedbackText(el)).toBe(""); // no score line
+  });
+
+  it("shows the matcher the target and NOT their own choice", () => {
+    const api = new MockApi("matcher");
+    api.pushAs("director", { joinedAt: 1 });
+    const { jsPsych } = makeJsPsych(api);
+    const el = display();
+    run(jsPsych, el, {
+      ...base,
+      partner_id: "director",
+      feedback: true,
+      feedback_content: roleKeyed,
+      feedback_duration: null,
+    });
+    api.pushAs("director", {
+      [`reference_game_chat_r0`]: [
+        { id: "director#0", senderId: "director", seq: 0, text: "hi", ts: 1, round: 0 },
+      ],
+    });
+    clickCell(el, "c");
+
+    expect(cell(el, "b").classList.contains("is-target")).toBe(true); // the true target
+    expect(cell(el, "c").classList.contains("is-wrong")).toBe(false); // own choice not marked
+    expect(feedbackText(el)).toBe("");
+  });
+
+  it("a flat feedback_content still applies to both roles (backwards compatible)", () => {
+    const api = new MockApi("director");
+    const { jsPsych } = makeJsPsych(api);
+    const el = display();
+    run(jsPsych, el, {
+      ...base,
+      role: "director",
+      partner_id: "matcher",
+      reveal_target_to: "none",
+      feedback: true,
+      feedback_content: { reveal_target: true, show_score: true, show_partner_choice: true },
+      feedback_duration: null,
+    });
+    api.pushAs("matcher", wrongSubmission);
+
+    expect(cell(el, "b").classList.contains("is-target")).toBe(true);
+    expect(cell(el, "c").classList.contains("is-wrong")).toBe(true);
+    expect(feedbackText(el)).toMatch(/incorrect/i);
+  });
+
+  it("fills in defaults for keys a role's object omits", () => {
+    const api = new MockApi("director");
+    const { jsPsych } = makeJsPsych(api);
+    const el = display();
+    run(jsPsych, el, {
+      ...base,
+      role: "director",
+      partner_id: "matcher",
+      reveal_target_to: "none",
+      feedback: true,
+      feedback_content: { director: { show_score: false } }, // reveal_target/show_partner_choice default true
+      feedback_duration: null,
+    });
+    api.pushAs("matcher", wrongSubmission);
+
+    expect(cell(el, "b").classList.contains("is-target")).toBe(true);
+    expect(cell(el, "c").classList.contains("is-wrong")).toBe(true);
+    expect(feedbackText(el)).toBe("");
   });
 });

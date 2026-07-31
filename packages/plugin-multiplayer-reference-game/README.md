@@ -32,7 +32,7 @@ Only `stimuli`, `targets`, and `role` are required; everything else has a sensib
 | `columns`       | integer  | `6`             | Grid columns. Ignored when `rows` is set (columns are then derived).                                                          |
 | `rows`          | integer  | `null`          | Grid rows; `null` derives the shape from `columns`.                                                                           |
 | `cell_size`     | integer  | `null`          | Object display size in px; `null` lets the grid size itself.                                                                  |
-| `scramble_mode` | string   | `"independent"` | `"independent"` (director/matcher differ — the classic design), `"shared"` (identical), or `"matcher_only"`.                  |
+| `scramble_mode` | string   | `"independent"` | `"independent"` (director/matcher differ — the classic design), `"disjoint"` (as independent, but no object may occupy the same slot for both — the original tangrams rule), `"shared"` (identical), or `"matcher_only"`. |
 | `seed`          | string   | `null`          | Base seed mixed into the deterministic scramble; the round (and, per-participant, the id) are always mixed in too.            |
 | `show_labels`   | boolean  | `false`         | Show each object's `label` as a caption.                                                                                      |
 
@@ -81,7 +81,7 @@ Only `stimuli`, `targets`, and `role` are required; everything else has a sensib
 | Parameter            | Type    | Default                                                       | Description                                                                                |
 | -------------------- | ------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
 | `feedback`           | boolean | `true`                                                        | Show feedback after the matcher submits (false ⇒ end immediately on submission).           |
-| `feedback_content`   | object  | `{reveal_target:true, show_score:true, show_partner_choice:true}` | Which feedback elements to show.                                                       |
+| `feedback_content`   | object  | `{reveal_target:true, show_score:true, show_partner_choice:true}` | Which feedback elements to show. May instead be keyed by role — `{director: {...}, matcher: {...}}` — so the two players see different things (the original shows the director only the matcher's click, and the matcher only the target). |
 | `feedback_to`        | string  | `"both"`                                                      | Who sees feedback: `"director"`, `"matcher"`, or `"both"`.                                  |
 | `feedback_duration`  | integer | `3000`                                                       | Ms feedback stays up before the trial ends. `null` shows a Continue button instead.        |
 | `show_running_score` | boolean | `false`                                                      | Show the cumulative score across rounds.                                                   |

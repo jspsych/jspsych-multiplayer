@@ -148,10 +148,10 @@ describe("reference-core: scoring", () => {
 
   it("all_or_nothing yields k or 0 while `correct` still reflects a true full match", () => {
     expect(
-      scoreAssignment({ 1: "a", 2: "c" }, ["a", "b"], { ordered: true, scoring: "all_or_nothing" }),
+      scoreAssignment({ 1: "a", 2: "c" }, ["a", "b"], { ordered: true, scoring: "all_or_nothing" })
     ).toMatchObject({ nCorrect: 0, correct: false });
     expect(
-      scoreAssignment({ 1: "a", 2: "b" }, ["a", "b"], { ordered: true, scoring: "all_or_nothing" }),
+      scoreAssignment({ 1: "a", 2: "b" }, ["a", "b"], { ordered: true, scoring: "all_or_nothing" })
     ).toMatchObject({ nCorrect: 2, correct: true });
   });
 
@@ -214,5 +214,71 @@ describe("reference-core: per-round group-session helpers", () => {
     };
     expect(runningScore(slot, "reference_game")).toBe(4);
     expect(runningScore(undefined, "reference_game")).toBe(0);
+  });
+});
+
+describe("reference-core: disjoint layouts (the original tangrams rule)", () => {
+  const ids = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L"];
+
+  it("places no object in the same slot for the two players, across many rounds and pairs", () => {
+    for (let round = 0; round < 60; round++) {
+      for (const [a, b] of [
+        ["p1", "p2"],
+        ["zz", "aa"],
+        ["participant-abc", "participant-abd"],
+      ]) {
+        const orders = independentOrders(ids, round, a, b, null, true);
+        const [x, y] = [orders[a], orders[b]];
+        for (let i = 0; i < ids.length; i++) expect(x[i]).not.toBe(y[i]);
+      }
+    }
+  });
+
+  it("still agrees across clients and is argument-order independent", () => {
+    const ab = independentOrders(ids, 3, "p1", "p2", null, true);
+    const ba = independentOrders(ids, 3, "p2", "p1", null, true);
+    expect(ab).toEqual(ba);
+    expect(independentOrders(ids, 3, "p1", "p2", null, true)).toEqual(ab);
+  });
+
+  it("both orders remain permutations of the full set", () => {
+    const orders = independentOrders(ids, 7, "p1", "p2", null, true);
+    for (const id of Object.keys(orders)) expect([...orders[id]].sort()).toEqual([...ids].sort());
+  });
+
+  it("handles a two-object set, where the only disjoint option is the swap", () => {
+    const orders = independentOrders(["A", "B"], 0, "p1", "p2", null, true);
+    expect(orders.p1).not.toEqual(orders.p2);
+    expect(orders.p1[0]).not.toBe(orders.p2[0]);
+    expect(orders.p1[1]).not.toBe(orders.p2[1]);
+  });
+
+  it("does not hang on a single object, where disjointness is impossible", () => {
+    const orders = independentOrders(["A"], 0, "p1", "p2", null, true);
+    expect(orders.p1).toEqual(["A"]);
+    expect(orders.p2).toEqual(["A"]);
+  });
+
+  it("plain independent mode does NOT guarantee disjointness (which is why the mode exists)", () => {
+    let anyCoincidence = false;
+    for (let round = 0; round < 60; round++) {
+      const orders = independentOrders(ids, round, "p1", "p2", null, false);
+      for (let i = 0; i < ids.length; i++) {
+        if (orders.p1[i] === orders.p2[i]) anyCoincidence = true;
+      }
+    }
+    expect(anyCoincidence).toBe(true);
+  });
+
+  it("displayOrder threads the mode through, and each side can derive the other's layout", () => {
+    const mine = displayOrder(ids, "director", "disjoint", 2, "p1", null, "p2");
+    const theirs = displayOrder(ids, "matcher", "disjoint", 2, "p2", null, "p1");
+    for (let i = 0; i < ids.length; i++) expect(mine[i]).not.toBe(theirs[i]);
+  });
+
+  it("falls back to a plain scramble when the partner is not yet known", () => {
+    expect(displayOrder(ids, "director", "disjoint", 2, "p1", null, null)).toEqual(
+      scramble(ids, `#2#p1`)
+    );
   });
 });
