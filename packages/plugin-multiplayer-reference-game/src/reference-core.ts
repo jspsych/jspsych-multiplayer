@@ -28,11 +28,13 @@ export interface StimulusSpec {
 export type SlotAssignment = Record<number, string>;
 
 /** How the director's and matcher's layouts relate. */
-export type ScrambleMode = "independent" | "shared" | "matcher_only";
+export type ScrambleMode = "independent" | "disjoint" | "shared" | "matcher_only";
 
 /** `per_slot` counts correct slots; `all_or_nothing` scores k or 0; a function computes n_correct itself. */
 export type ScoringSpec =
-  "per_slot" | "all_or_nothing" | ((assignment: SlotAssignment, targets: string[]) => number);
+  | "per_slot"
+  | "all_or_nothing"
+  | ((assignment: SlotAssignment, targets: string[]) => number);
 
 export interface ScoreResult {
   nCorrect: number;
@@ -109,6 +111,21 @@ function arraysEqual(a: string[], b: string[]): boolean {
   return true;
 }
 
+/** Do the two orders place some object in the same slot? (i.e. do they share a fixed point?) */
+function shareAnyPosition(a: string[], b: string[]): boolean {
+  for (let i = 0; i < a.length; i++) if (a[i] === b[i]) return true;
+  return false;
+}
+
+/**
+ * Rotate `order` left by one. A rotation of a permutation of >= 2 distinct items has NO fixed point
+ * relative to the original, so this is a guaranteed-disjoint fallback when rejection sampling has
+ * been unlucky. Deterministic, so both clients still agree.
+ */
+function rotated(order: string[]): string[] {
+  return order.length < 2 ? [...order] : [...order.slice(1), order[0]];
+}
+
 /**
  * The two independent layouts for a director/matcher pair, GUARANTEED different whenever there is
  * more than one object.
@@ -119,6 +136,18 @@ function arraysEqual(a: string[], b: string[]): boolean {
  * keeps its plain scramble; the higher id's layout is re-salted deterministically until it differs.
  * This makes the "you can't point by position" property hold even for a small object set, where two
  * independent scrambles could otherwise coincide (for N=2 they collide 50% of the time).
+ *
+ * With `disjoint`, the bar is raised from "the two layouts are not identical" to "NO object sits in
+ * the same slot for both players" — a derangement between the two orders. That is the condition
+ * enforced by the original tangrams experiment (hawkrobe/tangrams `game.core.js`, where
+ * `notMatchingLocs` re-rolls until `arraysDifferent` finds every position different), and it is what
+ * fully kills positional reference: under plain `independent`, roughly a third of objects still
+ * happen to share a slot, so "the one in the corner" sometimes works by luck.
+ *
+ * A random permutation pair is disjoint with probability ~1/e (~37%), so rejection sampling
+ * normally succeeds within a few salts; the loop is nevertheless bounded and falls back to rotating
+ * the lo order, which cannot have a fixed point. Disjointness is impossible for a single object, so
+ * it is skipped there.
  */
 export function independentOrders(
   ids: string[],
@@ -126,17 +155,26 @@ export function independentOrders(
   idA: string,
   idB: string,
   seed?: string | null,
+  disjoint = false
 ): Record<string, string[]> {
   const base = seed ?? "";
   const [lo, hi] = idA < idB ? [idA, idB] : [idB, idA];
   const loOrder = scramble(ids, `${base}#${round}#${lo}`);
   let hiOrder = scramble(ids, `${base}#${round}#${hi}`);
-  // Terminates for ids.length > 1: there are >= 2 distinct permutations, and re-salting resamples
-  // them, so a different one is reached in a handful of iterations.
+
+  const unacceptable = (candidate: string[]) =>
+    ids.length > 1 &&
+    (disjoint ? shareAnyPosition(loOrder, candidate) : arraysEqual(loOrder, candidate));
+
+  // Terminates for ids.length > 1: for the default rule there are >= 2 distinct permutations and
+  // re-salting resamples them; for `disjoint` the bounded loop is backstopped by `rotated`.
+  const MAX_RESALTS = 100;
   let salt = 1;
-  while (ids.length > 1 && arraysEqual(loOrder, hiOrder)) {
+  while (unacceptable(hiOrder) && salt <= MAX_RESALTS) {
     hiOrder = scramble(ids, `${base}#${round}#${hi}#${salt++}`);
   }
+  if (unacceptable(hiOrder)) hiOrder = rotated(loOrder);
+
   return { [lo]: loOrder, [hi]: hiOrder };
 }
 
@@ -152,6 +190,10 @@ export function independentOrders(
  *  - `"independent"`: with a known `partnerId`, uses `independentOrders` so the two layouts are
  *    GUARANTEED to differ (N>1). Without one (partner not yet present) it falls back to a plain
  *    per-participant scramble.
+ *  - `"disjoint"`:    as `"independent"`, but NO object may sit in the same slot for both players
+ *    (a derangement between the layouts) — the rule the original tangrams experiment enforces.
+ *    Needs a known `partnerId`, since disjointness is a property of the PAIR; without one it falls
+ *    back to a plain per-participant scramble exactly as `"independent"` does.
  *  - `"shared"`:      seeded by (seed, round) only — identical on both clients.
  *  - `"matcher_only"`: the matcher scrambles as in independent; the director sees the canonical
  *    `stimuli` order.
@@ -163,7 +205,7 @@ export function displayOrder(
   round: number,
   participantId: string,
   seed?: string | null,
-  partnerId?: string | null,
+  partnerId?: string | null
 ): string[] {
   const base = seed ?? "";
   switch (mode) {
@@ -172,9 +214,12 @@ export function displayOrder(
     case "matcher_only":
       return role === "matcher" ? scramble(ids, `${base}#${round}#${participantId}`) : [...ids];
     case "independent":
+    case "disjoint":
     default:
       if (partnerId != null && partnerId !== participantId) {
-        return independentOrders(ids, round, participantId, partnerId, seed)[participantId];
+        return independentOrders(ids, round, participantId, partnerId, seed, mode === "disjoint")[
+          participantId
+        ];
       }
       return scramble(ids, `${base}#${round}#${participantId}`);
   }
@@ -196,7 +241,7 @@ export function assignObject(
   prev: SlotAssignment,
   slot: number,
   objectId: string | null,
-  t: number,
+  t: number
 ): { next: SlotAssignment; events: InteractionEvent[] } {
   const next: SlotAssignment = { ...prev };
   const events: InteractionEvent[] = [];
@@ -259,7 +304,7 @@ export function nextUnfilledSlot(assignment: SlotAssignment, k: number, from = 0
 export function scoreAssignment(
   assignment: SlotAssignment,
   targets: string[],
-  opts: { ordered?: boolean; scoring?: ScoringSpec } = {},
+  opts: { ordered?: boolean; scoring?: ScoringSpec } = {}
 ): ScoreResult {
   const k = targets.length;
   const ordered = opts.ordered ?? k > 1;
@@ -310,7 +355,7 @@ function countCorrect(assignment: SlotAssignment, targets: string[], ordered: bo
 export function readRoundData(
   slot: Record<string, unknown> | undefined,
   dataKey: string,
-  round: number,
+  round: number
 ): Record<string, unknown> | undefined {
   const rounds = slot?.[dataKey];
   if (typeof rounds !== "object" || rounds === null || Array.isArray(rounds)) return undefined;
@@ -331,7 +376,7 @@ export function mergeRoundData(
   prev: Record<string, unknown>,
   dataKey: string,
   round: number,
-  data: Record<string, unknown>,
+  data: Record<string, unknown>
 ): Record<string, unknown> {
   const rounds = prev[dataKey];
   const existing =
@@ -350,7 +395,7 @@ export function readSubmission(
   group: Record<string, Record<string, unknown>>,
   participantId: string,
   dataKey: string,
-  round: number,
+  round: number
 ): Submission | undefined {
   const roundData = readRoundData(group[participantId], dataKey, round);
   const raw = roundData?.assignment;

@@ -73,8 +73,11 @@ const info = <const>{
     },
     /**
      * How the two layouts relate: `"independent"` (director and matcher see different scrambles —
-     * the classic "you can't point by position" design), `"shared"` (identical layouts), or
-     * `"matcher_only"` (director sees the canonical `stimuli` order, matcher a scramble).
+     * the classic "you can't point by position" design), `"disjoint"` (as independent, but NO object
+     * may occupy the same slot for both players — the stricter rule the original tangrams experiment
+     * enforces, since under plain `independent` about a third of objects still coincide by chance),
+     * `"shared"` (identical layouts), or `"matcher_only"` (director sees the canonical `stimuli`
+     * order, matcher a scramble).
      */
     scramble_mode: {
       type: ParameterType.STRING,
@@ -241,7 +244,15 @@ const info = <const>{
       type: ParameterType.BOOL,
       default: true,
     },
-    /** Which feedback elements to show: `{ reveal_target, show_score, show_partner_choice }`. */
+    /**
+     * Which feedback elements to show: `{ reveal_target, show_score, show_partner_choice }`.
+     *
+     * May instead be keyed BY ROLE — `{ director: {...}, matcher: {...} }` — when the two players
+     * should see different things. That is what the original tangrams experiment does: the director
+     * sees only what the matcher clicked, the matcher sees only the true target. Any key omitted
+     * from a role's object falls back to the default for that key, and a flat object (no `director`
+     * / `matcher` key) applies to both roles exactly as before.
+     */
     feedback_content: {
       type: ParameterType.OBJECT,
       default: { reveal_target: true, show_score: true, show_partner_choice: true },
@@ -493,7 +504,7 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
       ids.some((id) => typeof id !== "string")
     ) {
       throw new Error(
-        "multiplayer-reference-game: `stimuli` is required and every entry needs a string `id`.",
+        "multiplayer-reference-game: `stimuli` is required and every entry needs a string `id`."
       );
     }
     if (k === 0) {
@@ -506,7 +517,7 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
     for (const t of targets) {
       if (!idSet.has(t)) {
         throw new Error(
-          `multiplayer-reference-game: target "${t}" does not match any stimulus id.`,
+          `multiplayer-reference-game: target "${t}" does not match any stimulus id.`
         );
       }
     }
@@ -516,14 +527,14 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
     if (role !== "director" && role !== "matcher") {
       throw new Error(
         `multiplayer-reference-game: \`role\` must be "director" or "matcher" (got ${JSON.stringify(
-          trial.role,
-        )}). Typically: role: () => jsPsychMultiplayerRole.getMyRole().`,
+          trial.role
+        )}). Typically: role: () => jsPsychMultiplayerRole.getMyRole().`
       );
     }
     if (typeof round !== "number" || !Number.isFinite(round)) {
       throw new Error(
         "multiplayer-reference-game: `round` is required and must be a number. Use a UNIQUE index " +
-          "per round, e.g. round: jsPsych.timelineVariable('round').",
+          "per round, e.g. round: jsPsych.timelineVariable('round')."
       );
     }
     // Fail loud on a reused round index: per-round data is keyed by `round`, so if this round already
@@ -534,7 +545,7 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
       throw new Error(
         `multiplayer-reference-game: round ${round} already has a submitted assignment in this ` +
           "participant's slot — round indices must be unique across the timeline (did `round` default " +
-          "or repeat?).",
+          "or repeat?)."
       );
     }
 
@@ -554,11 +565,20 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
     const canSend = chatOn && (trial.chat_role === "both" || trial.chat_role === role);
     const showFeedback =
       Boolean(trial.feedback) && (trial.feedback_to === "both" || trial.feedback_to === role);
+    // `feedback_content` is either flat (applies to both roles) or keyed by role. Detected by the
+    // presence of a `director`/`matcher` key rather than by a separate parameter, so the flat form
+    // keeps working untouched.
+    const rawFeedbackContent = (trial.feedback_content ?? {}) as Record<string, unknown>;
+    const roleKeyed =
+      typeof rawFeedbackContent.director === "object" ||
+      typeof rawFeedbackContent.matcher === "object";
     const feedbackContent = {
       reveal_target: true,
       show_score: true,
       show_partner_choice: true,
-      ...((trial.feedback_content as Record<string, boolean>) ?? {}),
+      ...((roleKeyed
+        ? (rawFeedbackContent[role] as Record<string, boolean>) ?? {}
+        : (rawFeedbackContent as Record<string, boolean>)) ?? {}),
     };
     // Per-round chat namespacing: with `chat_persists` every round shares one log; without it each
     // round gets its own key so the panel starts empty (old rounds' arrays stay in the slot,
@@ -568,7 +588,7 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
     const columns =
       trial.rows != null && trial.rows > 0
         ? Math.ceil(stimuli.length / trial.rows)
-        : (trial.columns ?? 6);
+        : trial.columns ?? 6;
 
     // Warn when the trial has NO bounded end path: without `round_timeout` (or `selection_timeout`), a
     // partner who never responds — or disconnects — leaves the trial (especially the director, which
@@ -579,13 +599,13 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
     if (!hasRoundTimeout && !hasSelectionTimeout) {
       console.warn(
         "multiplayer-reference-game: no `round_timeout` or `selection_timeout` set — if the partner " +
-          "never responds (or disconnects) this trial cannot end. Set `round_timeout` to bound the round.",
+          "never responds (or disconnects) this trial cannot end. Set `round_timeout` to bound the round."
       );
     }
     if (trial.require_message_before_response && !chatOn) {
       console.warn(
         "multiplayer-reference-game: `require_message_before_response` needs a chat channel but " +
-          "`chat_enabled` is false — ignoring it (gating with no way to message would deadlock the matcher).",
+          "`chat_enabled` is false — ignoring it (gating with no way to message would deadlock the matcher)."
       );
     }
 
@@ -603,7 +623,7 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
         throw new Error(
           "multiplayer-reference-game: cannot auto-detect the partner — " +
             `${others.length} other participants are present. Set \`partner_id\` explicitly ` +
-            "(e.g. from plugin-multiplayer-role) so the trial does not guess.",
+            "(e.g. from plugin-multiplayer-role) so the trial does not guess."
         );
       }
       partner = others.length === 1 ? others[0] : null;
@@ -863,8 +883,8 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
           (k > 1 ? "s, in badge order, " : " ") +
           "to your partner."
         : k > 1
-          ? "Click a numbered slot, then the object your partner describes for it. Fill every slot, then submit."
-          : "Click the object your partner describes.";
+        ? "Click a numbered slot, then the object your partner describes for it. Fill every slot, then submit."
+        : "Click the object your partner describes.";
 
     // --- Trial state -----------------------------------------------------------------------------
     const start = performance.now();
@@ -925,7 +945,7 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
       const opens = mergeMessages(group, chatKey).some(
         (m) =>
           (partner != null ? m.senderId === partner : m.senderId !== me) &&
-          (m.round === round || (!trial.chat_persists && m.round == null)),
+          (m.round === round || (!trial.chat_persists && m.round == null))
       );
       if (!opens) return;
       partnerHasMessaged = true;
@@ -955,7 +975,7 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
 
           row.append(who, body);
           return row;
-        }),
+        })
       );
 
       if (pinnedToBottom) chatLog.scrollTop = chatLog.scrollHeight;
@@ -1278,7 +1298,7 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
         round,
         targets: [...targets],
         assignment:
-          finalAssignment == null ? null : k === 1 ? (finalAssignment[1] ?? null) : finalAssignment,
+          finalAssignment == null ? null : k === 1 ? finalAssignment[1] ?? null : finalAssignment,
         n_correct: finalScore?.nCorrect ?? null,
         n_targets: k,
         accuracy: finalScore?.accuracy ?? null,
@@ -1299,7 +1319,7 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
               round,
               partner,
               seedBase,
-              me,
+              me
             )
           : null;
       }
