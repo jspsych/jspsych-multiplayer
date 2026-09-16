@@ -10,6 +10,7 @@
     "test:watch": "npm test -- --watch",
     "build": "node scripts/ci-run.mjs build",
     "build:jatos:group-quiz": "node scripts/build-jatos-group-quiz.js",
+    "build:jatos:lifecycle-probe": "node scripts/build-jatos-lifecycle-probe.js",
     "build:jatos:ultimatum": "node scripts/build-jatos-ultimatum.js",
     "update-unpkg-links": "gulp updateUnpkgLinks",
     "update-readme": "gulp updateReadme",

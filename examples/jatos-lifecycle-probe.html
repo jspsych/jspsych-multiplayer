@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>JATOS adapter lifecycle probe</title>
+    <!-- This path is resolved by JATOS from the imported study folder. -->
+    <script src="jatos.js"></script>
+    <script src="../packages/adapter-multiplayer-jatos/dist/index.browser.js"></script>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        line-height: 1.4;
+        margin: 2rem;
+        max-width: 72rem;
+      }
+      button {
+        margin: 0 0.5rem 0.5rem 0;
+        padding: 0.5rem 0.75rem;
+      }
+      code,
+      pre {
+        background: #f3f4f6;
+        border-radius: 0.25rem;
+      }
+      #identity {
+        overflow-wrap: anywhere;
+      }
+      #trace {
+        max-height: 30rem;
+        overflow: auto;
+        padding: 1rem;
+        white-space: pre-wrap;
+      }
+      #status[data-kind="error"] {
+        color: #b42318;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>JATOS adapter lifecycle probe</h1>
+    <p>
+      Open this same group-study link in two browsers. This is an adapter/JATOS probe: it does not
+      load jsPsych, multiplayer core, or any study timeline.
+    </p>
+    <p id="status">Waiting for JATOS to load…</p>
+    <p id="identity"></p>
+    <p>
+      <button id="seal" disabled>sealGroup()</button>
+      <button id="disconnect" disabled>disconnect()</button>
+      <button id="save" disabled>Save trace to JATOS result</button>
+    </p>
+    <h2>Ordered trace</h2>
+    <pre id="trace"></pre>
+
+    <script>
+      (() => {
+        const status = document.querySelector("#status");
+        const identity = document.querySelector("#identity");
+        const traceView = document.querySelector("#trace");
+        const sealButton = document.querySelector("#seal");
+        const disconnectButton = document.querySelector("#disconnect");
+        const saveButton = document.querySelector("#save");
+        const trace = [];
+        const startedAt = performance.now();
+        let adapter;
+
+        const serializableError = (error) => {
+          if (error instanceof Error) return { name: error.name, message: error.message };
+          return error;
+        };
+
+        const setStatus = (message, kind = "") => {
+          status.textContent = message;
+          status.dataset.kind = kind;
+        };
+
+        const record = (kind, detail = {}) => {
+          const entry = {
+            sequence: trace.length + 1,
+            elapsedMs: Math.round(performance.now() - startedAt),
+            kind,
+            ...detail,
+          };
+          trace.push(entry);
+          console.log("[JATOS lifecycle probe]", entry);
+          traceView.textContent = JSON.stringify(trace, null, 2);
+        };
+
+        const renderIdentity = () => {
+          const presence = adapter.getPresence();
+          identity.innerHTML =
+            "<strong>adapter.groupId:</strong> <code>" +
+            String(adapter.groupId) +
+            "</code><br><strong>adapter.getPresence():</strong> <code>" +
+            JSON.stringify(presence) +
+            "</code>";
+        };
+
+        const saveTrace = async () => {
+          const result = {
+            probe: "jatos-adapter-lifecycle",
+            savedAt: new Date().toISOString(),
+            participantId: adapter.participantId,
+            groupId: adapter.groupId,
+            trace,
+          };
+          await jatos.submitResultData(JSON.stringify(result));
+          record("trace-saved", { result });
+          setStatus("Trace saved to this JATOS component result.");
+        };
+
+        jatos.onLoad(async () => {
+          try {
+            adapter = new jsPsychAdapterMultiplayerJatos();
+            adapter.subscribePresence((event) => {
+              // Read independently as well as retaining event.snapshot, to expose any ordering gap.
+              record("presence-event", {
+                eventType: event.type,
+                memberId: event.memberId,
+                error: serializableError(event.error),
+                eventSnapshot: event.snapshot,
+                groupId: adapter.groupId,
+                getPresence: adapter.getPresence(),
+              });
+              renderIdentity();
+            });
+            renderIdentity();
+            setStatus("Connecting to the JATOS group channel…");
+            await adapter.connect();
+            renderIdentity();
+            record("connect-resolved", {
+              groupId: adapter.groupId,
+              getPresence: adapter.getPresence(),
+            });
+            setStatus(
+              "Connected. Open the same study link for another participant, then exercise controls.",
+            );
+            sealButton.disabled = false;
+            disconnectButton.disabled = false;
+            saveButton.disabled = false;
+          } catch (error) {
+            record("connect-rejected", { error: serializableError(error) });
+            setStatus("Connection failed; inspect and save the trace.", "error");
+            saveButton.disabled = false;
+          }
+        });
+
+        sealButton.addEventListener("click", async () => {
+          sealButton.disabled = true;
+          try {
+            record("seal-requested");
+            await adapter.sealGroup();
+            record("seal-resolved", {
+              groupId: adapter.groupId,
+              getPresence: adapter.getPresence(),
+            });
+            setStatus("Group sealed. New members should no longer be assigned to this group.");
+          } catch (error) {
+            record("seal-rejected", { error: serializableError(error) });
+            setStatus("sealGroup() failed; inspect the trace.", "error");
+            sealButton.disabled = false;
+          }
+        });
+
+        disconnectButton.addEventListener("click", async () => {
+          disconnectButton.disabled = true;
+          sealButton.disabled = true;
+          try {
+            record("disconnect-requested");
+            await adapter.disconnect();
+            record("disconnect-resolved", {
+              groupId: adapter.groupId,
+              getPresence: adapter.getPresence(),
+            });
+            renderIdentity();
+            setStatus("Disconnected. Save the trace before closing this page.");
+          } catch (error) {
+            record("disconnect-rejected", { error: serializableError(error) });
+            setStatus("disconnect() failed; inspect the trace.", "error");
+          }
+        });
+
+        saveButton.addEventListener("click", async () => {
+          saveButton.disabled = true;
+          try {
+            await saveTrace();
+          } catch (error) {
+            record("trace-save-rejected", { error: serializableError(error) });
+            setStatus(
+              "Could not save the trace; copy it from this page or the browser console.",
+              "error",
+            );
+            saveButton.disabled = false;
+          }
+        });
+      })();
+    </script>
+  </body>
+</html>
