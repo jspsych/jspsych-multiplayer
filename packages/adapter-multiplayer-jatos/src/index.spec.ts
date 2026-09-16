@@ -22,6 +22,7 @@ function makeMockJatos(
 ) {
   const store: Record<string, unknown> = {};
   let callbacks: Record<string, ((arg?: unknown) => void) | undefined> = {};
+  let groupOpening = false;
 
   const jatos = {
     // Mirrors real jatos.js semantics: groupMemberId is null until the first group
@@ -37,6 +38,7 @@ function makeMockJatos(
     groupChannels: [] as Array<string | number>,
     joinGroup: jest.fn((cbs: Record<string, (arg?: unknown) => void>) => {
       callbacks = cbs;
+      groupOpening = true;
     }),
     groupSession: {
       get: jest.fn((key: string) => store[key]),
@@ -45,7 +47,13 @@ function makeMockJatos(
       }),
       getAll: jest.fn(() => ({ ...store })),
     },
-    leaveGroup: jest.fn((onSuccess?: () => void) => onSuccess?.()),
+    leaveGroup: jest.fn((onSuccess?: () => void, onFail?: (error: unknown) => void) => {
+      if (groupOpening) {
+        onFail?.("Can't leave group if not joined yet.");
+      } else {
+        onSuccess?.();
+      }
+    }),
     setGroupFixed: jest.fn((onSuccess?: () => void) => onSuccess?.()),
   };
 
@@ -53,14 +61,19 @@ function makeMockJatos(
     jatos,
     store,
     fireOpen: (groupId = "group-7") => {
+      groupOpening = false;
       jatos.groupResultId = groupId;
       jatos.groupMembers = [String(studyResultId ?? workerId)];
       jatos.groupChannels = [String(studyResultId ?? workerId)];
       callbacks.onOpen?.();
     },
     fireGroupSession: () => callbacks.onGroupSession?.(),
-    fireError: (msg?: string) => callbacks.onError?.(msg),
+    fireError: (msg?: string) => {
+      groupOpening = false;
+      callbacks.onError?.(msg);
+    },
     fireClose: () => {
+      groupOpening = false;
       // Real jatos.js clears group variables while the channel is down.
       jatos.groupResultId = null;
       callbacks.onClose?.();
@@ -210,13 +223,29 @@ describe("connect", () => {
     const connecting = adapter.connect();
     const connectionResult = connecting.catch((error: unknown) => error);
 
-    await expect(adapter.disconnect()).resolves.toBeUndefined();
+    const disconnecting = adapter.disconnect();
     const error = (await connectionResult) as Error;
     expect(error.message).toMatch(/cancelled by disconnect/);
+    expect(mock.jatos.leaveGroup).not.toHaveBeenCalled();
 
-    // Neither a stale open nor the old timeout can revive or re-settle the cancelled attempt.
+    // Real JATOS rejects leaveGroup while its opening deferred is pending. Once the underlying join
+    // succeeds, the adapter must immediately leave rather than ignoring onOpen and leaking a ghost.
     mock.fireOpen();
+    await expect(disconnecting).resolves.toBeUndefined();
+    expect(mock.jatos.leaveGroup).toHaveBeenCalledTimes(1);
     expect(adapter.getPresence().localChannelOpen).toBe(false);
+  });
+
+  test("disconnect during connect settles without leave when the underlying join fails", async () => {
+    const adapter = new JatosAdapter();
+    const connecting = adapter.connect().catch((error: unknown) => error);
+    const disconnecting = adapter.disconnect();
+
+    mock.fireError("opening failed");
+
+    await expect(connecting).resolves.toBeInstanceOf(Error);
+    await expect(disconnecting).resolves.toBeUndefined();
+    expect(mock.jatos.leaveGroup).not.toHaveBeenCalled();
   });
 });
 

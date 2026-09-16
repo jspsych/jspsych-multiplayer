@@ -119,6 +119,9 @@ export default class JatosAdapter implements MultiplayerAdapter {
   /** Rejects the current connect handshake when explicit teardown races it. */
   private cancelPendingConnect: (() => void) | null = null;
 
+  /** Completes a disconnect that must wait for JATOS's pending join to settle before leaving. */
+  private finishDisconnectAfterConnect: ((joined: boolean) => void) | null = null;
+
   /** Last successfully opened group ID; JATOS clears its global during channel loss. */
   private cachedGroupId: string | null = null;
 
@@ -259,6 +262,13 @@ export default class JatosAdapter implements MultiplayerAdapter {
         onOpen: () => {
           if (generation !== this.connectionGeneration) return;
           const reportedGroupId = jatos.groupResultId == null ? null : String(jatos.groupResultId);
+          if (this.finishDisconnectAfterConnect !== null) {
+            // JATOS rejects leaveGroup() while its opening deferred is pending. Now that onOpen has
+            // fired, the deferred is settled and it is safe to perform the deferred leave.
+            if (reportedGroupId !== null) this.cachedGroupId = reportedGroupId;
+            this.finishDisconnectAfterConnect(true);
+            return;
+          }
           if (
             reportedGroupId === null ||
             (attemptGroupId !== null && reportedGroupId !== attemptGroupId)
@@ -297,6 +307,7 @@ export default class JatosAdapter implements MultiplayerAdapter {
         },
         onGroupSession: () => {
           if (generation !== this.connectionGeneration) return;
+          if (this.finishDisconnectAfterConnect !== null) return;
           const data = this.getAll();
           for (const cb of this.subscribers) {
             // Isolate subscribers: one throwing listener must not stop the fan-out
@@ -310,6 +321,10 @@ export default class JatosAdapter implements MultiplayerAdapter {
         },
         onError: (errMsg) => {
           if (generation !== this.connectionGeneration) return;
+          if (this.finishDisconnectAfterConnect !== null) {
+            this.finishDisconnectAfterConnect(false);
+            return;
+          }
           // An error delivered before onOpen rejects the connect promise. One delivered
           // after (the channel was up, then failed) can't reject an already-settled promise,
           // so mark the channel down — otherwise push() would keep retrying a dead channel.
@@ -329,6 +344,10 @@ export default class JatosAdapter implements MultiplayerAdapter {
         },
         onClose: () => {
           if (generation !== this.connectionGeneration) return;
+          if (this.finishDisconnectAfterConnect !== null) {
+            this.finishDisconnectAfterConnect(false);
+            return;
+          }
           // The channel closed mid-session. Flip the flags so push()'s guard is accurate and
           // its retry loop bails instead of spinning against a dead channel. Subscribers are
           // left intact — a close isn't necessarily permanent, and disconnect() owns teardown.
@@ -337,16 +356,32 @@ export default class JatosAdapter implements MultiplayerAdapter {
           this.emitPresence("local-close");
         },
         onMemberJoin: (memberId) => {
-          if (generation === this.connectionGeneration) this.emitPresence("member-join", memberId);
+          if (
+            generation === this.connectionGeneration &&
+            this.finishDisconnectAfterConnect === null
+          )
+            this.emitPresence("member-join", memberId);
         },
         onMemberOpen: (memberId) => {
-          if (generation === this.connectionGeneration) this.emitPresence("member-open", memberId);
+          if (
+            generation === this.connectionGeneration &&
+            this.finishDisconnectAfterConnect === null
+          )
+            this.emitPresence("member-open", memberId);
         },
         onMemberClose: (memberId) => {
-          if (generation === this.connectionGeneration) this.emitPresence("member-close", memberId);
+          if (
+            generation === this.connectionGeneration &&
+            this.finishDisconnectAfterConnect === null
+          )
+            this.emitPresence("member-close", memberId);
         },
         onMemberLeave: (memberId) => {
-          if (generation === this.connectionGeneration) this.emitPresence("member-leave", memberId);
+          if (
+            generation === this.connectionGeneration &&
+            this.finishDisconnectAfterConnect === null
+          )
+            this.emitPresence("member-leave", memberId);
         },
       });
     });
@@ -426,6 +461,7 @@ export default class JatosAdapter implements MultiplayerAdapter {
   }
 
   disconnect(): Promise<void> {
+    const connecting = this.cancelPendingConnect !== null;
     // Settle an in-flight connect before invalidating its generation; otherwise its timer and all
     // callbacks would become no-ops while the caller's original promise remained pending forever.
     this.cancelPendingConnect?.();
@@ -433,7 +469,6 @@ export default class JatosAdapter implements MultiplayerAdapter {
     this.subscribers.clear();
     this.connected = false;
     this.channelClosed = true;
-    this.connectionGeneration++;
     this.sealPromise = null;
     this.emitPresence("local-disconnect");
     // Full teardown resets the re-entry guard so a fresh connect() can rejoin the group.
@@ -443,17 +478,37 @@ export default class JatosAdapter implements MultiplayerAdapter {
     // builds that don't expose leaveGroup.
     return new Promise((resolve) => {
       const finish = (type: "left-group" | "leave-failed", error?: unknown) => {
+        this.connectionGeneration++;
+        this.finishDisconnectAfterConnect = null;
         this.emitPresence(type, undefined, error);
         this.presenceSubscribers.clear();
         resolve();
       };
-      if (typeof jatos.leaveGroup === "function") {
+
+      const leave = () => {
+        if (typeof jatos.leaveGroup !== "function") {
+          finish("left-group");
+          return;
+        }
         jatos.leaveGroup(
           () => finish("left-group"),
           (error) => finish("leave-failed", error),
         );
+      };
+
+      if (connecting) {
+        // Do not call leaveGroup yet: real jatos.js rejects it while its opening deferred is
+        // pending. Keep this connection generation alive only long enough to observe onOpen or a
+        // terminal open failure. A successful late join is immediately followed by leaveGroup.
+        this.finishDisconnectAfterConnect = (joined) => {
+          // Clear first so a synchronous leave callback cannot re-enter this completion path.
+          this.finishDisconnectAfterConnect = null;
+          if (joined) leave();
+          else finish("left-group");
+        };
       } else {
-        finish("left-group");
+        this.connectionGeneration++;
+        leave();
       }
     });
   }

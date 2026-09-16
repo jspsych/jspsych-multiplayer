@@ -81,8 +81,11 @@ game. Allocation and reassignment remain JATOS responsibilities.
   lifecycle events. All presence subscribers are cleared after that terminal event.
 - A timed-out/failed `connect()` can be retried, and callbacks from the abandoned attempt are
   ignored so they cannot revive a torn-down adapter.
-- Calling `disconnect()` while `connect()` is pending rejects the connection attempt as cancelled
-  before leaving the group, so neither operation can leave an unresolved promise behind.
+- Calling `disconnect()` while `connect()` is pending rejects the public connection attempt as
+  cancelled, but waits for JATOS's underlying join to settle before leaving. This ordering matters:
+  jatos.js rejects `leaveGroup()` while its group-opening deferred is pending. If the late join
+  opens, the adapter immediately leaves it; if opening fails, disconnect completes without a leave.
+  Neither promise hangs and a cancelled join cannot remain as a ghost member.
 
 ## How it works
 
