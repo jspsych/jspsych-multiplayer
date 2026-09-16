@@ -85,7 +85,10 @@ game. Allocation and reassignment remain JATOS responsibilities.
   cancelled, but waits for JATOS's underlying join to settle before leaving. This ordering matters:
   jatos.js rejects `leaveGroup()` while its group-opening deferred is pending. If the late join
   opens, the adapter immediately leaves it; if opening fails, disconnect completes without a leave.
-  Neither promise hangs and a cancelled join cannot remain as a ghost member.
+  The public disconnect is bounded by `connectTimeoutMs` if JATOS never calls back, while a teardown
+  tombstone continues handling a later callback so it cannot create a ghost member. Repeated
+  disconnects share one promise, and reconnect is rejected until that ambiguous join eventually
+  reports an outcome.
 
 ## How it works
 

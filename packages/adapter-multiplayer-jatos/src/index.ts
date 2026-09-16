@@ -122,6 +122,9 @@ export default class JatosAdapter implements MultiplayerAdapter {
   /** Completes a disconnect that must wait for JATOS's pending join to settle before leaving. */
   private finishDisconnectAfterConnect: ((joined: boolean) => void) | null = null;
 
+  /** Makes teardown idempotent, including while a cancelled JATOS join is still unresolved. */
+  private disconnectPromise: Promise<void> | null = null;
+
   /** Last successfully opened group ID; JATOS clears its global during channel loss. */
   private cachedGroupId: string | null = null;
 
@@ -224,6 +227,11 @@ export default class JatosAdapter implements MultiplayerAdapter {
   }
 
   connect(): Promise<void> {
+    if (this.finishDisconnectAfterConnect !== null) {
+      return Promise.reject(
+        new Error("JatosAdapter: cannot connect while a cancelled JATOS join is still settling."),
+      );
+    }
     // Re-entry guard: hand back the existing promise instead of joining twice.
     if (this.connectPromise !== null) {
       return this.connectPromise;
@@ -461,6 +469,8 @@ export default class JatosAdapter implements MultiplayerAdapter {
   }
 
   disconnect(): Promise<void> {
+    if (this.disconnectPromise !== null) return this.disconnectPromise;
+
     const connecting = this.cancelPendingConnect !== null;
     // Settle an in-flight connect before invalidating its generation; otherwise its timer and all
     // callbacks would become no-ops while the caller's original promise remained pending forever.
@@ -476,41 +486,64 @@ export default class JatosAdapter implements MultiplayerAdapter {
     // Close the channel cleanly by leaving the group. Resolve on either outcome —
     // the local teardown above has already happened — and guard for older jatos.js
     // builds that don't expose leaveGroup.
-    return new Promise((resolve) => {
-      const finish = (type: "left-group" | "leave-failed", error?: unknown) => {
-        this.connectionGeneration++;
-        this.finishDisconnectAfterConnect = null;
-        this.emitPresence(type, undefined, error);
-        this.presenceSubscribers.clear();
-        resolve();
-      };
-
-      const leave = () => {
-        if (typeof jatos.leaveGroup !== "function") {
-          finish("left-group");
-          return;
-        }
-        jatos.leaveGroup(
-          () => finish("left-group"),
-          (error) => finish("leave-failed", error),
-        );
-      };
-
-      if (connecting) {
-        // Do not call leaveGroup yet: real jatos.js rejects it while its opening deferred is
-        // pending. Keep this connection generation alive only long enough to observe onOpen or a
-        // terminal open failure. A successful late join is immediately followed by leaveGroup.
-        this.finishDisconnectAfterConnect = (joined) => {
-          // Clear first so a synchronous leave callback cannot re-enter this completion path.
-          this.finishDisconnectAfterConnect = null;
-          if (joined) leave();
-          else finish("left-group");
-        };
-      } else {
-        this.connectionGeneration++;
-        leave();
-      }
+    let resolveDisconnect!: () => void;
+    const disconnectPromise = new Promise<void>((resolve) => {
+      resolveDisconnect = resolve;
     });
+    this.disconnectPromise = disconnectPromise;
+
+    let publicSettled = false;
+    let teardownTimer: ReturnType<typeof setTimeout> | null = null;
+    const settlePublicDisconnect = (type: "left-group" | "leave-failed", error?: unknown) => {
+      if (publicSettled) return;
+      publicSettled = true;
+      this.emitPresence(type, undefined, error);
+      this.presenceSubscribers.clear();
+      resolveDisconnect();
+    };
+
+    const finish = (type: "left-group" | "leave-failed", error?: unknown) => {
+      if (teardownTimer !== null) clearTimeout(teardownTimer);
+      this.connectionGeneration++;
+      this.finishDisconnectAfterConnect = null;
+      this.disconnectPromise = null;
+      settlePublicDisconnect(type, error);
+    };
+
+    const leave = () => {
+      if (typeof jatos.leaveGroup !== "function") {
+        finish("left-group");
+        return;
+      }
+      jatos.leaveGroup(
+        () => finish("left-group"),
+        (error) => finish("leave-failed", error),
+      );
+    };
+
+    if (connecting) {
+      // Do not call leaveGroup yet: real jatos.js rejects it while its opening deferred is
+      // pending. Keep this connection generation alive to catch and leave a late successful join.
+      // The caller's teardown is nevertheless bounded in case JATOS never reports any outcome.
+      this.finishDisconnectAfterConnect = (joined) => {
+        if (joined) leave();
+        else finish("left-group");
+      };
+      teardownTimer = setTimeout(() => {
+        settlePublicDisconnect(
+          "leave-failed",
+          new Error(
+            `JatosAdapter: timed out after ${this.connectTimeoutMs} ms waiting for the cancelled ` +
+              "JATOS join to settle. Late callbacks will still be handled to prevent a ghost member.",
+          ),
+        );
+      }, this.connectTimeoutMs);
+    } else {
+      this.connectionGeneration++;
+      leave();
+    }
+
+    return disconnectPromise;
   }
 
   private emitPresence(type: JatosPresenceEventType, memberId?: string, error?: unknown): void {

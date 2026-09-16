@@ -247,6 +247,27 @@ describe("connect", () => {
     await expect(disconnecting).resolves.toBeUndefined();
     expect(mock.jatos.leaveGroup).not.toHaveBeenCalled();
   });
+
+  test("disconnect during a silent join is bounded, idempotent, and still cleans up a late open", async () => {
+    jest.useFakeTimers();
+    const adapter = new JatosAdapter({ connectTimeoutMs: 5 });
+    const connecting = adapter.connect().catch((error: unknown) => error);
+
+    const firstDisconnect = adapter.disconnect();
+    const secondDisconnect = adapter.disconnect();
+    expect(secondDisconnect).toBe(firstDisconnect);
+    await expect(connecting).resolves.toBeInstanceOf(Error);
+
+    await jest.advanceTimersByTimeAsync(5);
+    await expect(firstDisconnect).resolves.toBeUndefined();
+    expect(mock.jatos.leaveGroup).not.toHaveBeenCalled();
+    await expect(adapter.connect()).rejects.toThrow(/cancelled JATOS join is still settling/);
+
+    // The public teardown is bounded, but its tombstone remains long enough to leave a join that
+    // eventually opens instead of leaking a ghost member.
+    mock.fireOpen();
+    expect(mock.jatos.leaveGroup).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("reads", () => {
