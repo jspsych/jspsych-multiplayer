@@ -57,6 +57,12 @@ unsubscribe();
 unsubscribe function. A peer channel close removes that peer only from `openChannelMemberIds`; it
 does not modify group-session data or by itself remove group membership.
 
+`groupId` is cached on the first successful channel open because jatos.js clears its group globals
+during a transient channel loss. The cached ID remains available through close/reopen and explicit
+disconnect. An automatic reopen must report the same ID or the adapter emits `local-error` and stays
+closed. A later explicit `connect()` after `disconnect()` may join another group and replace the
+cached ID.
+
 `sealGroup()` wraps `jatos.setGroupFixed()`. It requires an open local channel, deduplicates
 concurrent/repeated successful calls, and rejects with the JATOS failure as `cause`. A fixed group
 may lose members but cannot admit replacements. Configure the JATOS batch's `maxActiveMembers` for
@@ -75,6 +81,8 @@ game. Allocation and reassignment remain JATOS responsibilities.
   lifecycle events. All presence subscribers are cleared after that terminal event.
 - A timed-out/failed `connect()` can be retried, and callbacks from the abandoned attempt are
   ignored so they cannot revive a torn-down adapter.
+- Calling `disconnect()` while `connect()` is pending rejects the connection attempt as cancelled
+  before leaving the group, so neither operation can leave an unresolved promise behind.
 
 ## How it works
 

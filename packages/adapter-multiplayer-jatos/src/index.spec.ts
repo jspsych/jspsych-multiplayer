@@ -52,15 +52,19 @@ function makeMockJatos(
   return {
     jatos,
     store,
-    fireOpen: () => {
-      jatos.groupResultId = "group-7";
+    fireOpen: (groupId = "group-7") => {
+      jatos.groupResultId = groupId;
       jatos.groupMembers = [String(studyResultId ?? workerId)];
       jatos.groupChannels = [String(studyResultId ?? workerId)];
       callbacks.onOpen?.();
     },
     fireGroupSession: () => callbacks.onGroupSession?.(),
     fireError: (msg?: string) => callbacks.onError?.(msg),
-    fireClose: () => callbacks.onClose?.(),
+    fireClose: () => {
+      // Real jatos.js clears group variables while the channel is down.
+      jatos.groupResultId = null;
+      callbacks.onClose?.();
+    },
     fireMemberJoin: (id: string) => {
       jatos.groupMembers = [...jatos.groupMembers, id];
       callbacks.onMemberJoin?.(id);
@@ -199,6 +203,20 @@ describe("connect", () => {
     const err = (await assertion) as Error;
 
     expect(err.message).toMatch(/timed out after 5 ms/);
+  });
+
+  test("disconnect during connect rejects the handshake and both promises settle", async () => {
+    const adapter = new JatosAdapter();
+    const connecting = adapter.connect();
+    const connectionResult = connecting.catch((error: unknown) => error);
+
+    await expect(adapter.disconnect()).resolves.toBeUndefined();
+    const error = (await connectionResult) as Error;
+    expect(error.message).toMatch(/cancelled by disconnect/);
+
+    // Neither a stale open nor the old timeout can revive or re-settle the cancelled attempt.
+    mock.fireOpen();
+    expect(adapter.getPresence().localChannelOpen).toBe(false);
   });
 });
 
@@ -453,16 +471,49 @@ describe("JATOS presence and group lifecycle", () => {
     ]);
   });
 
-  test("reports local close and automatic reopen without losing subscribers", async () => {
+  test("retains the group ID across close/reopen and verifies the reopened identity", async () => {
+    const adapter = await connectedAdapter();
+    const events: Array<{ type: string; groupId: string | null }> = [];
+    adapter.subscribePresence((event) =>
+      events.push({ type: event.type, groupId: event.snapshot.groupId }),
+    );
+
+    mock.fireClose();
+    expect(adapter.getPresence()).toMatchObject({
+      groupId: "group-7",
+      localChannelOpen: false,
+    });
+    mock.fireOpen();
+    expect(adapter.getPresence()).toMatchObject({ groupId: "group-7", localChannelOpen: true });
+    expect(events).toEqual([
+      { type: "snapshot", groupId: "group-7" },
+      { type: "local-close", groupId: "group-7" },
+      { type: "local-open", groupId: "group-7" },
+    ]);
+  });
+
+  test("rejects a reopened channel that reports a different group ID", async () => {
     const adapter = await connectedAdapter();
     const events: string[] = [];
     adapter.subscribePresence((event) => events.push(event.type));
 
     mock.fireClose();
+    mock.fireOpen("different-group");
+
+    expect(adapter.groupId).toBe("group-7");
     expect(adapter.getPresence().localChannelOpen).toBe(false);
-    mock.fireOpen();
-    expect(adapter.getPresence().localChannelOpen).toBe(true);
-    expect(events).toEqual(["snapshot", "local-close", "local-open"]);
+    expect(events).toEqual(["snapshot", "local-close", "local-error"]);
+  });
+
+  test("retains groupId after explicit disconnect and replaces it on a fresh join", async () => {
+    const adapter = await connectedAdapter();
+    await adapter.disconnect();
+    expect(adapter.groupId).toBe("group-7");
+
+    const reconnecting = adapter.connect();
+    mock.fireOpen("group-8");
+    await reconnecting;
+    expect(adapter.groupId).toBe("group-8");
   });
 
   test("seals a connected group once and reports success", async () => {

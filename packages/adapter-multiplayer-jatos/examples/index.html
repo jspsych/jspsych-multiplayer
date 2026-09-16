@@ -72,11 +72,20 @@
 
     jatos.onLoad(async () => {
       await jsPsych.multiplayer.connect(adapter);
-      await waitForLiveDyad(5 * 60 * 1000);
-      // The batch should also set maxActiveMembers=2. Fixing at the game boundary prevents JATOS
-      // from silently assigning a replacement if either member later leaves.
-      await adapter.sealGroup();
-      await jsPsych.run(timeline);
+      try {
+        await waitForLiveDyad(5 * 60 * 1000);
+        // The batch should also set maxActiveMembers=2. Fixing at the game boundary prevents JATOS
+        // from silently assigning a replacement if either member later leaves.
+        await adapter.sealGroup();
+        await jsPsych.run(timeline);
+      } catch (error) {
+        await jsPsych.multiplayer.disconnect();
+        // A production study should route this structured outcome to its own no-match/error screen
+        // and compensation policy. The example still demonstrates a bounded terminal path.
+        document.body.innerHTML =
+          "<p>No partner became available. This session has ended cleanly.</p>";
+        console.error(error);
+      }
     });
   </script>
 </html>

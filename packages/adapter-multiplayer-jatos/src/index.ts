@@ -116,6 +116,12 @@ export default class JatosAdapter implements MultiplayerAdapter {
    */
   private connectPromise: Promise<void> | null = null;
 
+  /** Rejects the current connect handshake when explicit teardown races it. */
+  private cancelPendingConnect: (() => void) | null = null;
+
+  /** Last successfully opened group ID; JATOS clears its global during channel loss. */
+  private cachedGroupId: string | null = null;
+
   /** Invalidates callbacks belonging to an abandoned connection attempt or teardown. */
   private connectionGeneration = 0;
 
@@ -145,9 +151,12 @@ export default class JatosAdapter implements MultiplayerAdapter {
     this.connectTimeoutMs = options.connectTimeoutMs ?? 20_000;
   }
 
-  /** The stable JATOS group-result ID, available once the group channel opens. */
+  /**
+   * The last successfully opened JATOS group-result ID. It survives transient channel loss and
+   * explicit disconnect, and is replaced only when a later explicit connect joins another group.
+   */
   get groupId(): string | null {
-    return jatos.groupResultId == null ? null : String(jatos.groupResultId);
+    return this.cachedGroupId;
   }
 
   /**
@@ -223,6 +232,7 @@ export default class JatosAdapter implements MultiplayerAdapter {
       // unreachable server mid-connect — the promise would otherwise hang forever and the
       // experiment would stall with no diagnostic. Bound the wait and fail loudly instead.
       let settled = false;
+      let attemptGroupId: string | null = null;
       const timer = setTimeout(() => {
         if (settled || generation !== this.connectionGeneration) return;
         settled = true;
@@ -237,9 +247,40 @@ export default class JatosAdapter implements MultiplayerAdapter {
         );
       }, this.connectTimeoutMs);
 
+      this.cancelPendingConnect = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        reject(new Error("JatosAdapter: connect() was cancelled by disconnect()."));
+      };
+
       jatos.joinGroup({
         onOpen: () => {
           if (generation !== this.connectionGeneration) return;
+          const reportedGroupId = jatos.groupResultId == null ? null : String(jatos.groupResultId);
+          if (
+            reportedGroupId === null ||
+            (attemptGroupId !== null && reportedGroupId !== attemptGroupId)
+          ) {
+            const error = new Error(
+              reportedGroupId === null
+                ? "JatosAdapter: the group channel opened without a JATOS groupResultId."
+                : `JatosAdapter: reopened channel changed group ID from ${attemptGroupId} to ${reportedGroupId}.`,
+            );
+            this.connected = false;
+            this.channelClosed = true;
+            this.connectionGeneration++;
+            this.cancelPendingConnect = null;
+            this.emitPresence("local-error", undefined, error);
+            if (!settled) {
+              settled = true;
+              clearTimeout(timer);
+              reject(error);
+            }
+            return;
+          }
+          attemptGroupId = reportedGroupId;
+          this.cachedGroupId = reportedGroupId;
           // Restore the flags before the settled guard: jatos.js can close the channel
           // (onClose) and later reopen it, and that reopen fires onOpen long after the
           // connect promise settled. Skipping the flags here would leave push() dead
@@ -250,6 +291,7 @@ export default class JatosAdapter implements MultiplayerAdapter {
           if (settled) return;
           settled = true;
           clearTimeout(timer);
+          this.cancelPendingConnect = null;
           resolve();
         },
         onGroupSession: () => {
@@ -278,6 +320,7 @@ export default class JatosAdapter implements MultiplayerAdapter {
           }
           settled = true;
           clearTimeout(timer);
+          this.cancelPendingConnect = null;
           this.channelClosed = true;
           this.connectionGeneration++;
           this.emitPresence("local-error", undefined, errMsg);
@@ -382,6 +425,10 @@ export default class JatosAdapter implements MultiplayerAdapter {
   }
 
   disconnect(): Promise<void> {
+    // Settle an in-flight connect before invalidating its generation; otherwise its timer and all
+    // callbacks would become no-ops while the caller's original promise remained pending forever.
+    this.cancelPendingConnect?.();
+    this.cancelPendingConnect = null;
     this.subscribers.clear();
     this.connected = false;
     this.channelClosed = true;
