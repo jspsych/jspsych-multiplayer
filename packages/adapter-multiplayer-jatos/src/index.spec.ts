@@ -521,6 +521,46 @@ describe("JATOS presence and group lifecycle", () => {
     ]);
   });
 
+  test("preserves JATOS's member-leave before member-close snapshots", async () => {
+    const adapter = await connectedAdapter();
+    mock.fireMemberJoin("w2");
+    mock.fireMemberOpen("w2");
+    const events: Array<{
+      type: string;
+      memberId?: string;
+      assignedMemberIds: readonly string[];
+      openChannelMemberIds: readonly string[];
+    }> = [];
+    adapter.subscribePresence((event) => {
+      events.push({
+        type: event.type,
+        memberId: event.memberId,
+        assignedMemberIds: event.snapshot.assignedMemberIds,
+        openChannelMemberIds: event.snapshot.openChannelMemberIds,
+      });
+    });
+
+    // Live JATOS reports a member's departure before closing that member's channel. The adapter
+    // must report the actual point-in-time JATOS arrays, not normalize away this brief state.
+    mock.fireMemberLeave("w2");
+    mock.fireMemberClose("w2");
+
+    expect(events.slice(1)).toEqual([
+      {
+        type: "member-leave",
+        memberId: "w2",
+        assignedMemberIds: ["w1"],
+        openChannelMemberIds: ["w1", "w2"],
+      },
+      {
+        type: "member-close",
+        memberId: "w2",
+        assignedMemberIds: ["w1"],
+        openChannelMemberIds: ["w1"],
+      },
+    ]);
+  });
+
   test("retains the group ID across close/reopen and verifies the reopened identity", async () => {
     const adapter = await connectedAdapter();
     const events: Array<{ type: string; groupId: string | null }> = [];

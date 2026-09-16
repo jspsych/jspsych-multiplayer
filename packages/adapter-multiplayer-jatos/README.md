@@ -57,6 +57,13 @@ unsubscribe();
 unsubscribe function. A peer channel close removes that peer only from `openChannelMemberIds`; it
 does not modify group-session data or by itself remove group membership.
 
+JATOS can report a peer's `member-leave` before its `member-close`. In that short interval, the
+`member-leave` snapshot correctly excludes the peer from `assignedMemberIds` while still listing it
+in `openChannelMemberIds`; the following `member-close` snapshot removes it from the latter too.
+Snapshots intentionally preserve this point-in-time JATOS ordering rather than normalizing the two
+arrays. Consumers handling a leave should treat that lifecycle event or `assignedMemberIds` as the
+authoritative membership signal, not use the open-channel count alone during the transition.
+
 `groupId` is cached on the first successful channel open because jatos.js clears its group globals
 during a transient channel loss. The cached ID remains available through close/reopen and explicit
 disconnect. An automatic reopen must report the same ID or the adapter emits `local-error` and stays
