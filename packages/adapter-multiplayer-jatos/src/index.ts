@@ -237,6 +237,7 @@ export default class JatosAdapter implements MultiplayerAdapter {
         if (settled || generation !== this.connectionGeneration) return;
         settled = true;
         this.connectionGeneration++;
+        this.cancelPendingConnect = null;
         this.emitPresence("local-error", undefined, "connection timed out");
         reject(
           new Error(
