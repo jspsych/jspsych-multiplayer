@@ -32,6 +32,9 @@ function makeMockJatos(
     groupMemberId: null,
     studyResultId: studyResultId ?? undefined,
     workerId,
+    groupResultId: null as string | number | null,
+    groupMembers: [] as Array<string | number>,
+    groupChannels: [] as Array<string | number>,
     joinGroup: jest.fn((cbs: Record<string, (arg?: unknown) => void>) => {
       callbacks = cbs;
     }),
@@ -43,15 +46,37 @@ function makeMockJatos(
       getAll: jest.fn(() => ({ ...store })),
     },
     leaveGroup: jest.fn((onSuccess?: () => void) => onSuccess?.()),
+    setGroupFixed: jest.fn((onSuccess?: () => void) => onSuccess?.()),
   };
 
   return {
     jatos,
     store,
-    fireOpen: () => callbacks.onOpen?.(),
+    fireOpen: () => {
+      jatos.groupResultId = "group-7";
+      jatos.groupMembers = [String(studyResultId ?? workerId)];
+      jatos.groupChannels = [String(studyResultId ?? workerId)];
+      callbacks.onOpen?.();
+    },
     fireGroupSession: () => callbacks.onGroupSession?.(),
     fireError: (msg?: string) => callbacks.onError?.(msg),
     fireClose: () => callbacks.onClose?.(),
+    fireMemberJoin: (id: string) => {
+      jatos.groupMembers = [...jatos.groupMembers, id];
+      callbacks.onMemberJoin?.(id);
+    },
+    fireMemberOpen: (id: string) => {
+      jatos.groupChannels = [...jatos.groupChannels, id];
+      callbacks.onMemberOpen?.(id);
+    },
+    fireMemberClose: (id: string) => {
+      jatos.groupChannels = jatos.groupChannels.filter((memberId) => memberId !== id);
+      callbacks.onMemberClose?.(id);
+    },
+    fireMemberLeave: (id: string) => {
+      jatos.groupMembers = jatos.groupMembers.filter((memberId) => memberId !== id);
+      callbacks.onMemberLeave?.(id);
+    },
   };
 }
 
@@ -149,6 +174,19 @@ describe("connect", () => {
     mock.fireOpen();
     await expect(retry).resolves.toBeUndefined();
     expect(mock.jatos.joinGroup).toHaveBeenCalledTimes(2);
+  });
+
+  test("a failed attempt reports lifecycle and cannot reopen from a stale callback", async () => {
+    const adapter = new JatosAdapter();
+    const events: string[] = [];
+    adapter.subscribePresence((event) => events.push(event.type));
+    const first = adapter.connect();
+    mock.fireError("boom");
+    await expect(first).rejects.toThrow(/boom/);
+
+    mock.fireOpen();
+    expect(adapter.getPresence().localChannelOpen).toBe(false);
+    expect(events).toEqual(["snapshot", "local-error"]);
   });
 
   test("honors a custom connectTimeoutMs option", async () => {
@@ -352,6 +390,144 @@ describe("channel lifecycle", () => {
     mock.fireOpen();
     await expect(adapter.push({ x: 2 })).resolves.toBeUndefined();
     expect(mock.jatos.groupSession.set).toHaveBeenCalledWith("w1", { x: 2 });
+  });
+});
+
+describe("JATOS presence and group lifecycle", () => {
+  test("exposes the shared group id only after connection", async () => {
+    const adapter = new JatosAdapter();
+    expect(adapter.groupId).toBeNull();
+    const connecting = adapter.connect();
+    mock.fireOpen();
+    await connecting;
+    expect(adapter.groupId).toBe("group-7");
+  });
+
+  test("distinguishes assigned members from currently open channels", async () => {
+    const adapter = await connectedAdapter();
+    mock.fireMemberJoin("w2");
+    mock.fireMemberOpen("w2");
+    mock.fireMemberClose("w2");
+
+    expect(adapter.getPresence()).toEqual({
+      groupId: "group-7",
+      assignedMemberIds: ["w1", "w2"],
+      openChannelMemberIds: ["w1"],
+      localChannelOpen: true,
+    });
+  });
+
+  test("returns frozen snapshots that do not expose JATOS arrays", async () => {
+    const adapter = await connectedAdapter();
+    const snapshot = adapter.getPresence();
+
+    expect(Object.isFrozen(snapshot)).toBe(true);
+    expect(Object.isFrozen(snapshot.assignedMemberIds)).toBe(true);
+    expect(Object.isFrozen(snapshot.openChannelMemberIds)).toBe(true);
+    expect(snapshot.assignedMemberIds).not.toBe(mock.jatos.groupMembers);
+
+    mock.jatos.groupMembers.push("later");
+    expect(snapshot.assignedMemberIds).toEqual(["w1"]);
+  });
+
+  test("replays immediately, reports peer lifecycle, and unsubscribes", async () => {
+    const adapter = await connectedAdapter();
+    const events: Array<{ type: string; memberId?: string }> = [];
+    const unsubscribe = adapter.subscribePresence((event) =>
+      events.push({ type: event.type, memberId: event.memberId }),
+    );
+
+    mock.fireMemberJoin("w2");
+    mock.fireMemberOpen("w2");
+    mock.fireMemberClose("w2");
+    mock.fireMemberLeave("w2");
+    unsubscribe();
+    mock.fireMemberJoin("w3");
+
+    expect(events).toEqual([
+      { type: "snapshot", memberId: undefined },
+      { type: "member-join", memberId: "w2" },
+      { type: "member-open", memberId: "w2" },
+      { type: "member-close", memberId: "w2" },
+      { type: "member-leave", memberId: "w2" },
+    ]);
+  });
+
+  test("reports local close and automatic reopen without losing subscribers", async () => {
+    const adapter = await connectedAdapter();
+    const events: string[] = [];
+    adapter.subscribePresence((event) => events.push(event.type));
+
+    mock.fireClose();
+    expect(adapter.getPresence().localChannelOpen).toBe(false);
+    mock.fireOpen();
+    expect(adapter.getPresence().localChannelOpen).toBe(true);
+    expect(events).toEqual(["snapshot", "local-close", "local-open"]);
+  });
+
+  test("seals a connected group once and reports success", async () => {
+    const adapter = await connectedAdapter();
+    const events: string[] = [];
+    adapter.subscribePresence((event) => events.push(event.type));
+
+    const first = adapter.sealGroup();
+    const second = adapter.sealGroup();
+    await expect(first).resolves.toBeUndefined();
+    expect(second).toBe(first);
+    expect(mock.jatos.setGroupFixed).toHaveBeenCalledTimes(1);
+    expect(events).toContain("group-fixed");
+  });
+
+  test("rejects a failed seal with the JATOS error as cause and permits retry", async () => {
+    const adapter = await connectedAdapter();
+    const underlying = new Error("server refused");
+    mock.jatos.setGroupFixed.mockImplementationOnce(
+      (_ok?: () => void, fail?: (error: unknown) => void) => fail?.(underlying),
+    );
+
+    const error = (await adapter.sealGroup().catch((value) => value)) as Error & {
+      cause?: unknown;
+    };
+    expect(error.message).toMatch(/failed to fix/);
+    expect(error.cause).toBe(underlying);
+    await expect(adapter.sealGroup()).resolves.toBeUndefined();
+    expect(mock.jatos.setGroupFixed).toHaveBeenCalledTimes(2);
+  });
+
+  test("rejects sealing before connection or when unsupported", async () => {
+    const adapter = new JatosAdapter();
+    await expect(adapter.sealGroup()).rejects.toThrow(/open group channel/);
+    const connected = await connectedAdapter();
+    (mock.jatos as { setGroupFixed?: unknown }).setGroupFixed = undefined;
+    await expect(connected.sealGroup()).rejects.toThrow(/does not expose setGroupFixed/);
+  });
+
+  test("explicit disconnect emits terminal lifecycle and ignores stale reopen callbacks", async () => {
+    const adapter = await connectedAdapter();
+    const events: string[] = [];
+    adapter.subscribePresence((event) => events.push(event.type));
+
+    await adapter.disconnect();
+    mock.fireOpen();
+
+    expect(events).toEqual(["snapshot", "local-disconnect", "left-group"]);
+    expect(adapter.getPresence()).toMatchObject({
+      localChannelOpen: false,
+      openChannelMemberIds: [],
+    });
+  });
+
+  test("failed leave is observable although disconnect still fulfills its legacy contract", async () => {
+    const adapter = await connectedAdapter();
+    const events: Array<{ type: string; error?: unknown }> = [];
+    adapter.subscribePresence((event) => events.push({ type: event.type, error: event.error }));
+    const underlying = new Error("leave failed");
+    mock.jatos.leaveGroup.mockImplementationOnce(
+      (_ok?: () => void, fail?: (error: unknown) => void) => fail?.(underlying),
+    );
+
+    await expect(adapter.disconnect()).resolves.toBeUndefined();
+    expect(events.at(-1)).toEqual({ type: "leave-failed", error: underlying });
   });
 });
 

@@ -24,6 +24,58 @@ await jsPsych.run(timeline);
 
 Once connected, multiplayer plugins and the raw `jsPsych.multiplayer` (`push`, `wait`, `get`, `getAll`, `subscribe`, `update`) work against the JATOS group session.
 
+## Presence and fixed groups
+
+JATOS distinguishes three concepts that must not be conflated:
+
+- `groupSession` is retained shared data. `getAll()` continues to return a participant's records after their channel closes.
+- `groupMembers` is the set currently assigned to the group.
+- `groupChannels` is the ephemeral set whose WebSocket channels are currently open.
+
+The standard `MultiplayerAdapter` contract covers the first concept. `JatosAdapter` additionally
+exposes JATOS-specific lifecycle capabilities without changing that contract:
+
+```js
+const adapter = new JatosAdapter();
+await jsPsych.multiplayer.connect(adapter);
+
+console.log(adapter.groupId); // stable groupResultId shared by the dyad
+console.log(adapter.getPresence());
+
+const unsubscribe = adapter.subscribePresence((event) => {
+  // Called immediately with `snapshot`, then for member/channel/local lifecycle events.
+  console.log(event.type, event.snapshot.assignedMemberIds, event.snapshot.openChannelMemberIds);
+});
+
+// Once the required live participants are present, prevent later replacement.
+await adapter.sealGroup();
+unsubscribe();
+```
+
+`getPresence()` and every event snapshot are frozen copies; they never expose JATOS's mutable
+`groupMembers` or `groupChannels` arrays. `subscribePresence()` replays immediately and returns an
+unsubscribe function. A peer channel close removes that peer only from `openChannelMemberIds`; it
+does not modify group-session data or by itself remove group membership.
+
+`sealGroup()` wraps `jatos.setGroupFixed()`. It requires an open local channel, deduplicates
+concurrent/repeated successful calls, and rejects with the JATOS failure as `cause`. A fixed group
+may lose members but cannot admit replacements. Configure the JATOS batch's `maxActiveMembers` for
+the simultaneous group size (two for a dyad); choose `maxTotalMembers` deliberately depending on
+whether pre-game replacement is allowed, then call `sealGroup()` at the transition from lobby to
+game. Allocation and reassignment remain JATOS responsibilities.
+
+### Lifecycle semantics
+
+- Initial `onOpen` and an automatic reopen emit `local-open`; local close/error emits
+  `local-close`/`local-error`. Presence subscribers survive automatic reconnects.
+- Peer join/open/close/leave callbacks emit distinct events after taking a new snapshot.
+- `disconnect()` immediately emits `local-disconnect`, invalidates stale reconnect callbacks, and
+  then emits `left-group` or `leave-failed`. It continues to fulfill the existing adapter contract
+  by resolving after either leave outcome; consumers that need to distinguish them subscribe to
+  lifecycle events. All presence subscribers are cleared after that terminal event.
+- A timed-out/failed `connect()` can be retried, and callbacks from the abandoned attempt are
+  ignored so they cannot revive a torn-down adapter.
+
 ## How it works
 
 - **Participant namespace.** Each participant's pushed data is stored under `groupSession[studyResultId]` (the JATOS study result id, stringified as `participantId`), so writes from different participants never collide. The study result id is used rather than the worker id because it is unique per study run — the same `workerId` can recur across runs of the same worker. It is also exactly what JATOS calls the group member id: jatos.js assigns `jatos.groupMemberId = jatos.studyResultId` once group messages arrive — but `groupMemberId` itself stays `null` until after `joinGroup()`, so the adapter reads `studyResultId`, which carries the same value and is available at construction time. If `jatos.studyResultId` is not populated, the adapter falls back to `jatos.workerId`.
@@ -33,4 +85,5 @@ Once connected, multiplayer plugins and the raw `jsPsych.multiplayer` (`push`, `
 
 ## Notes
 
-This package provides the network backend only. Synchronization logic (barriers, lobbies) and role assignment live in the multiplayer plugins; this adapter just moves data.
+This package provides transport, JATOS lifecycle/presence, and the JATOS group-fixing primitive.
+Lobby UI, timeouts, participant routing, payments, and role assignment do not belong in the adapter.

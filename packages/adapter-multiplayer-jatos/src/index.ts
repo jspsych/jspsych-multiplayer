@@ -14,11 +14,19 @@ declare const jatos: {
   studyResultId?: string | number | null;
   /** Worker ID assigned by JATOS — fallback namespace key when studyResultId is absent. */
   workerId: string | number;
+  /** ID shared by every member assigned to this JATOS group. Populated after joining. */
+  groupResultId?: string | number | null;
+  /** All members assigned to the group, whether or not their channel is currently open. */
+  groupMembers?: ReadonlyArray<string | number> | null;
+  /** Members whose group channels are currently open. */
+  groupChannels?: ReadonlyArray<string | number> | null;
   /** Join a group study and open the WebSocket channel. */
   joinGroup(callbacks: {
     onOpen?: () => void;
     onMemberOpen?: (memberId: string) => void;
     onMemberClose?: (memberId: string) => void;
+    onMemberJoin?: (memberId: string) => void;
+    onMemberLeave?: (memberId: string) => void;
     onMessage?: (msg: unknown) => void;
     onGroupSession?: () => void;
     onError?: (errMsg: string) => void;
@@ -35,7 +43,39 @@ declare const jatos: {
    * not expose this, so the adapter guards for its absence before calling.
    */
   leaveGroup?(onSuccess?: () => void, onFail?: (err: unknown) => void): void;
+  /** Prevent JATOS from assigning any additional members to the current group. */
+  setGroupFixed?(onSuccess?: () => void, onFail?: (err: unknown) => void): void;
 };
+
+export type JatosPresenceEventType =
+  | "snapshot"
+  | "local-open"
+  | "local-close"
+  | "local-error"
+  | "member-join"
+  | "member-open"
+  | "member-close"
+  | "member-leave"
+  | "group-fixed"
+  | "local-disconnect"
+  | "left-group"
+  | "leave-failed";
+
+/** A point-in-time view of JATOS membership and live group channels. */
+export interface JatosPresenceSnapshot {
+  readonly groupId: string | null;
+  readonly assignedMemberIds: readonly string[];
+  readonly openChannelMemberIds: readonly string[];
+  readonly localChannelOpen: boolean;
+}
+
+/** A lifecycle notification paired with a fresh immutable presence snapshot. */
+export interface JatosPresenceEvent {
+  readonly type: JatosPresenceEventType;
+  readonly memberId?: string;
+  readonly error?: unknown;
+  readonly snapshot: JatosPresenceSnapshot;
+}
 
 /**
  * Multiplayer adapter backed by JATOS group studies.
@@ -76,6 +116,13 @@ export default class JatosAdapter implements MultiplayerAdapter {
    */
   private connectPromise: Promise<void> | null = null;
 
+  /** Invalidates callbacks belonging to an abandoned connection attempt or teardown. */
+  private connectionGeneration = 0;
+
+  private presenceSubscribers = new Set<(event: JatosPresenceEvent) => void>();
+
+  private sealPromise: Promise<void> | null = null;
+
   /** Maximum time to wait for the group channel to open before giving up, in ms. */
   private readonly connectTimeoutMs: number;
 
@@ -98,11 +145,78 @@ export default class JatosAdapter implements MultiplayerAdapter {
     this.connectTimeoutMs = options.connectTimeoutMs ?? 20_000;
   }
 
+  /** The stable JATOS group-result ID, available once the group channel opens. */
+  get groupId(): string | null {
+    return jatos.groupResultId == null ? null : String(jatos.groupResultId);
+  }
+
+  /**
+   * Return an immutable snapshot. Membership is intentionally independent from open channels:
+   * closing a tab must not erase retained group-session data or pretend the member never joined.
+   */
+  getPresence(): JatosPresenceSnapshot {
+    const assignedMemberIds = Object.freeze(
+      Array.from(jatos.groupMembers ?? [], (id) => String(id)),
+    );
+    const openChannelMemberIds = Object.freeze(
+      Array.from(jatos.groupChannels ?? [], (id) => String(id)).filter(
+        (id) => this.connected || id !== this.participantId,
+      ),
+    );
+    return Object.freeze({
+      groupId: this.groupId,
+      assignedMemberIds,
+      openChannelMemberIds,
+      localChannelOpen: this.connected,
+    });
+  }
+
+  /** Subscribe to presence/lifecycle changes, with an immediate replay of current state. */
+  subscribePresence(callback: (event: JatosPresenceEvent) => void): Unsubscribe {
+    this.presenceSubscribers.add(callback);
+    this.notifyPresenceSubscriber(callback, { type: "snapshot", snapshot: this.getPresence() });
+    return () => this.presenceSubscribers.delete(callback);
+  }
+
+  /** Permanently stop JATOS from assigning replacement members to the current group. */
+  sealGroup(): Promise<void> {
+    if (!this.connected) {
+      return Promise.reject(new Error("JatosAdapter: sealGroup() requires an open group channel."));
+    }
+    if (typeof jatos.setGroupFixed !== "function") {
+      return Promise.reject(
+        new Error("JatosAdapter: this jatos.js version does not expose setGroupFixed()."),
+      );
+    }
+    if (this.sealPromise !== null) return this.sealPromise;
+
+    const generation = this.connectionGeneration;
+    this.sealPromise = new Promise<void>((resolve, reject) => {
+      jatos.setGroupFixed!(
+        () => {
+          if (generation === this.connectionGeneration) this.emitPresence("group-fixed");
+          resolve();
+        },
+        (error) => {
+          const wrapped = new Error("JatosAdapter: failed to fix the JATOS group.");
+          (wrapped as Error & { cause?: unknown }).cause = error;
+          reject(wrapped);
+        },
+      );
+    });
+    const promise = this.sealPromise;
+    promise.catch(() => {
+      if (this.sealPromise === promise) this.sealPromise = null;
+    });
+    return promise;
+  }
+
   connect(): Promise<void> {
     // Re-entry guard: hand back the existing promise instead of joining twice.
     if (this.connectPromise !== null) {
       return this.connectPromise;
     }
+    const generation = ++this.connectionGeneration;
     this.connectPromise = new Promise((resolve, reject) => {
       // onOpen reports the channel opening (not the group filling), so it should arrive
       // promptly. If JATOS delivers neither onOpen nor onError — a dropped handshake or
@@ -110,8 +224,10 @@ export default class JatosAdapter implements MultiplayerAdapter {
       // experiment would stall with no diagnostic. Bound the wait and fail loudly instead.
       let settled = false;
       const timer = setTimeout(() => {
-        if (settled) return;
+        if (settled || generation !== this.connectionGeneration) return;
         settled = true;
+        this.connectionGeneration++;
+        this.emitPresence("local-error", undefined, "connection timed out");
         reject(
           new Error(
             `JatosAdapter: timed out after ${this.connectTimeoutMs} ms waiting for the ` +
@@ -123,18 +239,21 @@ export default class JatosAdapter implements MultiplayerAdapter {
 
       jatos.joinGroup({
         onOpen: () => {
+          if (generation !== this.connectionGeneration) return;
           // Restore the flags before the settled guard: jatos.js can close the channel
           // (onClose) and later reopen it, and that reopen fires onOpen long after the
           // connect promise settled. Skipping the flags here would leave push() dead
           // forever while subscriptions kept firing.
           this.connected = true;
           this.channelClosed = false;
+          this.emitPresence("local-open");
           if (settled) return;
           settled = true;
           clearTimeout(timer);
           resolve();
         },
         onGroupSession: () => {
+          if (generation !== this.connectionGeneration) return;
           const data = this.getAll();
           for (const cb of this.subscribers) {
             // Isolate subscribers: one throwing listener must not stop the fan-out
@@ -147,24 +266,43 @@ export default class JatosAdapter implements MultiplayerAdapter {
           }
         },
         onError: (errMsg) => {
+          if (generation !== this.connectionGeneration) return;
           // An error delivered before onOpen rejects the connect promise. One delivered
           // after (the channel was up, then failed) can't reject an already-settled promise,
           // so mark the channel down — otherwise push() would keep retrying a dead channel.
           if (settled) {
             this.connected = false;
             this.channelClosed = true;
+            this.emitPresence("local-error", undefined, errMsg);
             return;
           }
           settled = true;
           clearTimeout(timer);
+          this.channelClosed = true;
+          this.connectionGeneration++;
+          this.emitPresence("local-error", undefined, errMsg);
           reject(new Error(`JatosAdapter: failed to join group — ${errMsg ?? "unknown error"}`));
         },
         onClose: () => {
+          if (generation !== this.connectionGeneration) return;
           // The channel closed mid-session. Flip the flags so push()'s guard is accurate and
           // its retry loop bails instead of spinning against a dead channel. Subscribers are
           // left intact — a close isn't necessarily permanent, and disconnect() owns teardown.
           this.connected = false;
           this.channelClosed = true;
+          this.emitPresence("local-close");
+        },
+        onMemberJoin: (memberId) => {
+          if (generation === this.connectionGeneration) this.emitPresence("member-join", memberId);
+        },
+        onMemberOpen: (memberId) => {
+          if (generation === this.connectionGeneration) this.emitPresence("member-open", memberId);
+        },
+        onMemberClose: (memberId) => {
+          if (generation === this.connectionGeneration) this.emitPresence("member-close", memberId);
+        },
+        onMemberLeave: (memberId) => {
+          if (generation === this.connectionGeneration) this.emitPresence("member-leave", memberId);
         },
       });
     });
@@ -246,20 +384,52 @@ export default class JatosAdapter implements MultiplayerAdapter {
   disconnect(): Promise<void> {
     this.subscribers.clear();
     this.connected = false;
+    this.channelClosed = true;
+    this.connectionGeneration++;
+    this.sealPromise = null;
+    this.emitPresence("local-disconnect");
     // Full teardown resets the re-entry guard so a fresh connect() can rejoin the group.
     this.connectPromise = null;
     // Close the channel cleanly by leaving the group. Resolve on either outcome —
     // the local teardown above has already happened — and guard for older jatos.js
     // builds that don't expose leaveGroup.
     return new Promise((resolve) => {
+      const finish = (type: "left-group" | "leave-failed", error?: unknown) => {
+        this.emitPresence(type, undefined, error);
+        this.presenceSubscribers.clear();
+        resolve();
+      };
       if (typeof jatos.leaveGroup === "function") {
         jatos.leaveGroup(
-          () => resolve(),
-          () => resolve(),
+          () => finish("left-group"),
+          (error) => finish("leave-failed", error),
         );
       } else {
-        resolve();
+        finish("left-group");
       }
     });
+  }
+
+  private emitPresence(type: JatosPresenceEventType, memberId?: string, error?: unknown): void {
+    const event = Object.freeze({
+      type,
+      ...(memberId === undefined ? {} : { memberId: String(memberId) }),
+      ...(error === undefined ? {} : { error }),
+      snapshot: this.getPresence(),
+    }) as JatosPresenceEvent;
+    for (const callback of this.presenceSubscribers) {
+      this.notifyPresenceSubscriber(callback, event);
+    }
+  }
+
+  private notifyPresenceSubscriber(
+    callback: (event: JatosPresenceEvent) => void,
+    event: JatosPresenceEvent,
+  ): void {
+    try {
+      callback(event);
+    } catch (error) {
+      console.error("JatosAdapter: a presence subscriber threw", error);
+    }
   }
 }
