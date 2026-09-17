@@ -1,7 +1,7 @@
 # jspsych-multiplayer: community plugins & adapters for the jsPsych multiplayer API
 
 This is an open repository of **plugins** and **adapters** developed by members of the jsPsych
-community that target the [jsPsych multiplayer API](https://github.com/jspsych/jsPsych/pull/3692).
+community that target the [jsPsych multiplayer API](https://github.com/jspsych/jsPsych/pull/3694).
 If you've written a multiplayer plugin or a backend adapter that you think others might be
 interested in using, this is the place to share it!
 

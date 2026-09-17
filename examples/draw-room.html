@@ -7,7 +7,7 @@
          This URL is pinned to the same #3694 preview SHA as chat-room.html. A SHA-pinned URL keeps
          loading indefinitely (it never 404s); what goes stale is the #3694 API it was pinned against,
          so if the demo misbehaves against a newer #3694, re-pin — see examples/README.md "Running it". -->
-    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@151ab520542a8e48bcc4d5b21c74cdffae8b48c6/packages/jspsych/dist/index.browser.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@9eec555f5e55f09b64b40cd8278d0518396f195f/packages/jspsych/dist/index.browser.min.js"></script>
     <script src="https://unpkg.com/@jspsych/plugin-html-button-response"></script>
     <!-- The multiplayer packages resolve from the sibling packages' built dist/ in this repo (run
          `npm install && npm run build` from the repo root first — dist/ is gitignored). Once they are
@@ -21,7 +21,7 @@
     <script src="../packages/plugin-multiplayer-countdown/dist/index.browser.min.js?v=1"></script>
     <link
       rel="stylesheet"
-      href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@151ab520542a8e48bcc4d5b21c74cdffae8b48c6/packages/jspsych/css/jspsych.css"
+      href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@9eec555f5e55f09b64b40cd8278d0518396f195f/packages/jspsych/css/jspsych.css"
     />
     <style>
       /* The draw plugin ships no CSS of its own (matching the other multiplayer plugins), so this
@@ -261,7 +261,9 @@
         const markDone = () => {
           const mine = jsPsych.multiplayer.get(localAdapter.participantId) || {};
           if (mine.draw_done === true) return;
-          jsPsych.multiplayer.update({ draw_done: true });
+          jsPsych.multiplayer
+            .update({ draw_done: true })
+            .catch((err) => console.error("draw-room: marking done failed", err));
           button.disabled = true;
           button.textContent = "Waiting for others…";
         };
@@ -272,15 +274,19 @@
         button.addEventListener("click", markDone);
         wrap.after(button);
 
-        // Register this client's start (read own slot → spread → push, keep-if-present) exactly as
-        // the countdown plugin does, so a refresh resumes the same deadline and we never clobber the
-        // `joinedAt`/`draw_done` this participant already pushed. push is fire-and-forget; the clock
-        // falls back to our own start until (possibly lower) peer timestamps arrive.
+        // Register this client's start (keep-if-present) exactly as the countdown plugin does, so a
+        // refresh resumes the same deadline. `update` merges just this key, leaving the
+        // `joinedAt`/`draw_done` this participant already wrote intact. The write is fire-and-forget;
+        // the clock falls back to our own start until (possibly lower) peer timestamps arrive.
         const mineAtLoad = jsPsych.multiplayer.get(localAdapter.participantId) || {};
         const already =
           typeof mineAtLoad[DRAW_START_KEY] === "number" && Number.isFinite(mineAtLoad[DRAW_START_KEY]);
         const ownStart = already ? mineAtLoad[DRAW_START_KEY] : Date.now();
-        if (!already) jsPsych.multiplayer.update({ [DRAW_START_KEY]: ownStart });
+        if (!already) {
+          jsPsych.multiplayer
+            .update({ [DRAW_START_KEY]: ownStart })
+            .catch((err) => console.error("draw-room: publishing the start time failed", err));
+        }
 
         // Paint the shared clock and, once the synced remaining time hits zero, auto-click "I'm done"
         // on this client's behalf — every participant's clock converges to zero within skew + latency

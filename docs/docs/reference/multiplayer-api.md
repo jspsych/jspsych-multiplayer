@@ -23,18 +23,28 @@ because every multiplayer trial reaches the session through the connected adapte
 
 ```js
 const jsPsych = initJsPsych();
-await jsPsych.multiplayer.connect(new jsPsychAdapterMultiplayerLocal());
-jsPsych.run(timeline);
+
+async function runExperiment() {
+  await jsPsych.multiplayer.connect(new jsPsychAdapterMultiplayerLocal());
+  await jsPsych.run(timeline);
+}
+
+runExperiment();
 ```
 
-### `participantId: string`
+Top-level `await` only works in `<script type="module">`, so wrap the two calls in an
+`async` function for a classic `<script>` tag.
 
-This client's stable ID within the session. Keys into the group session object.
+### `participantId: string | null`
+
+This client's stable ID within the session. Keys into the group session object. Read-only:
+`null` until `connect()` resolves, and again after `disconnect()`.
 
 ### `push(data): Promise<void>`
 
 **Replaces** the calling client's slot with `data`. It does not merge: any key the call
 omits is gone, both for that client and for every other client reading the session.
+Rejects — rather than throwing synchronously — when the API is not connected.
 
 ```js
 await jsPsych.multiplayer.push({ offer: 4, joinedAt: myJoinedAt });
@@ -50,16 +60,23 @@ Shallow-**merges** `data` into the calling client's slot and pushes the result �
 `get` → merge → `push` sequence in one call, for plugins and experiments that only ever
 change a few keys of their own slot.
 
-Not atomic against itself: overlapping calls from the same client race, so `await` each one
-before issuing the next.
+The merge starts from this client's last successful write, so it does not depend on how
+quickly the backend echoes writes back. One write is in flight at a time, and calls made
+while one is in flight are merged into a single follow-up write that they all share, later
+calls winning per key. A trial that updates faster than the backend confirms writes — a
+drawing or chat plugin, say — therefore coalesces instead of building a queue. A direct
+`push()` issued while updates are pending is not part of that ordering.
 
 ### `get(participantId): Record<string, unknown> | undefined`
 
-One participant's slot, or `undefined` if that participant is not in the session.
+One participant's slot, or `undefined` if that participant is not in the session. The
+returned object is a JSON copy, so changing it affects nothing else.
 
 ### `getAll(): GroupSessionData`
 
-Synchronous snapshot of the whole group session — a map from participant ID to slot.
+Synchronous snapshot of the whole group session — a map from participant ID to slot. The
+snapshot is a JSON copy, so session data must be JSON-serializable: `Date` objects come back
+as strings, `undefined` values are dropped, and `NaN`/`Infinity` become `null`.
 
 ### `subscribe(callback): Unsubscribe`
 
@@ -67,12 +84,15 @@ Registers `callback` for live updates; returns a function that cancels it. The c
 state is **replayed immediately on registration**, so a component mounting mid-session
 renders at once instead of waiting for the next change.
 
-Every subscription is tracked internally, but **nothing in jsPsych's lifecycle cancels them
-automatically**. They are released only when the experiment calls `disconnect()` (which
-cancels them for you) or `cancelAllSubscriptions()` directly. A subscription that is never
-unsubscribed and never disconnected leaks its listener — so a continuous plugin should
-release its handle when its trial ends, and an experiment should `disconnect()` when it
-finishes.
+Each callback gets its own JSON copy of the snapshot, so it can keep or change what it
+receives without affecting the session or the other subscribers.
+
+Every subscription is tracked internally. jsPsych cancels them all when the experiment ends
+(after `on_finish`) and when `abortExperiment()` is called, and `disconnect()` cancels them
+too. That covers the end of the experiment, but not the end of a single trial: a continuous
+plugin must still release its own handle when its trial finishes, or it keeps rendering into
+a display element that has moved on. An experiment should still `disconnect()` when it is
+done, to release the slot.
 
 ```js
 const unsubscribe = jsPsych.multiplayer.subscribe((group) => {
@@ -87,8 +107,15 @@ Resolves with the group session once `condition(group)` returns true.
 - Event-driven, built on `subscribe` — no polling.
 - Fast-path: an already-true condition resolves immediately.
 - With `timeout` (ms), rejects with a typed `MultiplayerTimeoutError`, so an experiment can
-  detect an abandoned partner instead of hanging forever.
+  detect an abandoned partner instead of hanging forever. `null`, `undefined`, negative and
+  non-finite values all mean no timeout; `0` times out immediately.
+- Rejects with a `MultiplayerCancelledError` if the wait is cancelled before its condition is
+  met — by `cancelAllSubscriptions()`, `disconnect()`, `abortExperiment()`, or the end of
+  `jsPsych.run()`. Match on `error.name`, which survives two loaded copies of jspsych where
+  `instanceof` does not.
 - A `condition` that throws rejects the promise rather than being silently swallowed.
+- Resolves with a JSON copy of the snapshot, so later updates never change it.
+- Rejects — rather than throwing synchronously — when the API is not connected.
 
 `push()` followed by `wait()` is the **synchronization barrier** most turn-based paradigms
 reduce to. `plugin-multiplayer-sync` packages that pair as one declarative trial, and is
@@ -96,8 +123,10 @@ usually the better choice for experiment code than calling these directly.
 
 ### `cancelAllSubscriptions(): void`
 
-Releases every subscription registered through `subscribe()`. Nothing calls this
-automatically; call it at experiment end if the experiment does not `disconnect()`.
+Releases every subscription registered through `subscribe()`, and rejects any pending
+`wait()` with a `MultiplayerCancelledError`. jsPsych calls it for you when the experiment
+ends and when `abortExperiment()` is called, so call it yourself only to stop listening
+partway through an experiment.
 
 ### `disconnect(): Promise<void>`
 

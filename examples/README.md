@@ -44,17 +44,16 @@ which hasn't merged/released yet. Two ways to get that API today:
 #### Running it today (pre-#3694): jsDelivr preview build
 
 jsPsych's PR bot publishes a preview build of every commit on #3694, hosted on jsDelivr — no release,
-no vendoring #3694's types locally. `chat-room.html` is wired to use it already:
+no vendoring #3694's types locally. Every example here is wired to use it already:
 
 1. Find the current preview link: open [#3694](https://github.com/jspsych/jsPsych/pull/3694), find the
    pinned bot comment titled "📦 Preview build ready," and copy the `jspsych` URL under "All package
    URLs" (plus the matching `jspsych.css` URL). **A SHA-pinned URL like this one keeps loading
    indefinitely — it never 404s.** What it does _not_ track is the still-evolving #3694 API: it stays
    frozen at whatever that commit shipped, so once #3694 moves on, a pin old enough to predate an API
-   change can still load fine yet behave wrongly. `chat-room.html`'s `<script>`/`<link>` tags carry the
-   SHA that was current when this was last verified; if the demo misbehaves against a newer #3694,
-   re-pin to the current preview. Don't commit-and-forget a pinned URL into every example — this one
-   recipe, re-run as needed, is the durable fix.
+   change can still load fine yet behave wrongly. Every example's `<script>`/`<link>` tags carry the
+   same SHA, current as of the last contract change; re-pin them together (a find-and-replace of the
+   old SHA across `examples/`) whenever #3694's API moves, rather than letting them drift apart.
 
 2. Build the multiplayer packages from the repo root (their `dist/` is gitignored, not checked in):
 
@@ -250,8 +249,8 @@ from two browser tabs**, no server.
 The composition detail worth copying: the draw plugin's own `duration` parameter is a per-client
 `setTimeout` with no cross-tab agreement on _when_ it started, so two tabs opened moments apart would
 see different end times. This demo skips that parameter entirely and instead renders the countdown
-plugin's consensus clock into the draw trial's `prompt` on `on_load`, using the same "read own slot →
-spread → push, keep-if-present" pattern the countdown plugin itself uses internally. When the synced
+plugin's consensus clock into the draw trial's `prompt` on `on_load`, using the same
+"keep-if-present `update()`" pattern the countdown plugin itself uses internally. When the synced
 clock reaches zero, the client auto-clicks its own "I'm done" button rather than ending the trial
 directly — the room closes for everyone through the same `end_when` "wait for everyone's `draw_done`
 flag" mechanism a manual click uses, so a clock-driven end and a manual end are indistinguishable to
