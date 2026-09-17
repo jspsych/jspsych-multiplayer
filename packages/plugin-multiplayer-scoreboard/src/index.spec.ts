@@ -1,54 +1,96 @@
 import { startTimeline } from "@jspsych/test-utils";
 import { initJsPsych } from "jspsych";
 
-import { GroupSessionData, MultiplayerApiLike } from "./multiplayer-api";
+import {
+  GroupSessionData,
+  MULTIPLAYER_CANCELLED_ERROR_NAME,
+  MultiplayerApiLike,
+} from "./multiplayer-api";
 import MultiplayerScoreboardPlugin from ".";
+
+/** Every read the real API hands out is a JSON deep copy, so the mock hands out copies too. */
+const jsonCopy = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 
 // ---------------------------------------------------------------------------------------------------
 // Mock multiplayer API implementing the same local interface the plugin codes against, mirroring the
-// reference adapter's overwrite-per-participant semantics (a later push for `me` replaces my whole
-// slot). `wait` honours the fast-path and re-checks on every later push; if still unmet when
-// `timeout` ms elapse it rejects — driven by Jest fake timers in the timeout test.
+// reference adapter's semantics: `push` overwrites this participant's whole slot, `update` shallow-
+// merges onto this client's last successful write (falling back to its current slot before the first
+// write), and every read is a JSON copy rather than the live session object. `wait` honours the
+// fast-path and re-checks on every later write; if still unmet when a finite `timeout` elapses it
+// rejects — driven by Jest fake timers in the timeout test — and `cancelAllWaits()` rejects it the way
+// core does on abortExperiment/disconnect.
 // ---------------------------------------------------------------------------------------------------
 class MockApi implements MultiplayerApiLike {
   session: GroupSessionData = {};
   private waiters: Array<() => void> = [];
+  private cancellers: Array<(err: Error) => void> = [];
+  /** This client's last successful write: the merge base `update()` contracts to use. */
+  private lastWrite: Record<string, unknown> | null = null;
 
   constructor(public participantId: string | null) {}
 
   /** Seed another participant's slot directly (simulating their push), notifying any waiter. */
   seed(id: string, data: Record<string, unknown>) {
-    this.session[id] = data;
+    this.session[id] = jsonCopy(data);
     this.waiters.forEach((notify) => notify());
   }
 
   async push(data: Record<string, unknown>) {
-    this.session[this.participantId as string] = data; // overwrite-per-participant, like the real adapter
+    this.session[this.participantId as string] = jsonCopy(data); // overwrite-per-participant
+    this.lastWrite = jsonCopy(data);
     this.waiters.forEach((notify) => notify());
   }
 
+  async update(data: Record<string, unknown>) {
+    const base = this.lastWrite ?? this.get(this.participantId as string) ?? {};
+    await this.push({ ...base, ...data });
+  }
+
+  /** Reject every pending wait the way core does on abortExperiment / disconnect / run() ending. */
+  cancelAllWaits() {
+    const err = new Error("The multiplayer wait was cancelled.");
+    err.name = MULTIPLAYER_CANCELLED_ERROR_NAME;
+    this.cancellers.splice(0).forEach((cancel) => cancel(err));
+  }
+
   getAll() {
-    return this.session;
+    return this.snapshot();
   }
 
   get(id: string) {
-    return this.session[id];
+    const slot = this.session[id];
+    return slot === undefined ? undefined : jsonCopy(slot);
   }
 
-  wait(condition: (d: GroupSessionData) => boolean, timeout?: number) {
+  /**
+   * The JSON copy every read hands out. `wait` goes through this rather than `getAll()` so a test
+   * that makes `getAll()` throw (an adapter torn down mid-trial) only affects the plugin's own reads.
+   */
+  private snapshot(): GroupSessionData {
+    return jsonCopy(this.session);
+  }
+
+  wait(condition: (d: GroupSessionData) => boolean, timeout?: number | null) {
     return new Promise<GroupSessionData>((resolve, reject) => {
-      if (condition(this.session)) return resolve(this.session); // fast path
+      if (condition(this.snapshot())) return resolve(this.snapshot()); // fast path
       let settled = false;
       let timer: ReturnType<typeof setTimeout> | undefined;
       const check = () => {
-        if (!settled && condition(this.session)) {
+        if (!settled && condition(this.snapshot())) {
           settled = true;
           if (timer) clearTimeout(timer); // like a real adapter, tear down our own timeout on resolve
-          resolve(this.session);
+          resolve(this.snapshot());
         }
       };
       this.waiters.push(check);
-      if (timeout !== undefined) {
+      this.cancellers.push((err) => {
+        if (settled) return;
+        settled = true;
+        if (timer) clearTimeout(timer);
+        reject(err);
+      });
+      // null / undefined / negative / non-finite all mean "no timeout" (jsPsych#3694); 0 times out at once.
+      if (timeout != null && Number.isFinite(timeout) && timeout >= 0) {
         timer = setTimeout(() => {
           if (!settled) {
             settled = true;
@@ -77,6 +119,14 @@ function makeJsPsych(api: MockApi) {
 const display = () => document.createElement("div");
 /** Resolve any pending microtasks so the plugin's promise chain settles before assertions. */
 const flush = () => new Promise((r) => setTimeout(r, 0));
+/**
+ * Drain the microtask queue without touching timers — the fake-timer tests need the write to settle
+ * (`update()` awaits an inner push, so it takes several ticks) before advancing to the timeout, and
+ * `flush()` would hang there because its setTimeout is itself faked.
+ */
+const flushMicrotasks = async () => {
+  for (let i = 0; i < 10; i++) await Promise.resolve();
+};
 /** Click the continue button rendered on the board. */
 const clickContinue = (el: HTMLElement) =>
   (el.querySelector(".jspsych-multiplayer-scoreboard-button") as HTMLButtonElement | null)?.click();
@@ -162,7 +212,7 @@ describe("plugin-multiplayer-scoreboard — trial wrapper", () => {
     expect(data.leaderboard.find((r: any) => r.participantId === "p1").isSelf).toBe(true);
   });
 
-  it("preserves other keys already in this client's slot (push REPLACES the slot)", async () => {
+  it("preserves other keys already in this client's slot (update MERGES into it)", async () => {
     const api = new MockApi("p1");
     api.seed("p1", { role: "proposer" }); // an earlier trial pushed a role
     api.seed("p2", { score: { score: 5 } });
@@ -176,7 +226,7 @@ describe("plugin-multiplayer-scoreboard — trial wrapper", () => {
     await flush();
 
     const mine = api.get("p1") as any;
-    expect(mine.role).toBe("proposer"); // survived the scoreboard's own push
+    expect(mine.role).toBe("proposer"); // survived the scoreboard's own write
     expect(mine.score).toEqual({ score: 7 }); // score added alongside
   });
 
@@ -240,7 +290,7 @@ describe("plugin-multiplayer-scoreboard — trial wrapper", () => {
       on_timeout: onTimeout,
     } as never);
 
-    await Promise.resolve(); // let the push settle so gather reaches the api.wait call and our timer registers
+    await flushMicrotasks(); // let the write settle so gather reaches the api.wait call and our timer registers
 
     // The adapter backstop is strictly longer than our own timer, so firing OUR timer at 30000 (below)
     // is an unambiguous timeout — the adapter's 60000 deadline never fires to compete.
@@ -277,7 +327,7 @@ describe("plugin-multiplayer-scoreboard — trial wrapper", () => {
       },
     } as never);
 
-    await Promise.resolve(); // let the push settle and the timeout timer register
+    await flushMicrotasks(); // let the write settle and the timeout timer register
     jest.advanceTimersByTime(30000);
     jest.useRealTimers();
     await flush();
@@ -416,11 +466,11 @@ describe("plugin-multiplayer-scoreboard — trial wrapper", () => {
     errSpy.mockRestore();
   });
 
-  it("push failure: records `error`, is NOT a timeout, does not fire on_timeout, still shows the board", async () => {
+  it("write failure: records `error`, is NOT a timeout, does not fire on_timeout, still shows the board", async () => {
     const errSpy = jest.spyOn(console, "error").mockImplementation(() => {});
     const api = new MockApi("p1");
     api.seed("p2", { score: { score: 7 } });
-    api.push = jest.fn().mockRejectedValue(new Error("network down")); // the score push fails
+    api.update = jest.fn().mockRejectedValue(new Error("network down")); // the score write fails
     const onTimeout = jest.fn();
     const { jsPsych, finished } = makeJsPsych(api);
     const el = display();
@@ -433,7 +483,7 @@ describe("plugin-multiplayer-scoreboard — trial wrapper", () => {
     } as never);
     await flush();
 
-    expect(onTimeout).not.toHaveBeenCalled(); // a push failure is not a timeout
+    expect(onTimeout).not.toHaveBeenCalled(); // a write failure is not a timeout
     expect(el.querySelector(".jspsych-multiplayer-scoreboard-table")).not.toBeNull(); // board still shown
     clickContinue(el);
     expect(finished).toHaveLength(1);
@@ -468,13 +518,15 @@ describe("plugin-multiplayer-scoreboard — trial wrapper", () => {
     errSpy.mockRestore();
   });
 
-  it("wait that throws synchronously: caught as `error`, no unhandled rejection or soft-lock", async () => {
+  it("wait while not connected: the rejection is caught as `error`, no unhandled rejection or soft-lock", async () => {
+    // Under jsPsych#3694 `wait()` REJECTS when the API isn't connected rather than throwing
+    // synchronously, so the rejection is the only path this has to survive.
     const errSpy = jest.spyOn(console, "error").mockImplementation(() => {});
     const api = new MockApi("p1");
     api.seed("p2", { score: { score: 7 } });
-    api.wait = jest.fn(() => {
-      throw new Error("wait sync boom"); // adapter throws synchronously (e.g. called while disconnected)
-    });
+    api.wait = jest
+      .fn()
+      .mockRejectedValue(new Error("connect() must be called before using multiplayer methods"));
     const onTimeout = jest.fn();
     const { jsPsych, finished } = makeJsPsych(api);
     const el = display();
@@ -492,7 +544,72 @@ describe("plugin-multiplayer-scoreboard — trial wrapper", () => {
     clickContinue(el);
     expect(finished).toHaveLength(1);
     expect(finished[0].timed_out).toBe(false);
-    expect(finished[0].error).toMatch(/wait sync boom/);
+    expect(finished[0].error).toMatch(/connect\(\) must be called/);
+    errSpy.mockRestore();
+  });
+
+  it("a cancelled wait stops quietly: no board, no error, no finishTrial", async () => {
+    // A wait cancelled by abortExperiment / disconnect / the end of jsPsych.run means the trial is
+    // being torn down and jsPsych has already cleared the display. Revealing here would paint a board
+    // over a finished experiment, with a Continue button whose finishTrial() lands after the run ended.
+    const errSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+    const onTimeout = jest.fn();
+    const api = new MockApi("p1");
+    const { jsPsych, finished } = makeJsPsych(api);
+    const el = display();
+
+    new MultiplayerScoreboardPlugin(jsPsych as never).trial(el, {
+      ...base,
+      score: 9,
+      group_size: 3, // never satisfied, so the wait is still pending when it is cancelled
+      on_timeout: onTimeout,
+    } as never);
+    await flush();
+    expect(el.querySelector(".jspsych-multiplayer-scoreboard-table")).toBeNull(); // still waiting
+
+    api.cancelAllWaits();
+    await flush();
+
+    expect(el.querySelector(".jspsych-multiplayer-scoreboard-table")).toBeNull(); // no board drawn
+    expect(el.querySelector(".jspsych-multiplayer-scoreboard-button")).toBeNull(); // no live button
+    expect(finished).toHaveLength(0); // and nothing finished the (already ended) trial
+    expect(onTimeout).not.toHaveBeenCalled(); // a cancellation is not a timeout
+    expect(errSpy).not.toHaveBeenCalled(); // nor a backend failure worth logging
+    errSpy.mockRestore();
+  });
+
+  it("failure paths survive a disconnected getAll(): the board still renders and finishes", async () => {
+    // `gather()` runs detached (`void`), so a throwing getAll() on a failure path would be an
+    // unhandled rejection leaving the participant stuck on the waiting message. Both the write-failure
+    // and wait-failure paths read through the same safe fallback instead.
+    const errSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+    const disconnected = () => {
+      throw new Error("connect() must be called before using multiplayer methods");
+    };
+
+    for (const failing of ["update", "wait"] as const) {
+      const api = new MockApi("p1");
+      api.seed("p2", { score: { score: 7 } });
+      api[failing] = jest.fn().mockRejectedValue(new Error("adapter went away")) as never;
+      api.getAll = jest.fn(disconnected) as never;
+      const { jsPsych, finished } = makeJsPsych(api);
+      const el = display();
+
+      new MultiplayerScoreboardPlugin(jsPsych as never).trial(el, {
+        ...base,
+        score: 9,
+        group_size: 2,
+      } as never);
+      await flush();
+
+      // Empty snapshot fallback: no rows to rank, but a board with a working button all the same.
+      expect(el.querySelector(".jspsych-multiplayer-scoreboard-empty")).not.toBeNull();
+      clickContinue(el);
+      expect(finished).toHaveLength(1);
+      expect(finished[0].num_players).toBe(0);
+      expect(finished[0].timed_out).toBe(false);
+      expect(finished[0].error).toMatch(/adapter went away/);
+    }
     errSpy.mockRestore();
   });
 });
@@ -509,8 +626,7 @@ describe("plugin-multiplayer-scoreboard — real jsPsych pipeline (startTimeline
     const core = jsPsych as unknown as { multiplayer: Record<string, unknown> };
     core.multiplayer = {
       participantId: api.participantId,
-      push: api.push.bind(api),
-      get: api.get.bind(api),
+      update: api.update.bind(api),
       getAll: api.getAll.bind(api),
       wait: api.wait.bind(api),
     };

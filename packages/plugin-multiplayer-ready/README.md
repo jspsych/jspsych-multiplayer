@@ -8,7 +8,7 @@ Use it as the lobby / waiting-room step at the start of a multiplayer timeline, 
 
 `plugin-multiplayer-sync` is a low-level barrier: you supply an arbitrary `wait_for` predicate and optional `push_data`. `plugin-multiplayer-ready` is a higher-level specialization that **owns the check-in UI** and the **"all members ready" condition** for you, and standardizes on a `ready: true` flag so other plugins and examples (chat rooms, ultimatum games, real-time tasks) can reliably gate on group readiness. Reach for `sync` when you need a custom condition; reach for `ready` when you want a drop-in "I'm ready" lobby.
 
-> **Status:** built against the jsPsych multiplayer API from [jsPsych#3694](https://github.com/jspsych/jsPsych/pull/3694), which is not yet released. The plugin codes against a local interface mirroring that API (`src/multiplayer-api.ts`) and reaches the real object with one cast — the single seam to re-verify once #3694 lands. Tests run against an in-memory mock, so no live group session is needed.
+> **Status:** built against the jsPsych multiplayer API from [jsPsych#3694](https://github.com/jspsych/jsPsych/pull/3694), which is not yet released. The plugin codes against a local interface mirroring that API (`src/multiplayer-api.ts`) and reaches `jsPsych.multiplayer` with one cast, since the published `jspsych` types don't carry the module yet. Older preview builds that exposed these methods on `jsPsych.pluginAPI` predate the current contract and are not supported. Tests run against an in-memory mock, so no live group session is needed.
 
 ## Prerequisites
 
@@ -29,8 +29,8 @@ await jsPsych.run(timeline);
 | `prompt`           | HTML string \| function | `null`                                | Optional secondary reminder shown below the button (jsPsych `prompt` convention). `null` shows nothing.                                                                 |
 | `button_label`     | string \| function      | `"I'm ready"`                         | Label on the ready button.                                                                                                                                              |
 | `waiting_message`  | HTML string \| function | `"<p>Waiting for other players…</p>"` | Shown after this participant clicks ready, while waiting for the rest of the group.                                                                                     |
-| `push_data`        | object \| function      | `null`                                | Extra fields merged into the pushed record alongside `ready: true` (e.g. a display name). Because pushes overwrite-per-participant, this record replaces anything this participant pushed earlier — put anything that must survive the check-in here. |
-| `timeout`          | integer                 | `null`                                | Max time to wait for the rest of the group **after** clicking ready, in ms. On elapse the trial ends with `timed_out: true` and `on_timeout` is called. `null` waits indefinitely. Does **not** bound how long the participant takes to click. |
+| `push_data`        | object \| function      | `null`                                | Extra fields merged into the pushed record alongside `ready: true` (e.g. a display name). Because `push` replaces this participant's slot rather than merging into it, this record replaces anything this participant pushed earlier — put anything that must survive the check-in here. |
+| `timeout`          | integer                 | `null`                                | Max time to wait for the rest of the group **after** clicking ready, in ms. On elapse the trial ends with `timed_out: true` and `on_timeout` is called. `null`, or any non-positive value, waits indefinitely. Does **not** bound how long the participant takes to click. |
 | `on_timeout`       | function                | `null`                                | Called if `timeout` elapses before the whole group is ready.                                                                                                           |
 | `minimum_wait`     | integer                 | `0`                                   | Minimum time, in ms, to keep the waiting message on screen after clicking ready, so it doesn't flash by when the group is already ready (e.g. the last participant, or solo `expected_players: 1`). Does not extend a naturally longer wait. |
 
@@ -43,11 +43,11 @@ await jsPsych.run(timeline);
 | `n_ready`    | integer        | Number of group members marked ready in the snapshot when the trial ended.                                                        |
 | `group`      | object         | The full group session snapshot when the group was ready (or the timeout fired). Read peers / assign roles from here in `on_finish`. |
 | `timed_out`  | boolean        | True if the trial ended because `timeout` elapsed rather than because everyone was ready.                                          |
-| `wait_error` | string \| null | The timeout error message when `timeout` elapsed; `null` when everyone was ready. A non-timeout `wait()` failure (an adapter error) is not recorded here — it fails the trial instead. |
+| `wait_error` | string \| null | The timeout error message when `timeout` elapsed; `null` when everyone was ready. A non-timeout `wait()` failure (an adapter error) is not recorded here — it fails the trial instead. If the wait is **cancelled** because the experiment ended or was aborted, the trial stops quietly and writes no record at all. |
 
-## Overwrite-per-participant semantics
+## Slot-replacing pushes
 
-`push` uses **overwrite-per-participant**: each participant has a single entry in the group session, and every push replaces it. This plugin pushes `{ ...push_data, ready: true }` as one record, so the check-in **replaces** whatever this participant pushed before. In practice a ready gate is usually the first multiplayer trial, so there is nothing to overwrite — but if you place it after a trial that pushed data you still need, re-supply that data via `push_data` so it is carried through the check-in.
+`push` **replaces this participant's slot**: each participant has a single entry in the group session, and every push overwrites it (`update` is the merging counterpart). This plugin pushes `{ ...push_data, ready: true }` as one record, so the check-in **replaces** whatever this participant pushed before — deliberately, so a ready gate defines this participant's entry rather than accreting onto it. In practice a ready gate is usually the first multiplayer trial, so there is nothing to overwrite — but if you place it after a trial that pushed data you still need, re-supply that data via `push_data` so it is carried through the check-in.
 
 The all-ready condition is robust here because, within this trial, the only push is the ready push — so a member's `ready` flag is never overwritten-away before the barrier resolves.
 

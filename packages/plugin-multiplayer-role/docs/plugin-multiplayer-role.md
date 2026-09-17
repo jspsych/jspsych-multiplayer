@@ -18,9 +18,9 @@ In addition to the [parameters available in all plugins](https://www.jspsych.org
 | `role_from`     | function           | `null`                      | `(entry, id, ctx) => string`. The role **is** a value each participant already carries.                                    |
 | `ready`         | function           | `null`                      | `(snapshot) => boolean`. Override the readiness gate; **required** when `strategy` is a custom function.                   |
 | `overflow_role` | string             | `null`                      | Role for participants beyond the declared slots — applies whenever the participant count exceeds the number of role slots. If unset, overflow throws. |
-| `push_data`     | object             | `{}`                        | Round-scoped data this client contributes to the snapshot. Namespaced under the round so it never clobbers earlier rounds. |
+| `push_data`     | object             | `{}`                        | Round-scoped data this client contributes to the snapshot. Namespaced under the round so it never clobbers earlier rounds, and written with `update()`, so other top-level fields in this client's slot survive the trial. |
 | `save_group`    | boolean            | `false`                     | Include the full group snapshot in the trial data. Off by default to avoid bloat.                                          |
-| `timeout`       | integer            | `30000`                     | Milliseconds to wait for readiness before giving up. `null` waits forever (discouraged).                                   |
+| `timeout`       | integer            | `30000`                     | Milliseconds to wait for readiness before giving up. `null` — like any negative or non-finite value — waits forever (discouraged); `0` gives up at once.                                   |
 | `on_timeout`    | function           | `null`                      | Hook run on timeout. The trial always ends with `role: null, timed_out: true` regardless.                                  |
 | `message`       | HTML string        | `"<p>Assigning roles…</p>"` | Shown while waiting.                                                                                                       |
 
@@ -33,7 +33,7 @@ In addition to the [default data collected by all plugins](https://www.jspsych.o
 | `role`          | string  | This participant's assigned role (`null` on timeout).                                                      |
 | `role_map`      | object  | The full `participantId -> { role }` map every client agreed on (`null` on timeout).                       |
 | `assigned_self` | boolean | Whether this participant appears in the agreed map. `false` only when a custom strategy left them out (a spectator); overflow participants are in the map (with `overflow_role`), so they read `true`. Distinguishes the spectator case from a timeout. |
-| `timed_out`     | boolean | `true` if readiness was not reached before `timeout`.                                                      |
+| `timed_out`     | boolean | `true` if readiness was not reached before `timeout`. If the wait is instead cancelled because the experiment ended or was aborted, the trial stops quietly and writes no record at all.                                                      |
 | `group`         | object  | The full snapshot assigned over — only present when `save_group: true`.                                    |
 
 ## Install

@@ -15,7 +15,7 @@ In addition to the [parameters available in all plugins](https://www.jspsych.org
 | `round`            | integer     | `0`                            | Round index, for `"random"` re-pairing.                                                                                          |
 | `leftover`         | string      | `"error"`                      | Non-divisible count policy: `"error"`, `"spectator"`, or `"smaller_group"`.                                                      |
 | `ready`            | function    | `null`                         | `(snapshot) => boolean` overriding the readiness gate.                                                                           |
-| `push_data`        | object      | `{}`                           | Extra data merged into this client's session entry (alongside `joinedAt`).                                                       |
+| `push_data`        | object      | `{}`                           | Extra data merged into this client's session entry (alongside `joinedAt`). Must be JSON-safe — it is deep-copied with `JSON.stringify`, so `Date`/`undefined`/`Map`/`NaN` do not survive. |
 | `save_group`       | boolean     | `false`                        | Include the full snapshot in the trial data.                                                                                     |
 | `timeout`          | integer     | `30000`                        | Milliseconds to wait for readiness before failing loud. `null` waits forever.                                                    |
 | `on_timeout`       | function    | `null`                         | Hook run on timeout; the trial always ends `matched_self: false, timed_out: true`.                                              |

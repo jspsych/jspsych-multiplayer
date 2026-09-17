@@ -3,6 +3,7 @@ import { initJsPsych } from "jspsych";
 
 import {
   GroupSessionData,
+  MULTIPLAYER_CANCELLED_ERROR_NAME,
   MULTIPLAYER_TIMEOUT_ERROR_NAME,
   MultiplayerApiLike,
 } from "./multiplayer-api";
@@ -11,60 +12,101 @@ import MultiplayerRolePlugin from ".";
 // ---------------------------------------------------------------------------------------------------
 // Mock multiplayer API implementing the same local interface the wrapper codes against.
 //
-// `push` merges into an in-memory session (mirroring the reference adapter's overwrite-per-participant
-// semantics — a later push for `me` replaces my whole entry, which is exactly why the wrapper folds
-// `joinedAt`/`rounds` forward itself). `wait` honours the fast-path and, failing that, re-checks the
-// condition whenever a later push lands; if it's still unmet when `timeout` ms elapse, it rejects —
-// driven by Jest fake timers in the timeout test.
+// It mirrors the jsPsych#3694 contract, not just the shapes, so the tests can catch regressions
+// against it:
+//   • `push` REPLACES my whole entry; `update` shallow-merges (TOP-LEVEL only) onto my last
+//     successful write, falling back to `get(me)` before the first write — which is exactly why the
+//     wrapper still has to fold `joinedAt`/`rounds` forward by hand.
+//   • `get`, `getAll` and the `wait` result are JSON deep copies, as in core, so a test that mutated
+//     what it read would not disturb the session and object identity is never stable.
+//   • `wait` honours the fast-path and re-checks the condition whenever a later write lands.
+//     `null`/`undefined`/negative/non-finite timeouts mean NO timeout; `0` times out at once. The
+//     timeout tests drive it with Jest fake timers.
+//   • `cancelAll()` rejects every pending wait with a MultiplayerCancelledError, the way core does
+//     on cancelAllSubscriptions()/disconnect()/abortExperiment()/the end of jsPsych.run().
 // ---------------------------------------------------------------------------------------------------
 class MockApi implements MultiplayerApiLike {
   session: GroupSessionData = {};
   private waiters: Array<() => void> = [];
+  private cancellers: Array<() => void> = [];
+  /** This client's last successful write — the merge base `update()` works from, as in core. */
+  private lastWrite: Record<string, unknown> | undefined;
 
   constructor(public participantId: string) {}
 
-  /** Seed another participant's entry directly (simulating their push), notifying any waiter. */
+  /** A JSON deep copy, exactly as core hands data out. */
+  private copy<T>(value: T): T {
+    return JSON.parse(JSON.stringify(value));
+  }
+
+  /** Seed another participant's entry directly (simulating their write), notifying any waiter. */
   seed(id: string, data: Record<string, unknown>) {
     this.session[id] = data;
     this.waiters.forEach((notify) => notify());
   }
 
+  /** Cancel every pending wait, as core does when the experiment ends or is aborted. */
+  cancelAll() {
+    this.cancellers.splice(0).forEach((cancel) => cancel());
+  }
+
   async push(data: Record<string, unknown>) {
-    this.session[this.participantId] = data; // overwrite-per-participant, like the real adapter
+    this.lastWrite = this.copy(data);
+    this.session[this.participantId] = this.copy(data); // push replaces the slot, like core
+    this.waiters.forEach((notify) => notify());
+  }
+
+  async update(data: Record<string, unknown>) {
+    // Merge base: this client's last successful write, or the current slot before the first write.
+    const base = this.lastWrite ?? this.session[this.participantId] ?? {};
+    const merged = { ...base, ...this.copy(data) }; // TOP-LEVEL merge only, like core
+    this.lastWrite = merged;
+    this.session[this.participantId] = this.copy(merged);
     this.waiters.forEach((notify) => notify());
   }
 
   getAll() {
-    return this.session;
+    return this.copy(this.session);
   }
 
   get(id: string) {
-    return this.session[id];
+    const entry = this.session[id];
+    return entry === undefined ? undefined : this.copy(entry);
   }
 
-  wait(condition: (d: GroupSessionData) => boolean, timeout?: number) {
+  wait(condition: (d: GroupSessionData) => boolean, timeout?: number | null) {
     return new Promise<GroupSessionData>((resolve, reject) => {
-      if (condition(this.session)) return resolve(this.session); // fast path
+      if (condition(this.getAll())) return resolve(this.getAll()); // fast path
       let settled = false;
       const check = () => {
-        if (!settled && condition(this.session)) {
+        if (!settled && condition(this.getAll())) {
           settled = true;
-          resolve(this.session);
+          resolve(this.getAll());
         }
       };
       this.waiters.push(check);
-      if (timeout !== undefined) {
-        setTimeout(() => {
-          if (!settled) {
-            settled = true;
-            // Mirrors the real MultiplayerTimeoutError: a named Error, since the plugin can't
-            // import that class (see multiplayer-api.ts) and matches on `error.name` instead.
-            const err = new Error(`wait timed out after ${timeout}ms`);
-            err.name = MULTIPLAYER_TIMEOUT_ERROR_NAME;
-            reject(err);
-          }
-        }, timeout);
-      }
+      this.cancellers.push(() => {
+        if (settled) return;
+        settled = true;
+        // Mirrors the real MultiplayerCancelledError: matched by `name`, as the plugin can't import
+        // the class (see multiplayer-api.ts).
+        const err = new Error("wait cancelled");
+        err.name = MULTIPLAYER_CANCELLED_ERROR_NAME;
+        reject(err);
+      });
+      // null/undefined/negative/non-finite all mean "no timeout" under the #3694 contract; 0 does
+      // not — it times out immediately.
+      if (timeout == null || !Number.isFinite(timeout)) return;
+      setTimeout(() => {
+        if (!settled) {
+          settled = true;
+          // Mirrors the real MultiplayerTimeoutError: a named Error, since the plugin can't
+          // import that class (see multiplayer-api.ts) and matches on `error.name` instead.
+          const err = new Error(`wait timed out after ${timeout}ms`);
+          err.name = MULTIPLAYER_TIMEOUT_ERROR_NAME;
+          reject(err);
+        }
+      }, timeout as number);
     });
   }
 }
@@ -176,7 +218,7 @@ describe("plugin-multiplayer-role — trial wrapper", () => {
     expect(Object.keys(finished[0].group).sort()).toEqual(["p1", "p2"]);
   });
 
-  it("round-scoped push: joinedAt is first-seen-stable and per-round data is merged, not clobbered", async () => {
+  it("round-scoped write: joinedAt is first-seen-stable and per-round data is merged, not clobbered", async () => {
     const api = new MockApi("p1");
     api.seed("p2", { joinedAt: 1 });
     const { jsPsych } = makeJsPsych(api);
@@ -212,11 +254,11 @@ describe("plugin-multiplayer-role — trial wrapper", () => {
     expect(afterR1.rounds[1]).toEqual({ score: 20 }); // round 1 added
   });
 
-  it("regression: the push preserves pre-existing top-level state (role_from over a prior field)", async () => {
-    // An earlier trial pushed a top-level `cond` field for each participant. The role trial's own
-    // push REPLACES this client's whole entry (overwrite-per-participant), so unless the wrapper
-    // spreads the previous entry into its payload, `cond` is wiped — and role_from (which reads it)
-    // can then never resolve. This runs the wrapper end-to-end over that exact flow.
+  it("regression: the round write preserves pre-existing top-level state (role_from over a prior field)", async () => {
+    // An earlier trial pushed a top-level `cond` field for each participant. A plain `push()` would
+    // REPLACE this client's whole entry and wipe `cond` — and role_from (which reads it) could then
+    // never resolve. The wrapper uses `update()`, which shallow-merges its two keys into the slot
+    // and leaves every other one alone. This runs the wrapper end-to-end over that exact flow.
     const api = new MockApi("p1");
     api.seed("p1", { joinedAt: 100, cond: "high" }); // pre-seeded by an earlier trial
     api.seed("p2", { joinedAt: 200, cond: "low" });
@@ -238,7 +280,7 @@ describe("plugin-multiplayer-role — trial wrapper", () => {
     expect(finished[0].timed_out).toBe(false);
     expect(finished[0].role).toBe("high");
     expect(finished[0].role_map.p2.role).toBe("low");
-    // …and the pre-existing top-level field survived this trial's own push.
+    // …and the pre-existing top-level field survived this trial's own write.
     const mine = api.get("p1") as any;
     expect(mine.cond).toBe("high");
     expect(mine.joinedAt).toBe(100); // still first-seen, not re-stamped
@@ -362,6 +404,38 @@ describe("plugin-multiplayer-role — trial wrapper", () => {
     await expect(result).rejects.toThrow(/adapter disconnected/);
     expect(onTimeout).not.toHaveBeenCalled();
     expect(finished).toHaveLength(0);
+  });
+
+  it("returns quietly when the wait is cancelled (experiment ending or aborting)", async () => {
+    // Core cancels pending waits on cancelAllSubscriptions()/disconnect()/abortExperiment()/the end
+    // of jsPsych.run(). The trial is already being torn down, so a cancel is neither a timeout nor a
+    // failure: no on_timeout, no `timed_out: true` record, no rejection, nothing logged.
+    const api = new MockApi("p1"); // alone, group_size 2 never satisfied
+    const onTimeout = jest.fn();
+    const errSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+    const { jsPsych, finished } = makeJsPsych(api);
+    const plugin = new MultiplayerRolePlugin(jsPsych as never);
+
+    const result = plugin.trial(display(), {
+      roles: ["a", "b"],
+      strategy: "join_order",
+      group_size: 2,
+      round: 0,
+      push_data: {},
+      timeout: 30000,
+      on_timeout: onTimeout,
+    } as never) as Promise<void>;
+
+    await flush();
+    expect(finished).toHaveLength(0); // still waiting for the second participant
+
+    api.cancelAll(); // the experiment ends / is aborted underneath the trial
+
+    await expect(result).resolves.toBeUndefined(); // stopped quietly, did not reject
+    expect(onTimeout).not.toHaveBeenCalled();
+    expect(finished).toHaveLength(0); // no bogus timed_out record
+    expect(errSpy).not.toHaveBeenCalled();
+    errSpy.mockRestore();
   });
 
   it("group_size exact-count gating: stalls at N-1, resolves when the Nth arrives", async () => {
@@ -489,6 +563,7 @@ describe("plugin-multiplayer-role — real jsPsych pipeline (startTimeline smoke
     core.multiplayer = {
       participantId: api.participantId,
       push: api.push.bind(api),
+      update: api.update.bind(api),
       get: api.get.bind(api),
       getAll: api.getAll.bind(api),
       wait: api.wait.bind(api),

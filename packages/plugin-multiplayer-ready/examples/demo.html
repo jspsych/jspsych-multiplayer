@@ -14,9 +14,11 @@
     // RUNNABLE demo of plugin-multiplayer-ready.
     //
     // The real multiplayer API (jsPsych#3694) isn't in a released jsPsych yet, so this demo grafts a
-    // small localStorage-backed multiplayer API onto `jsPsych.pluginAPI` — the same three methods
+    // small localStorage-backed multiplayer API onto `jsPsych.multiplayer` — the same three methods
     // (push / getAll / wait) the plugin codes against, and the same approach as the real
-    // `adapter-multiplayer-local`. That makes the plugin genuinely run here.
+    // `adapter-multiplayer-local`. That makes the plugin genuinely run here. The plugin reads
+    // `jsPsych.multiplayer` only: the older `jsPsych.pluginAPI` spelling predates the current
+    // contract and is no longer supported.
     //
     //   • DEFAULT (single tab): a simulated peer auto-checks-in ~2.5s after load, so you can see the
     //     whole flow — click "I'm ready", watch the waiting message, then advance — on your own.
@@ -54,7 +56,7 @@
       api.participantId = myId;
       api.getAll = getAll;
       api.push = async (data) => {
-        localStorage.setItem(prefix + myId, JSON.stringify(data)); // overwrite-per-participant
+        localStorage.setItem(prefix + myId, JSON.stringify(data)); // push replaces my whole slot
         notify();
       };
       api.wait = (condition, timeout) =>
@@ -73,16 +75,21 @@
             if (timer) clearTimeout(timer);
           };
           waiters.add(check);
-          const timer =
-            timeout != null
-              ? setTimeout(() => {
-                  if (!settled) {
-                    settled = true;
-                    cleanup();
-                    reject(new Error(`wait timed out after ${timeout}ms`));
-                  }
-                }, timeout)
-              : null;
+          // Like core: null/undefined/negative/non-finite mean "no timeout"; 0 times out at once.
+          const bounded = timeout != null && Number.isFinite(timeout) && timeout >= 0;
+          const timer = bounded
+            ? setTimeout(() => {
+                if (!settled) {
+                  settled = true;
+                  cleanup();
+                  // The plugin tells a genuine timeout from a backend failure by `error.name`, so
+                  // this stand-in has to carry the real class's name.
+                  const err = new Error(`wait timed out after ${timeout}ms`);
+                  err.name = "MultiplayerTimeoutError";
+                  reject(err);
+                }
+              }, timeout)
+            : null;
         });
 
       // Cross-tab: another tab's write fires a storage event — re-check every pending wait().
@@ -92,7 +99,10 @@
     const jsPsych = initJsPsych({
       on_finish: () => jsPsych.data.displayData(), // dump the trial data so you can inspect rt/wait_time/etc.
     });
-    installLocalMultiplayerAPI(jsPsych.pluginAPI);
+    // A released jsPsych has no `multiplayer` module (jsPsych#3694 is unmerged), so create the
+    // object before installing the demo API onto it.
+    jsPsych.multiplayer = {};
+    installLocalMultiplayerAPI(jsPsych.multiplayer);
 
     // Simulated peer: check in automatically a couple of seconds after load (single-tab convenience).
     if (simulatePeer) {

@@ -4,7 +4,7 @@ A real-time collaborative drawing canvas for multiplayer jsPsych experiments, bu
 
 Where [`plugin-multiplayer-chat`](../plugin-multiplayer-chat) pushes once per message (sparse, human-paced), this plugin pushes continuously while a stroke is active — it is the first plugin that stresses the multiplayer API's real-time **`subscribe`** primitive at a genuinely high rate, not just an event-driven one.
 
-> **Status:** built against the jsPsych multiplayer API from [jsPsych#3694](https://github.com/jspsych/jsPsych/pull/3694), which is not yet released. The plugin codes against a local interface mirroring that API (`src/multiplayer-api.ts`) and reaches the real object with one cast — the single seam to re-verify once #3694 lands. Tests run against an in-memory mock, so no live group session is needed to develop it.
+> **Status:** built against the jsPsych multiplayer API from [jsPsych#3694](https://github.com/jspsych/jsPsych/pull/3694), which is not yet released. The plugin codes against a local interface mirroring that API (`src/multiplayer-api.ts`) and reaches `jsPsych.multiplayer` with one cast. Preview builds that exposed these methods on `jsPsych.pluginAPI` predate the current contract and are not supported. Tests run against an in-memory mock, so no live group session is needed to develop it.
 
 ## Prerequisites
 
@@ -55,7 +55,7 @@ await jsPsych.run(timeline);
 
 ## Data model and correctness notes
 
-The multiplayer API's `push` **replaces** a participant's slot (it does not merge — see `plugin-multiplayer-chat`'s README for the same crux). Each participant therefore owns one array — their own strokes — under `data_key`; the rendered canvas is the merge of every participant's array.
+The multiplayer API's `push` **replaces** a participant's slot (it does not merge — see `plugin-multiplayer-chat`'s README for the same crux), so the plugin writes with `update()`, which shallow-merges just the `data_key` field into the slot and leaves everything else you've pushed there (a role, a display name) alone. Each participant therefore owns one array — their own strokes — under `data_key`; the rendered canvas is the merge of every participant's array.
 
 **Canvas sizing.** The canvas has a _fixed_ aspect ratio (`aspect_ratio`), letterboxed to fit its container. Stroke points are normalized (0..1) against the canvas's pixel _width_ on both axes — not independently per axis — so a circle drawn on one client's viewport renders as a circle, not an ellipse, on a differently-sized client's viewport.
 
@@ -65,7 +65,9 @@ The multiplayer API's `push` **replaces** a participant's slot (it does not merg
 
 **Undo detection.** A full repaint is triggered whenever a previously-seen stroke disappears from an author's array — detected by strokeId, not by array length, so an undo immediately followed by a new stroke (same length, different content) is still caught.
 
-> **Payload growth:** each push re-serializes the author's _entire_ stroke history (since `push` replaces the whole slot), so bytes on the wire grow with total ink drawn during the trial, not momentary activity. Points are decimated (`min_point_distance`) to bound this per stroke; for very long or detailed free-draw trials, consider `store_full_strokes: false` to keep trial data small.
+> **Payload growth:** each write re-serializes the author's _entire_ stroke history (the whole array is written under `data_key`), so bytes on the wire grow with total ink drawn during the trial, not momentary activity. Points are decimated (`min_point_distance`) to bound this per stroke; for very long or detailed free-draw trials, consider `store_full_strokes: false` to keep trial data small.
+
+> **Pushes cannot pile up.** The multiplayer API keeps one write in flight at a time and merges the calls made meanwhile into a single follow-up write, so a `push_interval_ms` faster than the backend confirms coalesces rather than building a queue.
 
 > **Dropped pushes self-heal.** Because every push carries the author's complete stroke array, a push that fails or is lost is automatically corrected by the next scheduled push, which resends the full current state. The plugin surfaces a brief "Connection trouble" note on a failed push but does not retry manually.
 

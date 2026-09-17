@@ -11,7 +11,11 @@ import {
   plurality,
   tally,
 } from "./choice-core";
-import { MultiplayerApiLike, resolveMultiplayerApi } from "./multiplayer-api";
+import {
+  isMultiplayerCancelledError,
+  isMultiplayerTimeoutError,
+  resolveMultiplayerApi,
+} from "./multiplayer-api";
 
 // Public types are part of the API. They erase at build time, so exporting them does not add a
 // runtime named export — the bundle stays a single default export, per the jsPsych plugin packaging
@@ -210,19 +214,19 @@ class MultiplayerChoicePlugin implements JsPsychPlugin<Info> {
     const { index, rt } = await this.collectChoice(display_element, trial, on_load);
     const label = labels[index];
 
-    // --- Phase 2: push the choice, then barrier on the whole group ----------------------------
-    // Read our own slot first and push the whole thing back with only the choice key changed: `push`
-    // REPLACES the slot, so spreading preserves any other data we pushed earlier (a role, a chat log).
-    const prev = api.get(me) ?? {};
-    const payload: Record<string, unknown> = { ...prev, [dataKey]: { index, label } };
-    // Push BEFORE the wait try/catch: a push failure is an infrastructure error, not a barrier
+    // --- Phase 2: write the choice, then barrier on the whole group ---------------------------
+    // `update` MERGES this one key into our slot (unlike `push`, which replaces the whole slot), so
+    // any other data we wrote earlier (a role, a chat log) survives without a read-modify-write here.
+    // Write BEFORE the wait try/catch: a write failure is an infrastructure error, not a barrier
     // timeout, and must surface loudly (rejecting the trial) rather than being relabeled `timed_out`.
-    await api.push(payload);
+    await api.update({ [dataKey]: { index, label } });
 
     display_element.innerHTML = `<div class="jspsych-multiplayer-choice-waiting">${trial.waiting_message}</div>`;
     const waitStart = performance.now();
-    const timeout =
-      typeof trial.timeout === "number" && trial.timeout > 0 ? trial.timeout : undefined;
+    // Core's `wait()` already reads `null`, negative and non-finite timeouts as "no timeout", so
+    // they pass straight through. Only `0` needs mapping: core times out immediately at `0`, while
+    // this plugin documents ANY non-positive `timeout` as waiting indefinitely.
+    const timeout = trial.timeout === 0 ? null : trial.timeout;
 
     let group: GroupSessionData;
     let timedOut = false;
@@ -233,13 +237,18 @@ class MultiplayerChoicePlugin implements JsPsychPlugin<Info> {
       // neither lifts the barrier early nor is silently dropped from the aggregate afterward.
       group = await api.wait((g) => countChosen(g, dataKey, labels.length) >= expected, timeout);
     } catch (e) {
-      // Distinguish a genuine barrier timeout from any other wait() rejection. jsPsych#3694 rejects a
-      // timeout with a `MultiplayerTimeoutError` (matched by name, which survives two loaded copies of
-      // jspsych); a wait() can otherwise reject because the condition predicate threw or the backend
-      // failed. ONLY a timeout should proceed with a partial snapshot (flag timed_out, preserve the
-      // message, run on_timeout) — any other rejection is a real fault and rethrows so the trial halts
-      // loudly rather than masquerading as a timeout.
-      if ((e as { name?: string })?.name !== "MultiplayerTimeoutError") throw e;
+      // Distinguish the three ways a wait() can reject. jsPsych#3694 names its rejections, and the
+      // helpers below match on that name rather than with `instanceof`, which breaks across two
+      // loaded copies of jspsych.
+      //   1. CANCELLED — jsPsych cancelled the wait because the experiment is ending or being
+      //      aborted. The trial is being torn down, so stop quietly: no reveal, no finishTrial, no
+      //      on_timeout. Treating it as a timeout would record a bogus timed_out trial on abort.
+      //   2. TIMEOUT — the genuine barrier expiry, and the only case that proceeds with a partial
+      //      snapshot (flag timed_out, preserve the message, run on_timeout).
+      //   3. anything else (the condition predicate threw, the backend failed) is a real fault and
+      //      rethrows so the trial halts loudly rather than masquerading as a timeout.
+      if (isMultiplayerCancelledError(e)) return;
+      if (!isMultiplayerTimeoutError(e)) throw e;
       timedOut = true;
       waitError = e instanceof Error ? e.message : String(e);
       if (typeof trial.on_timeout === "function") trial.on_timeout(e);

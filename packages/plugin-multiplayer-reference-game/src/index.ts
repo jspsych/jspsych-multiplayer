@@ -475,6 +475,12 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
   trial(display_element: HTMLElement, trial: TrialType<Info>) {
     const api = resolveMultiplayerApi(this.jsPsych);
     const me = api.participantId;
+    if (me == null) {
+      throw new Error(
+        "multiplayer-reference-game: no participantId — the multiplayer adapter must be connected " +
+          "(await jsPsych.multiplayer.connect(adapter)) before this trial runs.",
+      );
+    }
     // Captured so nested `function` declarations (no lexical `this`) can register timers too.
     const pluginAPI = this.jsPsych.pluginAPI;
 
@@ -888,12 +894,20 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
     let selectionTimer: number | null = null;
     let roundTimer: number | null = null;
 
+    // THIS client's own chat messages, kept locally and appended to — the pattern
+    // `plugin-multiplayer-draw` uses for `ownStrokes`. Seeded ONCE from whatever is already in our
+    // slot under `chatKey` (an earlier round when `chat_persists` is on, or a reload), then never
+    // re-derived from `api.get(me)`. `get()` reads the adapter's cache, which may not yet reflect a
+    // write it has already confirmed, so rebuilding the array per send can silently drop the message
+    // before it; core's `update()` coalescing cannot help, because the array is built before
+    // `update()` is ever called.
+    let ownMessages: ChatMessage[] = mergeMessages({ [me]: api.get(me) ?? {} }, chatKey).filter(
+      (m) => m.senderId === me,
+    );
     // This participant's own outgoing chat sequence counter, seeded past the HIGHEST seq already in
     // our slot (e.g. after a reload) so ids stay unique (max-based, not length-based — see the chat
     // plugin).
-    const readOwnMessages = (): ChatMessage[] =>
-      mergeMessages({ [me]: api.get(me) ?? {} }, chatKey).filter((m) => m.senderId === me);
-    let nextSeq = readOwnMessages().reduce((max, m) => Math.max(max, m.seq), -1) + 1;
+    let nextSeq = ownMessages.reduce((max, m) => Math.max(max, m.seq), -1) + 1;
 
     // --- Chat ------------------------------------------------------------------------------------
     const senderLabel = (senderId: string): string => {
@@ -961,10 +975,12 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
       if (pinnedToBottom) chatLog.scrollTop = chatLog.scrollHeight;
     }
 
+    // Counts the LOCAL array, so the cap holds from the moment a message is sent rather than from
+    // whenever the session read catches up with it.
     const atMessageCap = () =>
       typeof trial.max_messages === "number" &&
       trial.max_messages > 0 &&
-      readOwnMessages().length >= trial.max_messages;
+      ownMessages.length >= trial.max_messages;
 
     const updateChatAvailability = () => {
       if (!chatInput || !chatForm) return;
@@ -986,25 +1002,26 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
       }
       chatInput.value = "";
 
-      // Read our OWN slot and push the whole thing back with only the chat key changed: `push`
-      // REPLACES the slot, so spreading preserves everything else (joinedAt, earlier rounds, …).
-      const mine = api.get(me) ?? {};
-      const own = mergeMessages({ [me]: mine }, chatKey).filter((m) => m.senderId === me);
-      // Stamped with `round` so the partner can tell this round's messages from earlier ones once
-      // `chat_persists` merges every round into a single log (see `updateGate`).
-      const nextMessages = appendOwnMessage(own, text, me, nextSeq++, Date.now(), round);
+      // Append to the LOCAL array rather than re-reading our slot (see `ownMessages`). Stamped with
+      // `round` so the partner can tell this round's messages from earlier ones once `chat_persists`
+      // merges every round into a single log (see `updateGate`).
+      ownMessages = appendOwnMessage(ownMessages, text, me, nextSeq++, Date.now(), round);
 
       // Optimistic render: show our own message immediately instead of waiting for the adapter to
-      // echo the push back through subscribe. The echo (or a replay) is harmless because renderChat
-      // is idempotent — mergeMessages de-duplicates by message id.
-      renderChat({ ...api.getAll(), [me]: { ...mine, [chatKey]: nextMessages } });
+      // echo the write back through subscribe, rendering the same local array we just appended to.
+      // The echo (or a replay) is harmless because renderChat is idempotent — mergeMessages
+      // de-duplicates by message id.
+      renderChat({ ...api.getAll(), [me]: { ...(api.get(me) ?? {}), [chatKey]: ownMessages } });
       updateChatAvailability();
 
-      // Best-effort send: a failed push shows an inline note rather than crashing the trial. Do NOT
+      // `update` merges ONLY the chat key into our slot, so everything else in it (joinedAt, earlier
+      // rounds, this round's submission) survives without reading and re-pushing the whole slot.
+      // Best-effort: a failed write shows an inline note rather than crashing the trial, and heals
+      // itself — the array carries the whole history, so the next send resends what was lost. Do NOT
       // roll nextSeq back on failure — a reused seq would forge a duplicate id that mergeMessages'
       // dedup silently drops. A skipped seq is harmless; a reused one loses data.
       api
-        .push({ ...mine, [chatKey]: nextMessages })
+        .update({ [chatKey]: ownMessages })
         .catch(() => showError("Couldn't send — please try again."));
     };
 
@@ -1085,9 +1102,13 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
         n_targets: k,
         ...(reason === "timeout" ? { timed_out: true } : {}),
       };
-      const mine = api.get(me) ?? {};
+      // `update` merges ONLY `dataKey` into our slot, so this write can't clobber a chat message
+      // (a different key) that the session read below hasn't caught up with yet. The rounds map
+      // itself still has to be read — earlier rounds live in it, written by earlier trials — but it
+      // is the one key written back.
+      const rounds = mergeRoundData(api.get(me) ?? {}, dataKey, round, payload)[dataKey];
       api
-        .push(mergeRoundData(mine, dataKey, round, payload))
+        .update({ [dataKey]: rounds })
         .catch(() => showError("Couldn't submit — connection trouble."));
       // Optimistic: enter feedback immediately rather than waiting for the adapter to echo the push.
       enterFeedback({ assignment, rt, timed_out: reason === "timeout" });
