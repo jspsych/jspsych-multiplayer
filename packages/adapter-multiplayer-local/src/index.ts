@@ -170,9 +170,9 @@ export default class LocalAdapter implements MultiplayerAdapter {
     this.signal?.close();
     // Null the signal so a later connect() rebuilds a fresh one (see createSignal).
     this.signal = null;
-    // Drop all subscribers on disconnect (a reconnect requires re-subscribing). Seam to re-check
-    // once jsPsych core #3694 defines whether subscriptions are expected to survive a reconnect — if
-    // they must, this clear moves out of disconnect() and the signal-rebind in connect() re-wires them.
+    // Drop all subscribers on disconnect (a reconnect requires re-subscribing). This matches core,
+    // which cancels every API-level subscription before calling the adapter's disconnect(); the clear
+    // matters for callers that drive this adapter directly (e.g. the group-quiz host page).
     this.subscribers.clear();
     this.connected = false;
     // Note: a persisted participant id (persistParticipant) is intentionally left in sessionStorage

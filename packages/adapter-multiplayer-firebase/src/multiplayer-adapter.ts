@@ -1,11 +1,11 @@
 /**
  * Local, structural mirror of the jsPsych multiplayer *adapter* contract.
  *
- * The real types live in jsPsych core (`packages/jspsych/src/modules/plugin-api/MultiplayerAPI.ts`),
+ * The real types live in jsPsych core (`packages/jspsych/src/modules/multiplayer/index.ts`),
  * shipped via https://github.com/jspsych/jsPsych/pull/3694, which is not yet released — so the
  * published `jspsych` package does not export `MultiplayerAdapter` / `GroupSessionData` /
  * `Unsubscribe` yet. Rather than take a build-time dependency on an unmerged fork, this adapter
- * implements the interface declared here, copied verbatim from that PR's `MultiplayerAPI.ts`. It is
+ * implements the interface declared here, kept in sync with that PR's `MultiplayerAPI`. It is
  * the single seam to re-verify once #3694 lands: at that point `implements MultiplayerAdapter` from
  * `jspsych` should typecheck against this same shape.
  */
