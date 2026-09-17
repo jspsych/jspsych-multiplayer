@@ -117,12 +117,12 @@ type Mode = "countdown" | "countup";
  * timestamp into its own slot on trial start, and each client derives the displayed time from the
  * **minimum** timestamp across all slots — a coordination-free consensus (no elected anchor, no
  * single point of failure) in the same spirit as `plugin-multiplayer-role`'s ordering. Because `push`
- * replaces a whole slot, the timestamp is merged into this participant's existing slot (read-own →
- * spread → push) so it never clobbers role/`joinedAt` metadata, and the push is idempotent on
- * refresh (keep-if-present), so a reload resumes at the group's actual remaining time.
+ * replaces a whole slot, the timestamp is written with `update()`, which merges it into this
+ * participant's existing slot so it never clobbers role/`joinedAt` metadata, and the write is
+ * idempotent on refresh (keep-if-present), so a reload resumes at the group's actual remaining time.
  *
  * The trial re-resolves the consensus start on every group update (via `subscribe`) and re-renders
- * the clock on a ~100 ms interval, ending when its own derived time reaches `duration`. It is NOT a
+ * the clock on a ~100 ms tick, ending when its own derived time reaches `duration`. It is NOT a
  * barrier: ends are synchronized only within skew + latency — compose with `plugin-multiplayer-sync`
  * or `plugin-multiplayer-ready` afterwards if you need a hard barrier.
  *
@@ -151,7 +151,7 @@ class MultiplayerCountdownPlugin implements JsPsychPlugin<Info> {
   constructor(private jsPsych: JsPsych) {}
 
   // Deliberately synchronous (returns undefined, NOT a Promise): jsPsych races a returned promise
-  // against `finishTrial()`, so an async `trial` that resolves after wiring up subscribe/interval
+  // against `finishTrial()`, so an async `trial` that resolves after wiring up subscribe/tick
   // would end the trial immediately. A sync `trial` makes jsPsych fire `on_load` itself and wait for
   // `finishTrial()`. (Same footgun the chat/sync plugins fixed — see chat/src/index.ts:131.)
   trial(display_element: HTMLElement, trial: TrialType<Info>) {
@@ -177,14 +177,14 @@ class MultiplayerCountdownPlugin implements JsPsychPlugin<Info> {
     const mode: Mode = trial.mode === "countup" ? "countup" : "countdown";
     const key = startedAtKey(name);
 
-    // --- Register this client's start timestamp (read-own → spread → push, keep-if-present) ----
-    // `push` REPLACES the whole slot, so read our own slot and spread it to preserve other keys
-    // (role, joinedAt, …). Keep-if-present: if we already carry a timestamp for this key (a reload,
-    // or a reused name), KEEP it instead of writing a fresh Date.now() — that makes refreshes resume
-    // at the true remaining time without depending on peers, and makes a reused name fail
-    // deterministically (the started-expired warning below catches it).
-    const mine = api.get(me) ?? {};
-    const existing = mine[key];
+    // --- Register this client's start timestamp (update, keep-if-present) ---------------------
+    // The read of our own slot is the keep-if-present check, NOT a merge base: if we already carry a
+    // timestamp for this key (a reload, or a reused name), KEEP it instead of writing a fresh
+    // Date.now() — that makes refreshes resume at the true remaining time without depending on
+    // peers, and makes a reused name fail deterministically (the started-expired warning below
+    // catches it). The write itself is a one-key `update()`, which merges into our slot, so other
+    // keys (role, joinedAt, …) survive without us spreading them back ourselves.
+    const existing = api.get(me)?.[key];
     const alreadyRegistered = typeof existing === "number" && Number.isFinite(existing);
     const ownStartedAt = alreadyRegistered ? (existing as number) : Date.now();
 
@@ -193,7 +193,7 @@ class MultiplayerCountdownPlugin implements JsPsychPlugin<Info> {
       // `await api.push`), so a failed one-shot registration is surfaced loudly and un-relabeled via
       // console.error rather than being silently swallowed. The display still continues from whatever
       // timestamps remain readable (this client's own local fallback at minimum).
-      api.push({ ...mine, [key]: ownStartedAt }).catch((err) => {
+      api.update({ [key]: ownStartedAt }).catch((err) => {
         console.error(
           "multiplayer-countdown: failed to push this participant's start timestamp; this client " +
             "will not contribute to the shared consensus start time.",
@@ -235,7 +235,8 @@ class MultiplayerCountdownPlugin implements JsPsychPlugin<Info> {
     let currentStartedAt = ownStartedAt;
     let ended = false;
     let unsubscribe: Unsubscribe | null = null;
-    let interval: ReturnType<typeof setInterval> | null = null;
+    // `number`, not ReturnType<typeof setTimeout>: pluginAPI.setTimeout returns a numeric handle.
+    let tickTimer: number | null = null;
 
     const resolve = (group: GroupSessionData) => {
       currentStartedAt = resolveStartedAt(group, key) ?? ownStartedAt;
@@ -246,8 +247,8 @@ class MultiplayerCountdownPlugin implements JsPsychPlugin<Info> {
         : computeRemaining(currentStartedAt, duration, now);
     // Both modes end at `duration`: elapsed ≥ duration ⇔ remaining ≤ 0.
     const isExpired = (now: number) => computeRemaining(currentStartedAt, duration, now) <= 0;
-    // Announce the final ANNOUNCE_FROM_MS window, once per whole second (tracked so the 100ms
-    // interval doesn't re-announce the same second). Uses remaining time in BOTH modes — count-up
+    // Announce the final ANNOUNCE_FROM_MS window, once per whole second (tracked so the 100 ms
+    // tick doesn't re-announce the same second). Uses remaining time in BOTH modes — count-up
     // still ends at `duration`, so the group deadline is what matters to an SR user either way.
     const ANNOUNCE_FROM_MS = 5000;
     let lastAnnouncedSecond = -1;
@@ -265,9 +266,9 @@ class MultiplayerCountdownPlugin implements JsPsychPlugin<Info> {
     };
 
     const end = () => {
-      if (ended) return; // guard against interval racing a subscribe-driven end
+      if (ended) return; // guard against a tick racing a subscribe-driven end
       ended = true;
-      if (interval != null) clearInterval(interval);
+      if (tickTimer != null) clearTimeout(tickTimer);
       unsubscribe?.();
       this.jsPsych.finishTrial({
         started_at: currentStartedAt,
@@ -309,15 +310,29 @@ class MultiplayerCountdownPlugin implements JsPsychPlugin<Info> {
       if (isExpired(Date.now())) end();
     });
 
-    // The interval ONLY re-renders from Date.now() against the currently-resolved start — it never
+    // The tick ONLY re-renders from Date.now() against the currently-resolved start — it never
     // touches the API (that's subscribe's job). Every tick recomputes from Date.now() rather than
-    // accumulating, so background-tab setInterval throttling only coarsens the refresh, never the
+    // accumulating, so background-tab timer throttling only coarsens the refresh, never the
     // underlying time or the moment the trial ends.
-    interval = setInterval(() => {
-      if (ended) return;
-      renderTime();
-      if (isExpired(Date.now())) end();
-    }, 100);
+    //
+    // A self-rescheduling `pluginAPI.setTimeout`, NOT a raw `setInterval`: jsPsych clears the
+    // timers it registered when a trial is ended from the outside (abortExperiment /
+    // endCurrentTimeline / a forced finishTrial), and it cancels multiplayer subscriptions there
+    // too. A raw interval would survive all of that and keep firing after the run is over — up to
+    // calling `end()` → `finishTrial()` on a finished experiment. Rescheduling from inside the tick
+    // (rather than one registration up front) keeps every future tick inside that registry.
+    const scheduleTick = () => {
+      tickTimer = this.jsPsych.pluginAPI.setTimeout(() => {
+        if (ended) return;
+        renderTime();
+        if (isExpired(Date.now())) {
+          end();
+          return;
+        }
+        scheduleTick();
+      }, 100);
+    };
+    scheduleTick();
   }
 }
 

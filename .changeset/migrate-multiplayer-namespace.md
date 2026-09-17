@@ -11,4 +11,4 @@
 "@jspsych-multiplayer/plugin-multiplayer-sync": patch
 ---
 
-Resolve the multiplayer API via `resolveMultiplayerApi()`, preferring `jsPsych.multiplayer` (jsPsych#3694's current namespace) and falling back to `jsPsych.pluginAPI`, with a directing error when neither is present.
+Resolve the multiplayer API via `resolveMultiplayerApi()`, which reads `jsPsych.multiplayer` (jsPsych#3694's namespace) and throws a directing error when it is absent. Builds that exposed these methods on `jsPsych.pluginAPI` predate the current contract and are not supported.

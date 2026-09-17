@@ -1,7 +1,12 @@
 import { JsPsych, JsPsychPlugin, ParameterType, TrialType } from "jspsych";
 
 import { version } from "../package.json";
-import { GroupSessionData, MultiplayerApiLike, resolveMultiplayerApi } from "./multiplayer-api";
+import {
+  GroupSessionData,
+  MultiplayerApiLike,
+  isMultiplayerCancelledError,
+  resolveMultiplayerApi,
+} from "./multiplayer-api";
 import { LeaderboardRow, buildLeaderboard, countReported } from "./scoreboard";
 import { getLeaderboard, getMyRank, getMyScore, setMyStanding } from "./store";
 
@@ -185,13 +190,12 @@ class MultiplayerScoreboardPlugin implements JsPsychPlugin<Info> {
     // Show the waiting message now; jsPsych fires on_load for this sync trial once trial() returns.
     display_element.innerHTML = trial.message;
 
-    // Contribute this client's row. Read our own slot first and push the whole thing back with only
-    // the score key changed: `push` REPLACES the slot, so spreading preserves any other data we've
-    // pushed earlier (a role, a chat log). A non-finite score is pushed as-is and simply won't be
-    // ranked (buildLeaderboard/countReported drop it), so it never counts toward `group_size`.
-    const prev = api.get(me) ?? {};
+    // Contribute this client's row. `update` shallow-merges just the score key into our own slot, so
+    // anything we pushed earlier (a role, a chat log) survives — unlike `push`, which REPLACES the
+    // whole slot. A non-finite score is written as-is but crosses the wire as JSON, so NaN/Infinity
+    // read back as null; either way it simply isn't ranked (buildLeaderboard/countReported drop it)
+    // and never counts toward `group_size`.
     const payload: Record<string, unknown> = {
-      ...prev,
       [dataKey]: {
         score: trial.score,
         ...(trial.label != null ? { label: String(trial.label) } : {}),
@@ -209,10 +213,10 @@ class MultiplayerScoreboardPlugin implements JsPsychPlugin<Info> {
   }
 
   /**
-   * Push this client's score, then wait for the barrier. Push and wait are kept SEPARATE so a
-   * push/backend failure is distinguishable from a genuine barrier timeout: only our own timer firing
-   * is a timeout (`timed_out: true` + `on_timeout`); a push failure — or a `wait` rejection — surfaces
-   * as `error` on an otherwise-normal board and never fires `on_timeout`.
+   * Write this client's score, then wait for the barrier. The write and the wait are kept SEPARATE
+   * so a write/backend failure is distinguishable from a genuine barrier timeout: only our own timer
+   * firing is a timeout (`timed_out: true` + `on_timeout`); a write failure — or a `wait` rejection —
+   * surfaces as `error` on an otherwise-normal board and never fires `on_timeout`.
    */
   private async gather(
     display_element: HTMLElement,
@@ -222,28 +226,44 @@ class MultiplayerScoreboardPlugin implements JsPsychPlugin<Info> {
     payload: Record<string, unknown>,
     isReady: (g: GroupSessionData) => boolean,
   ) {
+    /**
+     * Read the latest snapshot without letting a failure mask the outcome. Every call site below is
+     * a failure/timeout path, where the API may already be disconnected — and a disconnected
+     * `getAll()` throws. Since `gather()` runs detached (`void`), an escaping throw would be an
+     * unhandled rejection that leaves the participant stuck on the waiting message, so fall back to
+     * an empty snapshot and still show a (possibly empty) board.
+     */
+    const safeGetAll = (): GroupSessionData => {
+      try {
+        return api.getAll();
+      } catch {
+        return {};
+      }
+    };
+
     try {
-      await api.push(payload);
+      await api.update(payload);
     } catch (err) {
-      // A push failure is NOT a timeout: record it as `error`, don't fire on_timeout, and still show
+      // A failed write is NOT a timeout: record it as `error`, don't fire on_timeout, and still show
       // the board (from what we can see) so the participant is never soft-locked.
       console.error("plugin-multiplayer-scoreboard: failed to push this client's score", err);
-      this.reveal(display_element, trial, me, api.getAll(), false, errorMessage(err));
+      this.reveal(display_element, trial, me, safeGetAll(), false, errorMessage(err));
       return;
     }
 
     // Impose the timeout ourselves (racing an own timer) so the three outcomes stay unambiguous: OUR
-    // timer firing is the only thing that means "timeout"; a rejection from api.wait is always a
-    // backend/disconnect error, never relabelled as one. Each branch reveals exactly once and is NOT
-    // inside a catch, so a throw from reveal propagates rather than being misread as a timeout; a
-    // synchronous throw from api.wait is caught by the helper and surfaces as `error`, not an
-    // unhandled rejection that would soft-lock the trial.
+    // timer firing is the only thing that means "timeout"; a rejection from api.wait is a
+    // backend/disconnect error (or a cancellation, handled below), never relabelled as a timeout.
+    // Each branch reveals exactly once and is NOT inside a catch, so a throw from reveal propagates
+    // rather than being misread as a timeout.
     const timeoutMs = trial.timeout ?? undefined;
     // Hand api.wait a STRICTLY LONGER deadline (2×) than our own timer, purely as a subscription-
-    // teardown backstop: our timer always fires first, so it stays the source of truth for `timed_out`
-    // and the adapter's later expiry can never flip a genuine timeout into an `error`. Clamp to the
-    // 32-bit setTimeout max so a huge `timeout` can't overflow the doubled delay into a near-zero one
-    // (which would fire the backstop immediately and reintroduce that misclassification).
+    // teardown backstop — core only auto-cancels waits when the whole experiment ends or aborts, so
+    // bounding this trial's own wait stays our job. Our timer always fires first, so it remains the
+    // source of truth for `timed_out` and the adapter's later expiry can never flip a genuine timeout
+    // into an `error`. Clamp to the 32-bit setTimeout max so a huge `timeout` can't overflow the
+    // doubled delay into a near-zero one (which would fire the backstop immediately and reintroduce
+    // that misclassification).
     const backstopMs = timeoutMs === undefined ? undefined : Math.min(timeoutMs * 2, 2_147_483_647);
     const outcome = await raceWaitAgainstTimeout(
       () => api.wait(isReady, backstopMs),
@@ -258,11 +278,17 @@ class MultiplayerScoreboardPlugin implements JsPsychPlugin<Info> {
     } else if (outcome.kind === "timeout") {
       // A real timeout: run the hook, then degrade to a partial board rather than hanging or blanking.
       this.safeTimeoutHook(trial);
-      this.reveal(display_element, trial, me, api.getAll(), true);
+      this.reveal(display_element, trial, me, safeGetAll(), true);
+    } else if (isMultiplayerCancelledError(outcome.err)) {
+      // The wait was cancelled (abortExperiment, disconnect, or the end of jsPsych.run), so the trial
+      // is being torn down: jsPsych has already cleared the display. Returning quietly is the whole
+      // point — rendering here would paint a board over a finished experiment, with a live Continue
+      // button whose finishTrial() lands after the run ended.
+      return;
     } else {
       // Backend/disconnect error while waiting — NOT a timeout: surface it as `error`, no on_timeout.
       console.error("plugin-multiplayer-scoreboard: waiting for the group failed", outcome.err);
-      this.reveal(display_element, trial, me, api.getAll(), false, errorMessage(outcome.err));
+      this.reveal(display_element, trial, me, safeGetAll(), false, errorMessage(outcome.err));
     }
   }
 
@@ -426,10 +452,8 @@ type WaitOutcome =
  *     later expiry is only a subscription-teardown backstop and can't flip the verdict from "timeout"
  *     to "error". As secondary safety, our timer is also registered before `startWaiting()` runs, so
  *     even at an equal deadline ours would still win (equal-delay timers fire in registration order).
- *   - `startWaiting()` is invoked inside an async wrapper, so a SYNCHRONOUS throw (e.g. an adapter
- *     that throws when disconnected) becomes a rejected promise / `error` outcome, never an unhandled
- *     rejection that would soft-lock the trial. Both handlers are attached up front, so a late
- *     rejection after a timeout can never surface unhandled.
+ *   - Both handlers are attached to `startWaiting()`'s promise up front, so a late rejection arriving
+ *     after the timeout has already won the race can never surface as an unhandled rejection.
  */
 async function raceWaitAgainstTimeout(
   startWaiting: () => Promise<GroupSessionData>,
@@ -446,7 +470,9 @@ async function raceWaitAgainstTimeout(
           timer = scheduleTimeout(() => resolve({ kind: "timeout" as const }), timeoutMs);
         });
 
-  const settled: Promise<WaitOutcome> = (async () => startWaiting())().then(
+  // `wait()` rejects rather than throwing synchronously (jsPsych#3694), so no async wrapper is
+  // needed to funnel a failure into the `error` outcome.
+  const settled: Promise<WaitOutcome> = startWaiting().then(
     (group) => ({ kind: "ready" as const, group }),
     (err) => ({ kind: "error" as const, err }),
   );

@@ -105,7 +105,7 @@ Any signed-in (anonymous) client may read and write **any** session. Fine for a 
 
 These rules have no memberships node, so don't combine them with `useUidAsParticipantId: true` (which defaults `sessionBinding` on — the membership write would be denied). If you need uid-as-key without session binding for some reason, pass `sessionBinding: false` explicitly.
 
-In uid-as-key mode the adapter adopts the anonymous auth uid as `participantId` during `connect()`, so **`participantId` is a placeholder until `connect()` resolves — don't read or cache it before connecting.** It is incompatible with a supplied `participantId` (constructing with both throws).
+In uid-as-key mode the adapter adopts the anonymous auth uid as `participantId` during `connect()`, so **`adapter.participantId` is a placeholder until `connect()` resolves — don't read or cache it off the adapter before connecting. (Through the API, `jsPsych.multiplayer.participantId` is simply `null` until then.)** It is incompatible with a supplied `participantId` (constructing with both throws).
 
 ## Options
 

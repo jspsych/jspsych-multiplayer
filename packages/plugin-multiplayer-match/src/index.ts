@@ -2,7 +2,12 @@ import { JsPsych, JsPsychPlugin, ParameterType, TrialType } from "jspsych";
 
 import { version } from "../package.json";
 import { MatchOptions, Snapshot, buildMatches } from "./match-core";
-import { GroupSessionData, MultiplayerApiLike, resolveMultiplayerApi } from "./multiplayer-api";
+import {
+  GroupSessionData,
+  isMultiplayerCancelledError,
+  isMultiplayerTimeoutError,
+  resolveMultiplayerApi,
+} from "./multiplayer-api";
 import {
   getMatchMap,
   getMyGroup,
@@ -52,7 +57,11 @@ const info = <const>{
      * `expected_players` (and, for `join_order`, that every present participant has pushed `joinedAt`).
      */
     ready: { type: ParameterType.FUNCTION, default: null },
-    /** Extra data this client contributes into the shared session (merged alongside `joinedAt`). */
+    /**
+     * Extra data this client contributes into the shared session (merged alongside `joinedAt`). Must
+     * be JSON-safe: the session deep-copies every value with `JSON.stringify`, so a `Date` arrives as
+     * a string and `undefined`/`Map`/`Set`/`NaN` values do not survive the round trip.
+     */
     push_data: { type: ParameterType.OBJECT, default: {} },
     /** Include the full group snapshot in the trial data. Off by default to avoid bloat. */
     save_group: { type: ParameterType.BOOL, default: false },
@@ -160,15 +169,13 @@ class MultiplayerMatchPlugin implements JsPsychPlugin<Info> {
       );
     }
 
-    // Read this client's own prior entry first, then merge: the push REPLACES this client's whole
-    // entry (overwrite-per-participant adapter semantics), so `prev` is spread first — every key pushed
-    // by earlier trials survives. `joinedAt` is written ONCE (first-seen, never re-stamped) so
-    // join-order stays stable across rounds.
-    const prev = api.get(me) ?? {};
+    // `update` MERGES this payload into our slot (unlike `push`, which replaces the whole slot), so
+    // every key written by earlier trials survives without a read-modify-write here. This client's
+    // own entry is still READ, for one reason: `joinedAt` is stamped ONCE (first-seen, never
+    // re-stamped) so join-order stays stable across rounds.
     const payload: Record<string, unknown> = {
-      ...prev,
       ...(trial.push_data as Record<string, unknown>),
-      joinedAt: (prev.joinedAt as number | undefined) ?? Date.now(),
+      joinedAt: (api.get(me)?.joinedAt as number | undefined) ?? Date.now(),
     };
 
     display_element.innerHTML = trial.message;
@@ -178,19 +185,20 @@ class MultiplayerMatchPlugin implements JsPsychPlugin<Info> {
 
     const isReady = this.makeReadiness(trial);
 
-    // Push our payload, then wait for readiness. (`communicate` was removed from the multiplayer API
-    // in jsPsych#3694; a push-then-wait chain is the replacement.) The two-argument `.then` is
-    // deliberate: the rejection handler catches only the push/wait rejection. It routes a genuine
-    // readiness timeout (`MultiplayerTimeoutError`) to the graceful timeout path, but rethrows any
-    // OTHER rejection (a backend/push failure) so it is never masqueraded as a timeout. A throw from
-    // buildMatches is a different animal again — readiness already certified the group, so a throw
-    // there means the CONFIG is wrong (a non-divisible group with leftover "error"); because it
-    // happens inside the resolve handler it propagates out of the returned promise and jsPsych halts
-    // loudly. We partition the RESOLVED snapshot, never a fresh getAll(), which would reopen the
-    // time-of-check gap.
+    // Write our payload, then wait for readiness. (`communicate` was removed from the multiplayer API
+    // in jsPsych#3694; a write-then-wait chain is the replacement.) The trailing `.catch` sorts the
+    // three ways this chain can reject: a cancelled wait (jsPsych tearing the experiment down) stops
+    // quietly, a genuine readiness timeout (`MultiplayerTimeoutError`) takes the graceful timeout
+    // path, and any OTHER rejection (a backend/write failure) rethrows so it is never masqueraded as
+    // a timeout. A throw from buildMatches is a different animal again — readiness already certified
+    // the group, so a throw there means the CONFIG is wrong (a non-divisible group with leftover
+    // "error"); it is neither a cancel nor a timeout, so it too propagates out of the returned
+    // promise and jsPsych halts loudly. We partition the RESOLVED snapshot, never a fresh getAll(),
+    // which would reopen the time-of-check gap. `timeout` passes straight through: core reads null,
+    // negative and non-finite as "wait forever".
     return api
-      .push(payload)
-      .then(() => api.wait(isReady, trial.timeout ?? undefined))
+      .update(payload)
+      .then(() => api.wait(isReady, trial.timeout))
       .then((group) => {
         const matchMap = buildMatches(group, {
           groupSize: trial.group_size,
@@ -218,15 +226,17 @@ class MultiplayerMatchPlugin implements JsPsychPlugin<Info> {
         });
       })
       .catch((err) => {
-        // A genuine readiness timeout ends the trial gracefully (timed_out: true). Match on the error
-        // NAME, not `instanceof` — that survives two loaded copies of jspsych. Any other rejection (a
-        // backend/push failure) is a real fault: rethrow so jsPsych halts loudly instead of it being
-        // mislabelled a timeout. Note this .catch runs AFTER the resolve handler, so a buildMatches
-        // throw would also land here — but such a throw is a config bug that likewise must propagate,
-        // and it is not a MultiplayerTimeoutError, so it rethrows too.
-        if ((err as { name?: string })?.name === "MultiplayerTimeoutError") {
-          return this.handleTimeout(trial);
-        }
+        // A CANCELLED wait means jsPsych is ending or aborting the experiment and has torn down the
+        // pending wait. Return quietly: no timeout path, no finishTrial, no log — finishing here
+        // would record a bogus timed_out trial on every abort. A genuine readiness TIMEOUT ends the
+        // trial gracefully (timed_out: true). Both are matched on the error NAME, not `instanceof` —
+        // that survives two loaded copies of jspsych. Any other rejection (a backend/write failure)
+        // is a real fault: rethrow so jsPsych halts loudly instead of it being mislabelled a timeout.
+        // Note this .catch runs AFTER the resolve handler, so a buildMatches throw would also land
+        // here — but such a throw is a config bug that likewise must propagate, and it is neither
+        // named error, so it rethrows too.
+        if (isMultiplayerCancelledError(err)) return;
+        if (isMultiplayerTimeoutError(err)) return this.handleTimeout(trial);
         throw err;
       });
   }
@@ -248,7 +258,10 @@ class MultiplayerMatchPlugin implements JsPsychPlugin<Info> {
     return enough;
   }
 
-  /** Readiness never reached within `timeout` (or a backend/push error). Fail loud, don't hang. */
+  /**
+   * Readiness was not reached within `timeout`. Fail loud, don't hang. This is the ONLY rejection
+   * routed here: a cancelled wait returns quietly and a backend/write failure rethrows.
+   */
   private handleTimeout(trial: TrialType<Info>) {
     setMyMatch(undefined); // clear any stale assignment so getMyMatch() reads as undefined
     try {

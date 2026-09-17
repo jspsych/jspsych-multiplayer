@@ -4,31 +4,58 @@ import { initJsPsych } from "jspsych";
 import { GroupSessionData, MultiplayerApiLike, Unsubscribe } from "./multiplayer-api";
 import MultiplayerReferenceGamePlugin from ".";
 
+/** Deep JSON copy, as core hands out of `get`/`getAll`/`subscribe` (undefined stays undefined). */
+function copy<T>(value: T): T {
+  return value === undefined ? value : JSON.parse(JSON.stringify(value));
+}
+
 // ---------------------------------------------------------------------------------------------------
 // Mock multiplayer API implementing the same local interface the plugin codes against — same
-// semantics as the chat plugin's mock: `push` REPLACES the participant's slot then notifies;
-// `subscribe` replays the snapshot on registration; `pushAs(id, data)` simulates a peer.
+// semantics as the chat plugin's mock, which mirrors core (jsPsych#3694) over the reference adapter:
+//   - `push` REPLACES the participant's slot then notifies; `update` merges onto this client's LAST
+//     WRITE (not onto the session), as core does, so it stays correct while the cache lags.
+//   - `get`/`getAll`/subscriber arguments are JSON COPIES — every subscriber gets its own, so no
+//     caller can reach the live session through something it read.
+//   - `cacheLagMs` models the real gap between a resolved write and the cache reflecting it.
+//   - `participantId` is a read-only getter: null before connect and after disconnect.
+//   - `subscribe` replays the snapshot on registration; `pushAs(id, data)` simulates a peer.
 // ---------------------------------------------------------------------------------------------------
 class MockApi implements MultiplayerApiLike {
   session: GroupSessionData = {};
   failNextPush = false;
+  /** When set, a `push` resolves at once but the session it writes only becomes visible this late. */
+  cacheLagMs: number | null = null;
+  /** This client's last successful write — the merge base `update` uses, as core uses `lastPushed`. */
+  private lastWrite: Record<string, unknown> | null = null;
   private subs = new Set<(g: GroupSessionData) => void>();
 
-  constructor(public participantId: string) {}
+  constructor(private id: string | null) {}
+
+  /** Read-only, like core's getter: null until connect() resolves and after disconnect(). */
+  get participantId(): string | null {
+    return this.id;
+  }
 
   get(id: string) {
-    return this.session[id];
+    return copy(this.session[id]);
   }
   getAll() {
-    return this.session;
+    return copy(this.session);
   }
   async push(data: Record<string, unknown>) {
+    if (this.id == null) throw new Error("MockApi: not connected");
     if (this.failNextPush) {
       this.failNextPush = false;
       throw new Error("network down");
     }
-    this.session[this.participantId] = data; // REPLACE, like the real adapter
-    this.fire();
+    const written = copy(data);
+    this.lastWrite = written;
+    if (this.cacheLagMs == null) this.commit(written);
+    else setTimeout(() => this.commit(written), this.cacheLagMs);
+  }
+  update(data: Record<string, unknown>) {
+    // Merge base is the last write, NOT `session[me]` — that is the whole point of core's update().
+    return this.push({ ...(this.lastWrite ?? this.session[this.id!] ?? {}), ...data });
   }
   subscribe(cb: (g: GroupSessionData) => void): Unsubscribe {
     this.subs.add(cb);
@@ -36,14 +63,18 @@ class MockApi implements MultiplayerApiLike {
     return () => this.subs.delete(cb);
   }
   pushAs(id: string, data: Record<string, unknown>) {
-    this.session[id] = data;
+    this.session[id] = copy(data);
     this.fire();
   }
   subCount() {
     return this.subs.size;
   }
+  private commit(data: Record<string, unknown>) {
+    this.session[this.id!] = data; // REPLACE, like the real adapter
+    this.fire();
+  }
   private fire() {
-    for (const cb of [...this.subs]) cb(this.getAll());
+    for (const cb of [...this.subs]) cb(this.getAll()); // each subscriber gets its own copy
   }
 }
 
@@ -122,6 +153,13 @@ const clickSlot = (el: HTMLElement, n: number) =>
 const submitBtn = (el: HTMLElement) => el.querySelector(`.${P}-submit`) as HTMLButtonElement;
 const feedbackText = (el: HTMLElement) =>
   (el.querySelector(`.${P}-feedback`) as HTMLElement).textContent ?? "";
+/** Fill the chat input and submit the chat form. */
+const sendChat = (el: HTMLElement, text: string) => {
+  (el.querySelector(`.${P}-chat-input`) as HTMLInputElement).value = text;
+  (el.querySelector(`.${P}-chat-form`) as HTMLFormElement).dispatchEvent(
+    new Event("submit", { cancelable: true }),
+  );
+};
 const run = (jsPsych: any, el: HTMLElement, params: Record<string, unknown>) =>
   new MultiplayerReferenceGamePlugin(jsPsych).trial(el, params as never);
 
@@ -505,6 +543,50 @@ describe("multiplayer-reference-game: chat, timeout, and the real pipeline", () 
     expect(el.querySelector(`.${P}-chat-log img`)).toBeNull();
   });
 
+  it("does not lose a chat message when two sends beat the session read (cache-lag crux)", async () => {
+    // The adapter's cache can still be empty when the SECOND send happens, even though the first
+    // write already resolved. Deriving the outgoing array from `api.get(me)` per send would build
+    // ["second"] and drop "first"; the local own-message array cannot.
+    const api = new MockApi("matcher");
+    api.cacheLagMs = 5;
+    const { jsPsych } = makeJsPsych(api);
+    const el = display();
+
+    run(jsPsych, el, { ...base, partner_id: "director" });
+    sendChat(el, "first");
+    sendChat(el, "second"); // sent while get(me) still shows nothing
+    expect(api.getAll().matcher).toBeUndefined(); // the cache really has not caught up yet
+
+    await new Promise((r) => setTimeout(r, 20));
+
+    const mine = api.getAll().matcher.reference_game_chat_r0 as any[];
+    expect(mine.map((m) => m.text)).toEqual(["first", "second"]);
+  });
+
+  it("submitting keeps a just-sent chat message (update merges, push would have replaced)", async () => {
+    // The latent race the switch to `update` closes: submitting used to read the whole slot and push
+    // it back, so a chat message the session read had not caught up with was silently dropped.
+    const api = new MockApi("matcher");
+    api.cacheLagMs = 5;
+    const { jsPsych } = makeJsPsych(api);
+    const el = display();
+
+    run(jsPsych, el, { ...base, partner_id: "director" });
+    sendChat(el, "is it the star?");
+    clickCell(el, "b"); // single target → submits immediately, before the cache reflects the chat
+
+    await new Promise((r) => setTimeout(r, 20));
+
+    const slot = api.getAll().matcher;
+    expect((slot.reference_game_chat_r0 as any[]).map((m) => m.text)).toEqual(["is it the star?"]);
+    expect((slot.reference_game as any)["0"].assignment).toEqual({ 1: "b" });
+  });
+
+  it("throws a clear error when participantId is null (adapter not connected yet)", () => {
+    const { jsPsych } = makeJsPsych(new MockApi(null));
+    expect(() => run(jsPsych, display(), { ...base })).toThrow(/participantId/);
+  });
+
   it("submits the current (partial) assignment on selection_timeout", () => {
     jest.useFakeTimers();
     try {
@@ -537,6 +619,7 @@ describe("multiplayer-reference-game: chat, timeout, and the real pipeline", () 
       participantId: api.participantId,
       get: api.get.bind(api),
       push: api.push.bind(api),
+      update: api.update.bind(api),
       getAll: api.getAll.bind(api),
       subscribe: api.subscribe.bind(api),
     };

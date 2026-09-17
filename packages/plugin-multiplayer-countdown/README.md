@@ -2,9 +2,9 @@
 
 A synchronized group timer for multiplayer jsPsych experiments, built on the multiplayer plugin API. Every participant pushes its own start timestamp on trial load, and each client derives the displayed time from the **minimum** timestamp across all slots — a coordination-free consensus (no elected anchor, no single point of failure) in the same spirit as [`plugin-multiplayer-role`](../plugin-multiplayer-role)'s ordering. Late joiners and page refreshes resume at the group's true remaining time for free.
 
-Like [`plugin-multiplayer-chat`](../plugin-multiplayer-chat), it is built on the multiplayer API's real-time **`subscribe`** primitive: the trial stays open, re-resolves the consensus start whenever a new (lower) timestamp arrives, and re-renders the clock on a ~100 ms interval, ending when its own derived time reaches `duration`.
+Like [`plugin-multiplayer-chat`](../plugin-multiplayer-chat), it is built on the multiplayer API's real-time **`subscribe`** primitive: the trial stays open, re-resolves the consensus start whenever a new (lower) timestamp arrives, and re-renders the clock on a ~100 ms tick, ending when its own derived time reaches `duration`.
 
-> **Status:** built against the jsPsych multiplayer API from [jsPsych#3694](https://github.com/jspsych/jsPsych/pull/3694), which is not yet released. The plugin codes against a local interface mirroring that API (`src/multiplayer-api.ts`) and reaches the real object with one cast — the single seam to re-verify once #3694 lands. Tests run against an in-memory mock, so no live group session is needed to develop it.
+> **Status:** built against the jsPsych multiplayer API from [jsPsych#3694](https://github.com/jspsych/jsPsych/pull/3694), which is not yet released. The plugin codes against a local interface mirroring that API (`src/multiplayer-api.ts`) and reaches `jsPsych.multiplayer` with one cast. Preview builds that exposed these methods on `jsPsych.pluginAPI` predate the current contract and are not supported. Tests run against an in-memory mock, so no live group session is needed to develop it.
 
 ## Prerequisites
 
@@ -44,7 +44,7 @@ await jsPsych.run(timeline);
 
 The multiplayer API's `push` **replaces** a participant's slot (it does not merge), so there is no shared slot an "anchor" could own. Instead each participant writes its own `Date.now()` under a namespaced key into its own slot, and the group start is the **minimum** timestamp across all slots. Min is order-independent, so every client converges on the same value with no coordination and no single participant dropping out can break the clock.
 
-Because `push` replaces the whole slot, the plugin reads your own slot first and pushes it back with only the countdown key changed, so other data you've pushed (e.g. a role from `plugin-multiplayer-role`, or `joinedAt`) is preserved. The push is **idempotent on refresh**: if your slot already carries a timestamp for this countdown, it is kept rather than overwritten, so a reload resumes at the group's actual remaining time.
+Because `push` replaces the whole slot, the plugin writes the timestamp with `update()` — a shallow merge of just the countdown key into your slot — so other data you've pushed (e.g. a role from `plugin-multiplayer-role`, or `joinedAt`) is preserved. The write is **idempotent on refresh**: the plugin reads your slot first and, if it already carries a timestamp for this countdown, keeps it rather than overwriting it, so a reload resumes at the group's actual remaining time.
 
 ## Limitations (read before you rely on end-synchronization)
 

@@ -96,7 +96,7 @@ export default class FirebaseAdapter implements MultiplayerAdapter {
   private connectPromise: Promise<void> | null = null;
   private readonly mirror: GroupSessionData = {};
   /** Last payload we pushed, re-sent after a reconnect so a transient blip can't erase us. */
-  private lastOwnData: Record<string, unknown> | null = null;
+  private lastOwnDataJson: string | null = null;
   /** Whether we've seen `.info/connected` go true at least once (so the FIRST true isn't a "reconnect"). */
   private hadFirstConnection = false;
 
@@ -156,6 +156,36 @@ export default class FirebaseAdapter implements MultiplayerAdapter {
   }
 
   private async doConnect(): Promise<void> {
+    try {
+      await this.openConnection();
+    } catch (err) {
+      // A failed connect() means the caller treats this adapter as unconnected and never calls
+      // disconnect(), so nothing else would release what we opened: the session listener, the
+      // .info/connected handler, and an owned app would all leak, and a retry would find
+      // `connected`/`backend` still set and resolve against a half-open connection.
+      this.abandonConnection();
+      throw err;
+    }
+  }
+
+  /** Release everything openConnection() may have opened, back to the pre-connect state. */
+  private abandonConnection(): void {
+    this.unsubscribeSession?.();
+    this.unsubscribeConnected?.();
+    this.unsubscribeSession = null;
+    this.unsubscribeConnected = null;
+    this.subscribers.clear();
+    for (const id of Object.keys(this.mirror)) delete this.mirror[id];
+    this.lastOwnDataJson = null;
+    this.hadFirstConnection = false;
+    this.connected = false;
+    const backend = this.backend;
+    this.backend = null;
+    // goOffline() is app-global — only safe when the backend owns the app (never on an injected one).
+    if (backend?.ownsApp) backend.goOffline();
+  }
+
+  private async openConnection(): Promise<void> {
     const backend = await this.backendFactory();
     this.backend = backend;
 
@@ -238,28 +268,33 @@ export default class FirebaseAdapter implements MultiplayerAdapter {
       );
     });
 
-    this.connected = true;
-
-    // Arm server-side ghost cleanup, then wire reconnect handling.
+    // Arm server-side ghost cleanup, then wire reconnect handling. `connected` flips only once
+    // everything is wired: if arming throws, connect() rejects, and an adapter that still looked
+    // connected would leak its listener and make a retry a silent no-op (see connect()'s guard).
     if (this.removeOnDisconnect) {
       await backend.onDisconnectRemove(this.slotPath());
     }
     this.unsubscribeConnected = backend.onConnectedChange((isConnected) => {
       void this.handleConnectionChange(isConnected);
     });
+
+    this.connected = true;
   }
 
   async push(data: Record<string, unknown>): Promise<void> {
     if (!this.connected || !this.backend) {
       throw new Error("FirebaseAdapter: push() called before connect(); call connect() first.");
     }
-    this.lastOwnData = data;
+    // Encode once and keep the string: the caller still owns `data` and may mutate it afterwards,
+    // which would otherwise change what a reconnect re-pushes.
+    const encoded = JSON.stringify(data);
+    this.lastOwnDataJson = encoded;
     // Store JSON-encoded so the payload survives RTDB's JSON coercion — raw, RTDB prunes empty
     // arrays/objects and coerces arrays to objects; the string round-trips those unchanged. (`undefined`
     // is still dropped, but JSON can't represent it either way.) The mirror updates from the echoed
     // onValue, not here (RTDB fires the local listener optimistically, so our own getAll() reflects
     // the write immediately after this resolves).
-    await this.backend.set(this.slotPath(), JSON.stringify(data));
+    await this.backend.set(this.slotPath(), encoded);
   }
 
   getAll(): GroupSessionData {
@@ -311,7 +346,7 @@ export default class FirebaseAdapter implements MultiplayerAdapter {
 
     this.subscribers.clear();
     for (const id of Object.keys(this.mirror)) delete this.mirror[id];
-    this.lastOwnData = null;
+    this.lastOwnDataJson = null;
     this.hadFirstConnection = false;
     this.connected = false;
     this.backend = null;
@@ -340,8 +375,8 @@ export default class FirebaseAdapter implements MultiplayerAdapter {
         await backend.onDisconnectRemove(this.slotPath());
         if (this.backend !== backend) return;
       }
-      if (this.lastOwnData !== null) {
-        await backend.set(this.slotPath(), JSON.stringify(this.lastOwnData));
+      if (this.lastOwnDataJson !== null) {
+        await backend.set(this.slotPath(), this.lastOwnDataJson);
       }
     } catch (err) {
       console.error("FirebaseAdapter: failed to restore own slot after reconnect", err);

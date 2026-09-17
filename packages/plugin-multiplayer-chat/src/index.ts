@@ -139,6 +139,12 @@ class MultiplayerChatPlugin implements JsPsychPlugin<Info> {
   trial(display_element: HTMLElement, trial: TrialType<Info>) {
     const api = resolveMultiplayerApi(this.jsPsych);
     const me = api.participantId;
+    if (me == null) {
+      throw new Error(
+        "multiplayer-chat: no participantId — the multiplayer adapter must be connected " +
+          "(await jsPsych.multiplayer.connect(adapter)) before this trial runs.",
+      );
+    }
     const dataKey = trial.data_key;
 
     const hasDuration = typeof trial.duration === "number" && trial.duration > 0;
@@ -239,10 +245,17 @@ class MultiplayerChatPlugin implements JsPsychPlugin<Info> {
     if (endButton && trial.end_button_label != null) endButton.textContent = trial.end_button_label;
 
     const start = performance.now();
+    // THIS client's own messages, kept locally and appended to — the same pattern as
+    // `plugin-multiplayer-draw`'s `ownStrokes`. Seeded ONCE from whatever is already in our slot
+    // (e.g. after a reload); never re-derived from `api.get(me)` afterwards. `get()` reads the
+    // adapter's cache, which may not yet reflect a write it has already confirmed, so rebuilding the
+    // array per send can silently drop the previous message when two sends land in quick succession.
+    // Core's `update()` coalescing does NOT save us: the array is built before `update()` is called.
+    let ownMessages: ChatMessage[] = readOwnMessages();
     // This participant's own outgoing sequence counter, seeded past the HIGHEST seq already in our
     // slot (e.g. after a reload) so ids stay unique. Seeding from the array length would collide
     // with an existing message if the array ever carried a seq gap.
-    let nextSeq = readOwnMessages().reduce((max, m) => Math.max(max, m.seq), -1) + 1;
+    let nextSeq = ownMessages.reduce((max, m) => Math.max(max, m.seq), -1) + 1;
     let ended = false;
     let unsubscribe: Unsubscribe | null = null;
     // `number`, not ReturnType<typeof setTimeout>: pluginAPI.setTimeout returns a numeric handle.
@@ -326,24 +339,24 @@ class MultiplayerChatPlugin implements JsPsychPlugin<Info> {
       }
       input.value = "";
 
-      // Read our OWN slot to derive the next message list. The push back below goes through
-      // `update`, which merges only the chat key into the slot (leaving any role/offer/… intact)
-      // rather than replacing it.
-      const mine = api.get(me) ?? {};
-      const own = mergeMessages({ [me]: mine }, dataKey).filter((m) => m.senderId === me);
-      const nextMessages = appendOwnMessage(own, text, me, nextSeq++, Date.now());
+      // Append to the LOCAL array rather than re-reading our slot: the adapter's cache can lag a
+      // confirmed write, so a get-then-rebuild here would drop the previous message. The write below
+      // goes through `update`, which merges only the chat key into the slot (leaving any
+      // role/offer/… intact) rather than replacing it.
+      ownMessages = appendOwnMessage(ownMessages, text, me, nextSeq++, Date.now());
 
       // Optimistic render: show our own message immediately instead of waiting for the adapter to
-      // echo the push back through subscribe. The echo (or a replay) is harmless because render is
-      // idempotent — mergeMessages de-duplicates by message id.
-      render({ ...api.getAll(), [me]: { ...mine, [dataKey]: nextMessages } });
+      // echo the push back through subscribe, rendering the same local array we just appended to.
+      // The echo (or a replay) is harmless because render is idempotent — mergeMessages
+      // de-duplicates by message id.
+      render({ ...api.getAll(), [me]: { ...(api.get(me) ?? {}), [dataKey]: ownMessages } });
 
-      // Best-effort send: a failed push shows an inline note rather than crashing the trial (unlike
-      // sync, where a push failure is fatal — here sending is recoverable). Do NOT roll nextSeq back
-      // on failure: pushes are fire-and-forget, so a later send may already have taken the next
-      // number, and reusing a seq would forge a duplicate id that mergeMessages' dedup silently
-      // drops. A skipped seq is harmless; a reused one loses data.
-      api.update({ [dataKey]: nextMessages }).catch(() => {
+      // Best-effort send: a failed write shows an inline note rather than crashing the trial (unlike
+      // sync, where a push failure is fatal — here sending is recoverable). Self-healing, like draw:
+      // the array carries the whole history, so the NEXT send resends anything a failed write lost.
+      // Do NOT roll nextSeq back on failure — a reused seq would forge a duplicate id that
+      // mergeMessages' dedup silently drops. A skipped seq is harmless; a reused one loses data.
+      api.update({ [dataKey]: ownMessages }).catch(() => {
         showSendError();
       });
     };

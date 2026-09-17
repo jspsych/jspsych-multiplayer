@@ -5,9 +5,8 @@
  * module. It ships via https://github.com/jspsych/jsPsych/pull/3694, which is not yet released — so
  * the published `jspsych` types carry no such module. Rather than take a build-time dependency on an
  * unmerged fork, the plugin codes against this minimal interface and reaches the real object through
- * `resolveMultiplayerApi()` (below) — the single seam to re-verify once #3694 lands.
- * The method shapes here were copied from that PR's `MultiplayerAPI` and confirmed against its
- * ultimatum-game examples.
+ * `resolveMultiplayerApi()` (below). The method shapes and the contract described here were copied
+ * from that PR's `MultiplayerAPI` and confirmed against its ultimatum-game examples.
  *
  * Only the members the wrapper actually calls are declared. Mock-based tests implement this same
  * interface, so the wrapper is exercised end-to-end with no live group session.
@@ -17,26 +16,45 @@
 export type GroupSessionData = Record<string, Record<string, unknown>>;
 
 export interface MultiplayerApiLike {
-  /** This participant's id within the group. `null` until the adapter has connected. */
-  participantId: string | null;
+  /** This participant's id within the group. Read-only: `null` until `connect()` resolves and after `disconnect()`. */
+  readonly participantId: string | null;
 
-  /** Write this participant's data into the shared group session. */
+  /**
+   * Write this participant's data into the shared group session. REPLACES this participant's slot
+   * (it does not merge) — use `update()` to merge keys into the slot instead. Rejects, rather than
+   * throwing synchronously, when the API is not connected.
+   */
   push(data: Record<string, unknown>): Promise<void>;
 
-  /** Read the full current group session (all participants). */
+  /**
+   * Shallow-merge `data` into this participant's slot and push the result. The merge base is this
+   * client's last successful write, so it does not depend on when the backend echoes writes back.
+   * One write is in flight at a time; calls made meanwhile merge into a single follow-up write
+   * (later calls win per key), so updating faster than the backend confirms cannot build a queue.
+   * Rejects when the API is not connected.
+   */
+  update(data: Record<string, unknown>): Promise<void>;
+
+  /** Read the full current group session (all participants). Returns a JSON copy; throws when not connected. */
   getAll(): GroupSessionData;
 
-  /** Read one participant's data. `undefined` if they haven't pushed yet. */
+  /** Read one participant's slot. `undefined` if they haven't pushed yet. Returns a JSON copy; throws when not connected. */
   get(participantId: string): Record<string, unknown> | undefined;
 
   /**
-   * Resolve with the group snapshot once `condition` returns true (fast-path if already true);
-   * reject with a `MultiplayerTimeoutError` if `timeout` ms elapse first. A throwing `condition`
-   * is treated as a programming error, not a timeout: the promise rejects with the error the
-   * predicate threw (whose `name` is therefore NOT `MultiplayerTimeoutError`). `undefined`
-   * timeout waits forever.
+   * Resolve with a JSON copy of the group snapshot once `condition` returns true (fast-path if it
+   * already is). Rejects with a `MultiplayerTimeoutError` if `timeout` ms elapse first — `null`,
+   * `undefined`, negative and non-finite values mean no timeout, while `0` times out at once.
+   * Rejects with a `MultiplayerCancelledError` when the wait is cancelled: `cancelAllSubscriptions()`,
+   * `disconnect()`, `abortExperiment()`, or the end of `jsPsych.run()`. A throwing `condition` is
+   * treated as a programming error, not a timeout: the promise rejects with the error the predicate
+   * threw (whose `name` is therefore neither of those two). Rejects, rather than throwing
+   * synchronously, when the API is not connected.
    */
-  wait(condition: (data: GroupSessionData) => boolean, timeout?: number): Promise<GroupSessionData>;
+  wait(
+    condition: (data: GroupSessionData) => boolean,
+    timeout?: number | null,
+  ): Promise<GroupSessionData>;
 }
 
 /**
@@ -57,20 +75,33 @@ export function isMultiplayerTimeoutError(e: unknown): e is Error {
 }
 
 /**
+ * The `name` of the error jsPsych#3694's `wait()` rejects with when the wait is cancelled —
+ * `cancelAllSubscriptions()`, `disconnect()`, `abortExperiment()`, or the end of `jsPsych.run()`.
+ * The class itself is not importable here (the published `jspsych` doesn't carry it yet), so the
+ * name string is the contract.
+ */
+export const MULTIPLAYER_CANCELLED_ERROR_NAME = "MultiplayerCancelledError";
+
+/**
+ * True when `e` is a cancelled `wait()`: the trial is being torn down, so the plugin should stop
+ * quietly rather than treat it as a timeout or a backend failure. Matches on `error.name` rather
+ * than `instanceof`, which breaks across duplicate loaded copies of jspsych.
+ */
+export function isMultiplayerCancelledError(e: unknown): e is Error {
+  return e instanceof Error && e.name === MULTIPLAYER_CANCELLED_ERROR_NAME;
+}
+
+/**
  * Reach the multiplayer API on a jsPsych instance.
  *
- * jsPsych#3694 moved this API from `jsPsych.pluginAPI` (where its members were flattened onto
- * jsPsych's general plugin-utility object) to its own `jsPsych.multiplayer` module, and removed the
- * old location rather than aliasing it. Neither spelling is in a released `jspsych`, so the
- * published types carry neither and both are reached with a cast.
- *
- * Preferring `multiplayer` with a `pluginAPI` fallback keeps this package working against both a
- * current preview build and an older one, instead of being stranded by whichever the experiment
- * happens to load. Drop the fallback once #3694 is released.
+ * jsPsych#3694 adds this API as jsPsych's own `jsPsych.multiplayer` module. It is not in a
+ * released `jspsych`, so the published types don't carry it and it is reached with a cast. Builds
+ * that exposed these methods on `jsPsych.pluginAPI` predate the current contract (synchronous
+ * throws, no cancellation, uncopied snapshots), so they are no longer supported.
  */
 export function resolveMultiplayerApi(jsPsych: unknown): MultiplayerApiLike {
-  const instance = jsPsych as { multiplayer?: unknown; pluginAPI?: unknown };
-  const api = (instance.multiplayer ?? instance.pluginAPI) as MultiplayerApiLike | undefined;
+  const instance = jsPsych as { multiplayer?: unknown };
+  const api = instance.multiplayer as MultiplayerApiLike | undefined;
   if (!api || typeof api.getAll !== "function") {
     throw new Error(
       "No multiplayer API found on the jsPsych instance. This plugin needs jsPsych core with " +

@@ -3,6 +3,7 @@ import { initJsPsych } from "jspsych";
 
 import {
   GroupSessionData,
+  MULTIPLAYER_CANCELLED_ERROR_NAME,
   MULTIPLAYER_TIMEOUT_ERROR_NAME,
   MultiplayerApiLike,
 } from "./multiplayer-api";
@@ -11,17 +12,28 @@ import MultiplayerReadyPlugin from ".";
 // ---------------------------------------------------------------------------------------------------
 // Mock multiplayer API implementing the same local interface the plugin codes against.
 //
-// `push` overwrites this participant's entry (mirroring the reference adapter's
-// overwrite-per-participant semantics) and notifies any waiter. `wait` honours the fast-path and,
-// failing that, re-checks the condition whenever a later push/seed lands; if it's still unmet when
-// `timeout` ms elapse, it rejects. Tests use real timers with short timeouts, so no fake-timer
-// plumbing is needed.
+// It mirrors the jsPsych#3694 contract, not just the shapes, so the tests can catch regressions
+// against it:
+//   • `push` REPLACES this participant's slot (it does not merge) and notifies any waiter.
+//   • `getAll` and the `wait` result are JSON deep copies, as in core — a test that mutated what it
+//     read would therefore not disturb the session, and object identity is never stable.
+//   • `wait` honours the fast-path and re-checks the condition whenever a later push/seed lands.
+//     `null`/`undefined`/negative/non-finite timeouts mean NO timeout; `0` times out at once.
+//   • `cancelAll()` rejects every pending wait with a MultiplayerCancelledError, the way core does
+//     on cancelAllSubscriptions()/disconnect()/abortExperiment()/the end of jsPsych.run().
+// Tests use real timers with short timeouts, so no fake-timer plumbing is needed.
 // ---------------------------------------------------------------------------------------------------
 class MockApi implements MultiplayerApiLike {
   session: GroupSessionData = {};
   private waiters: Array<() => void> = [];
+  private cancellers: Array<() => void> = [];
 
   constructor(public participantId: string) {}
+
+  /** A JSON deep copy, exactly as core hands snapshots out. */
+  private copy(): GroupSessionData {
+    return JSON.parse(JSON.stringify(this.session));
+  }
 
   /** Seed another participant's entry directly (simulating their push), notifying any waiter. */
   seed(id: string, data: Record<string, unknown>) {
@@ -29,38 +41,53 @@ class MockApi implements MultiplayerApiLike {
     this.waiters.forEach((notify) => notify());
   }
 
+  /** Cancel every pending wait, as core does when the experiment ends or is aborted. */
+  cancelAll() {
+    this.cancellers.splice(0).forEach((cancel) => cancel());
+  }
+
   async push(data: Record<string, unknown>) {
-    this.session[this.participantId] = data; // overwrite-per-participant, like the real adapter
+    this.session[this.participantId] = data; // push replaces the slot, like core
     this.waiters.forEach((notify) => notify());
   }
 
   getAll() {
-    return this.session;
+    return this.copy();
   }
 
-  wait(condition: (d: GroupSessionData) => boolean, timeout?: number) {
+  wait(condition: (d: GroupSessionData) => boolean, timeout?: number | null) {
     return new Promise<GroupSessionData>((resolve, reject) => {
-      if (condition(this.session)) return resolve(this.session); // fast path
+      if (condition(this.copy())) return resolve(this.copy()); // fast path
       let settled = false;
       const check = () => {
-        if (!settled && condition(this.session)) {
+        if (!settled && condition(this.copy())) {
           settled = true;
-          resolve(this.session);
+          resolve(this.copy());
         }
       };
       this.waiters.push(check);
-      if (timeout !== undefined) {
-        setTimeout(() => {
-          if (!settled) {
-            settled = true;
-            // Mirrors the real MultiplayerTimeoutError: a named Error, since the plugin can't
-            // import that class (see multiplayer-api.ts) and matches on `error.name` instead.
-            const err = new Error(`wait timed out after ${timeout}ms`);
-            err.name = MULTIPLAYER_TIMEOUT_ERROR_NAME;
-            reject(err);
-          }
-        }, timeout);
-      }
+      this.cancellers.push(() => {
+        if (settled) return;
+        settled = true;
+        // Mirrors the real MultiplayerCancelledError: matched by `name`, as the plugin can't import
+        // the class (see multiplayer-api.ts).
+        const err = new Error("wait cancelled");
+        err.name = MULTIPLAYER_CANCELLED_ERROR_NAME;
+        reject(err);
+      });
+      // null/undefined/negative/non-finite all mean "no timeout" under the #3694 contract; 0 does
+      // not — it times out immediately.
+      if (timeout == null || !Number.isFinite(timeout)) return;
+      setTimeout(() => {
+        if (!settled) {
+          settled = true;
+          // Mirrors the real MultiplayerTimeoutError: a named Error, since the plugin can't
+          // import that class (see multiplayer-api.ts) and matches on `error.name` instead.
+          const err = new Error(`wait timed out after ${timeout}ms`);
+          err.name = MULTIPLAYER_TIMEOUT_ERROR_NAME;
+          reject(err);
+        }
+      }, timeout as number);
     });
   }
 }
@@ -345,6 +372,40 @@ describe("multiplayer-ready plugin", () => {
 
     expect(on_timeout).not.toHaveBeenCalled();
     expect(finished).toHaveLength(0);
+  });
+
+  it("returns quietly when the wait is cancelled (experiment ending or aborting)", async () => {
+    // Core cancels pending waits on cancelAllSubscriptions()/disconnect()/abortExperiment()/the end
+    // of jsPsych.run(). The trial is being torn down, so a cancel must not be handled as a timeout
+    // (no on_timeout, no `timed_out: true` record), must not fail the trial, and must not log.
+    const api = new MockApi("p1");
+    const on_timeout = jest.fn();
+    const errSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+    const { jsPsych, finished } = makeJsPsych(api);
+    const plugin = new MultiplayerReadyPlugin(jsPsych as never);
+    const el = display();
+
+    const done = plugin.trial(el, {
+      expected_players: 2, // the second player never checks in
+      stimulus: "<p>Ready?</p>",
+      button_label: "I'm ready",
+      waiting_message: "<p>Waiting…</p>",
+      push_data: null,
+      timeout: null,
+      on_timeout,
+    } as never);
+
+    clickReady(el);
+    await flush();
+    expect(finished).toHaveLength(0); // still waiting for p2
+
+    api.cancelAll(); // the experiment ends / is aborted underneath the trial
+
+    await expect(done).resolves.toBeUndefined(); // stopped quietly, did not reject
+    expect(on_timeout).not.toHaveBeenCalled();
+    expect(finished).toHaveLength(0); // no bogus timed_out record
+    expect(errSpy).not.toHaveBeenCalled();
+    errSpy.mockRestore();
   });
 
   it("still finishes gracefully when getAll() throws on the rejection path (adapter torn down)", async () => {

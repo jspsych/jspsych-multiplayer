@@ -295,7 +295,8 @@ class MultiplayerDrawPlugin implements JsPsychPlugin<Info> {
     let undoneStrokes: Stroke[] = [];
     let nextSeq = ownStrokes.reduce((max, s) => Math.max(max, s.seq), -1) + 1;
     let activeStroke: Stroke | null = null;
-    let pushTimer: ReturnType<typeof setInterval> | null = null;
+    // `number`, not ReturnType<typeof setTimeout>: pluginAPI.setTimeout returns a numeric handle.
+    let pushTimer: number | null = null;
 
     // Per-author record of what THIS client has already painted, for incremental rendering.
     let paintStates = new Map<string, AuthorPaintState>();
@@ -415,12 +416,44 @@ class MultiplayerDrawPlugin implements JsPsychPlugin<Info> {
 
     // --- Pushing (throttled while a stroke is active) --------------------------------------------
     function flushPush() {
+      // Always writes the author's FULL current array, so the write is idempotent and order-
+      // insensitive: core coalesces updates issued while one is in flight into a single follow-up
+      // write, and the surviving one still carries every point drawn so far.
       api.update({ [dataKey]: ownStrokes }).catch(() => {
         // Self-healing: the NEXT scheduled push resends the full current array, so a dropped/failed
         // push here is repaired automatically. No manual retry needed.
         showSendError();
       });
     }
+
+    // Tick the in-progress stroke's pushes with a self-rescheduling `pluginAPI.setTimeout`, NOT a
+    // raw `setInterval`: jsPsych clears the timers it registered when a trial is ended from the
+    // outside (abortExperiment / endCurrentTimeline / a forced finishTrial), and it cancels
+    // multiplayer subscriptions there too. A raw interval would survive all of that — and an abort
+    // mid-stroke never runs `end()` and never delivers a pointerup (the canvas is gone), so it
+    // would go on pushing to a finished experiment forever. Rescheduling from inside the tick
+    // (rather than one registration up front) keeps every future tick inside jsPsych's registry.
+    const schedulePushTick = () => {
+      pushTimer = this.jsPsych.pluginAPI.setTimeout(
+        () => {
+          if (ended) {
+            pushTimer = null;
+            return;
+          }
+          flushPush();
+          schedulePushTick();
+        },
+        Math.max(1, trial.push_interval_ms),
+      );
+    };
+
+    /** Stop the push ticking. `pushTimer != null` only ever holds while a stroke is in progress. */
+    const stopPushTicking = () => {
+      if (pushTimer != null) {
+        clearTimeout(pushTimer);
+        pushTimer = null;
+      }
+    };
 
     function showSendError() {
       let note = display_element.querySelector(".jspsych-multiplayer-draw-error") as HTMLElement;
@@ -461,9 +494,7 @@ class MultiplayerDrawPlugin implements JsPsychPlugin<Info> {
       };
       ownStrokes.push(activeStroke);
       drawDot(activeStroke, p); // optimistic local feedback
-      if (pushTimer == null) {
-        pushTimer = setInterval(flushPush, Math.max(1, trial.push_interval_ms));
-      }
+      if (pushTimer == null) schedulePushTick();
       updateUndoRedoButtons();
     };
 
@@ -481,11 +512,8 @@ class MultiplayerDrawPlugin implements JsPsychPlugin<Info> {
       if (!activeStroke) return;
       activeStroke.done = true;
       activeStroke = null;
-      if (pushTimer != null) {
-        clearInterval(pushTimer);
-        pushTimer = null;
-      }
-      flushPush(); // final flush so the tail and done:true are not stuck behind the last interval tick
+      stopPushTicking();
+      flushPush(); // final flush so the tail and done:true are not stuck behind the last tick
     };
 
     const onPointerUp = () => endActiveStroke();
@@ -550,10 +578,7 @@ class MultiplayerDrawPlugin implements JsPsychPlugin<Info> {
     // construction — a participant only ever writes their own slot.
     const onUndoClick = () => {
       if (ended) return;
-      if (pushTimer != null) {
-        clearInterval(pushTimer); // stop the in-progress stroke's throttle timer, if any
-        pushTimer = null;
-      }
+      stopPushTicking(); // stop the in-progress stroke's throttle timer, if any
       activeStroke = null; // drop the in-progress stroke itself, before any further push
       if (ownStrokes.length > 0) {
         const undone = ownStrokes[ownStrokes.length - 1];
@@ -593,7 +618,8 @@ class MultiplayerDrawPlugin implements JsPsychPlugin<Info> {
     const end = (reason: EndReason) => {
       if (ended) return;
       ended = true;
-      endActiveStroke();
+      endActiveStroke(); // stops the push ticking too, but only when a stroke was active…
+      stopPushTicking(); // …so stop it unconditionally rather than lean on that invariant.
       unsubscribe?.();
       if (endTimer != null) clearTimeout(endTimer);
       if (resizeTimer != null) clearTimeout(resizeTimer);

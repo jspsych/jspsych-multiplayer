@@ -4,13 +4,25 @@ import { initJsPsych } from "jspsych";
 import { GroupSessionData, MultiplayerApiLike, Unsubscribe } from "./multiplayer-api";
 import MultiplayerChatPlugin from ".";
 
+/** Deep JSON copy, as core hands out of `get`/`getAll`/`subscribe` (undefined stays undefined). */
+function copy<T>(value: T): T {
+  return value === undefined ? value : JSON.parse(JSON.stringify(value));
+}
+
 // ---------------------------------------------------------------------------------------------------
 // Mock multiplayer API implementing the same local interface the plugin codes against.
 //
-// This is the first package to mock `subscribe`. Semantics mirror the reference adapter:
+// This is the first package to mock `subscribe`. Semantics mirror core (jsPsych#3694) over the
+// reference adapter:
 //   - `push` REPLACES this participant's slot (it does NOT merge — see the JATOS adapter's
 //     `groupSession.set`), then fires every subscriber. A merge mock would hide the exact bug the
 //     "preserves unrelated keys" test guards against.
+//   - `update` merges onto this client's LAST WRITE, not onto the session, exactly as core does —
+//     so it stays correct even while the adapter's cache lags behind a confirmed write.
+//   - `get`/`getAll`/subscriber arguments are JSON COPIES: mutating what a test (or the plugin)
+//     reads back must not reach the session.
+//   - `cacheLagMs` models the real gap between a resolved write and the cache reflecting it.
+//   - `participantId` is a read-only getter that is null before connect / after disconnect.
 //   - `subscribe` registers a callback, immediately replays the current snapshot (as core does), and
 //     returns an unsubscribe function.
 //   - `pushAs(id, data)` simulates a peer's push (also replace), firing subscribers.
@@ -23,29 +35,46 @@ class MockApi implements MultiplayerApiLike {
   failNextPush = false;
   /** When false, `push` still writes but does NOT notify subscribers (a non-echoing adapter). */
   echoPushes = true;
+  /**
+   * When set, a `push` RESOLVES immediately but the session it writes only becomes visible to
+   * `get`/`getAll`/subscribers this many ms later — the lag a real adapter's cache has behind a
+   * write the backend has already confirmed.
+   */
+  cacheLagMs: number | null = null;
+  /** This client's last successful write — the merge base `update` uses, as core uses `lastPushed`. */
+  private lastWrite: Record<string, unknown> | null = null;
   private subs = new Set<(g: GroupSessionData) => void>();
 
-  constructor(public participantId: string) {}
+  constructor(private id: string | null) {}
+
+  /** Read-only, like core's getter: null until connect() resolves and after disconnect(). */
+  get participantId(): string | null {
+    return this.id;
+  }
 
   get(id: string) {
-    return this.session[id];
+    return copy(this.session[id]);
   }
 
   getAll() {
-    return this.session;
+    return copy(this.session);
   }
 
   async push(data: Record<string, unknown>) {
+    if (this.id == null) throw new Error("MockApi: not connected");
     if (this.failNextPush) {
       this.failNextPush = false;
       throw new Error("network down");
     }
-    this.session[this.participantId] = data; // REPLACE, like the real adapter
-    if (this.echoPushes) this.fire();
+    const written = copy(data);
+    this.lastWrite = written;
+    if (this.cacheLagMs == null) this.commit(written);
+    else setTimeout(() => this.commit(written), this.cacheLagMs);
   }
 
   update(data: Record<string, unknown>) {
-    return this.push({ ...(this.session[this.participantId] ?? {}), ...data });
+    // Merge base is the last write, NOT `session[me]` — that is the whole point of core's update().
+    return this.push({ ...(this.lastWrite ?? this.session[this.id!] ?? {}), ...data });
   }
 
   subscribe(cb: (g: GroupSessionData) => void): Unsubscribe {
@@ -56,7 +85,7 @@ class MockApi implements MultiplayerApiLike {
 
   /** Simulate a peer pushing into their own slot. */
   pushAs(id: string, data: Record<string, unknown>) {
-    this.session[id] = data;
+    this.session[id] = copy(data);
     this.fire();
   }
 
@@ -70,8 +99,13 @@ class MockApi implements MultiplayerApiLike {
     this.fire();
   }
 
+  private commit(data: Record<string, unknown>) {
+    this.session[this.id!] = data; // REPLACE, like the real adapter
+    if (this.echoPushes) this.fire();
+  }
+
   private fire() {
-    for (const cb of [...this.subs]) cb(this.getAll());
+    for (const cb of [...this.subs]) cb(this.getAll()); // each subscriber gets its own copy
   }
 }
 
@@ -341,15 +375,51 @@ describe("multiplayer-chat plugin", () => {
     expect(note).not.toBeNull();
     expect(note.textContent).toMatch(/try again/i);
 
-    send(el, "second"); // pushes are fire-and-forget, so this may race the failure callback
+    send(el, "second"); // writes are fire-and-forget, so this may race the failure callback
     await flush();
 
-    // "lost" never reached the adapter; "second" must have taken a FRESH seq. Rolling the counter
-    // back on failure would give "second" the same id as an in-flight/optimistic "lost", and
-    // mergeMessages' dedup would silently drop one of them.
+    // "second" must take a FRESH seq. Rolling the counter back on failure would give it the same id
+    // as the optimistically-rendered "lost", and mergeMessages' dedup would silently drop one of
+    // them. The write is self-healing, so "lost" — which the participant has already seen on screen
+    // — rides along on the next send rather than being stranded in this client's view forever.
     const mine = api.getAll().me.chat_messages as any[];
-    expect(mine).toHaveLength(1);
-    expect(mine[0]).toMatchObject({ text: "second", seq: 1 });
+    expect(mine).toHaveLength(2);
+    expect(mine[0]).toMatchObject({ text: "lost", seq: 0 });
+    expect(mine[1]).toMatchObject({ text: "second", seq: 1 });
+  });
+
+  it("does not lose a message when two sends beat the session read (the cache-lag crux)", async () => {
+    // The adapter's cache can still be empty when the SECOND send happens, even though the first
+    // write already resolved. Deriving the outgoing array from `api.get(me)` per send would build
+    // ["second"] and drop "first"; the local own-message array cannot. Core's update() coalescing
+    // does not cover this — the array is built before update() is ever called.
+    const api = new MockApi("me");
+    api.cacheLagMs = 5;
+    const { jsPsych } = makeJsPsych(api);
+    const el = display();
+
+    await new MultiplayerChatPlugin(jsPsych as never).trial(el, { ...base } as never);
+    send(el, "first");
+    send(el, "second"); // sent while get(me) still shows nothing
+    expect(api.getAll().me).toBeUndefined(); // the cache really has not caught up yet
+
+    await new Promise((r) => setTimeout(r, 20));
+
+    const mine = api.getAll().me.chat_messages as any[];
+    expect(mine.map((m) => m.text)).toEqual(["first", "second"]);
+    expect(messages(el)).toEqual([
+      ["You", "first"],
+      ["You", "second"],
+    ]);
+  });
+
+  it("throws a clear error when participantId is null (adapter not connected yet)", () => {
+    const api = new MockApi(null);
+    const { jsPsych } = makeJsPsych(api);
+
+    expect(() =>
+      new MultiplayerChatPlugin(jsPsych as never).trial(display(), { ...base } as never),
+    ).toThrow(/participantId/);
   });
 
   it("seeds the seq counter past a gap in the existing own-message array (no id collision)", async () => {

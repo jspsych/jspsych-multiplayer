@@ -3,19 +3,25 @@ import { initJsPsych } from "jspsych";
 
 import {
   GroupSessionData,
+  MULTIPLAYER_CANCELLED_ERROR_NAME,
   MULTIPLAYER_TIMEOUT_ERROR_NAME,
   MultiplayerApiLike,
 } from "./multiplayer-api";
 import MultiplayerSyncPlugin from ".";
 
+/** Every read the real API hands out is a JSON deep copy, so the mock hands out copies too. */
+const jsonCopy = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
+
 // ---------------------------------------------------------------------------------------------------
 // Mock multiplayer API implementing the same local interface the plugin codes against.
 //
 // `push` overwrites this participant's entry (mirroring the reference adapter's
-// overwrite-per-participant semantics) and notifies any waiter. `wait` honours the fast-path and,
-// failing that, re-checks the condition whenever a later push/seed lands; if it's still unmet when
-// `timeout` ms elapse, it rejects. Tests use real timers with short timeouts, so no fake-timer
-// plumbing is needed.
+// overwrite-per-participant semantics) and notifies any waiter; every read hands back a JSON copy
+// rather than the live session object. `wait` honours the fast-path and, failing that, re-checks the
+// condition whenever a later push/seed lands; if it's still unmet when a finite, non-negative
+// `timeout` elapses, it rejects, and `cancelAllWaits()` rejects it the way core does when the
+// experiment ends or aborts. Tests use real timers with short timeouts, so no fake-timer plumbing is
+// needed.
 //
 // The published `jspsych` in this repo has no multiplayer API, so the fork's real-adapter tests
 // can't run here; this mock + direct trial() calls exercise the same logic without a live group
@@ -25,36 +31,58 @@ import MultiplayerSyncPlugin from ".";
 class MockApi implements MultiplayerApiLike {
   session: GroupSessionData = {};
   private waiters: Array<() => void> = [];
+  private cancellers: Array<(err: Error) => void> = [];
 
   constructor(public participantId: string) {}
 
   /** Seed another participant's entry directly (simulating their push), notifying any waiter. */
   seed(id: string, data: Record<string, unknown>) {
-    this.session[id] = data;
+    this.session[id] = jsonCopy(data);
     this.waiters.forEach((notify) => notify());
   }
 
   async push(data: Record<string, unknown>) {
-    this.session[this.participantId] = data; // overwrite-per-participant, like the real adapter
+    this.session[this.participantId] = jsonCopy(data); // overwrite-per-participant, like the real adapter
     this.waiters.forEach((notify) => notify());
   }
 
   getAll() {
-    return this.session;
+    return this.snapshot();
   }
 
-  wait(condition: (d: GroupSessionData) => boolean, timeout?: number) {
+  /**
+   * The JSON copy every read hands out. `wait` goes through this rather than `getAll()` so a test
+   * that makes `getAll()` throw (an adapter torn down mid-trial) only affects the plugin's own reads.
+   */
+  private snapshot(): GroupSessionData {
+    return jsonCopy(this.session);
+  }
+
+  /** Reject every pending wait the way core does on abortExperiment / disconnect / run() ending. */
+  cancelAllWaits() {
+    const err = new Error("The multiplayer wait was cancelled.");
+    err.name = MULTIPLAYER_CANCELLED_ERROR_NAME;
+    this.cancellers.splice(0).forEach((cancel) => cancel(err));
+  }
+
+  wait(condition: (d: GroupSessionData) => boolean, timeout?: number | null) {
     return new Promise<GroupSessionData>((resolve, reject) => {
-      if (condition(this.session)) return resolve(this.session); // fast path
+      if (condition(this.snapshot())) return resolve(this.snapshot()); // fast path
       let settled = false;
       const check = () => {
-        if (!settled && condition(this.session)) {
+        if (!settled && condition(this.snapshot())) {
           settled = true;
-          resolve(this.session);
+          resolve(this.snapshot());
         }
       };
       this.waiters.push(check);
-      if (timeout !== undefined) {
+      this.cancellers.push((err) => {
+        if (settled) return;
+        settled = true;
+        reject(err);
+      });
+      // null / undefined / negative / non-finite all mean "no timeout" (jsPsych#3694); 0 times out at once.
+      if (timeout != null && Number.isFinite(timeout) && timeout >= 0) {
         setTimeout(() => {
           if (!settled) {
             settled = true;
@@ -366,36 +394,33 @@ describe("multiplayer-sync plugin", () => {
     expect(typeof data.wait_time).toBe("number");
   });
 
-  it("runs against an older preview build that exposes the API on pluginAPI", async () => {
-    // The sibling test above covers the current location. jsPsych#3694 moved the API to its own
-    // `multiplayer` module and removed the old one, so a published plugin has to keep working
-    // against a preview build that predates the move — here the members are grafted onto
-    // `pluginAPI` and no `multiplayer` module exists, exercising resolveMultiplayerApi's fallback
-    // through the real pipeline rather than only as a unit (see multiplayer-api.spec.ts).
+  it("stops quietly when the wait is cancelled (abort / end of run)", async () => {
+    // jsPsych#3694 cancels pending waits on abortExperiment(), disconnect(), and at the end of
+    // jsPsych.run(). That is not a timeout and not a backend failure: the trial is being torn down,
+    // so it must not call on_timeout, must not finish a trial that no longer exists, and must not
+    // log — it just stops.
+    const errSpy = jest.spyOn(console, "error").mockImplementation(() => {});
     const api = new MockApi("p1");
-    const jsPsych = initJsPsych();
-    Object.assign(jsPsych.pluginAPI, {
-      push: api.push.bind(api),
-      getAll: api.getAll.bind(api),
-      wait: api.wait.bind(api),
-    });
-    expect((jsPsych as unknown as { multiplayer?: unknown }).multiplayer).toBeUndefined();
+    const on_timeout = jest.fn();
+    const { jsPsych, finished } = makeJsPsych(api);
+    const plugin = new MultiplayerSyncPlugin(jsPsych as never);
 
-    const { getData, expectFinished } = await startTimeline(
-      [
-        {
-          type: MultiplayerSyncPlugin,
-          push_data: { ready: true },
-          wait_for: (group: GroupSessionData) => Object.keys(group).length >= 1,
-        },
-      ],
-      jsPsych,
-    );
+    const done = plugin.trial(display(), {
+      push_data: { ready: true },
+      wait_for: () => false, // never satisfied, so the wait is pending when it is cancelled
+      message: "<p>Waiting…</p>",
+      timeout: null,
+      on_timeout,
+      minimum_wait: 0,
+    } as never);
+    await flush();
 
-    await expectFinished();
+    api.cancelAllWaits();
+    await expect(done).resolves.toBeUndefined(); // stopped, not rejected
 
-    const data = getData().values()[0];
-    expect(data.group).toEqual({ p1: { ready: true } });
-    expect(data.timed_out).toBe(false);
+    expect(on_timeout).not.toHaveBeenCalled();
+    expect(finished).toHaveLength(0);
+    expect(errSpy).not.toHaveBeenCalled();
+    errSpy.mockRestore();
   });
 });
