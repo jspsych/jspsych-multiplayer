@@ -9,7 +9,7 @@
     <script src="jatos.js"></script>
     <!-- jsPsych core MUST carry the multiplayer API (jsPsych#3694). The published `jspsych` on
          unpkg does not yet, so this loads it as a placeholder — swap in a build of #3694 to run. -->
-    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@a6e05be017bcadf6ca208ed2fc0ac79e438c9626/packages/jspsych/dist/index.browser.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@49e6a936151ede3f3ce12cac9b1af88daed3ca7e/packages/jspsych/dist/index.browser.min.js"></script>
     <script src="https://unpkg.com/@jspsych/plugin-call-function"></script>
     <script src="https://unpkg.com/@jspsych/plugin-html-button-response"></script>
     <script src="https://unpkg.com/@jspsych/plugin-html-keyboard-response"></script>
@@ -22,7 +22,7 @@
          convenience, but see the security note in the header comment below. -->
     <script src="protocol.js"></script>
     <script src="questions.js"></script>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@a6e05be017bcadf6ca208ed2fc0ac79e438c9626/packages/jspsych/css/jspsych.css" />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@49e6a936151ede3f3ce12cac9b1af88daed3ca7e/packages/jspsych/css/jspsych.css" />
     <style>
       * { box-sizing: border-box; margin: 0; padding: 0; }
       body { font-family: sans-serif; background: #0f2b38; color: #fff; min-height: 100vh; }
@@ -377,6 +377,21 @@
         // Connect the network backend before running. Every multiplayer trial below talks to the
         // group session through this adapter; nothing about the timeline is JATOS-specific.
         await jsPsych.multiplayer.connect(new jsPsychAdapterMultiplayerJatos());
+
+        // A reload gives this participant a new page load under the same ID. The group has moved on
+        // without them, so they can't rejoin: say so instead of starting the quiz over.
+        if (jsPsych.multiplayer.previousInstance) {
+          await jsPsych.run([
+            {
+              type: jsPsychHtmlButtonResponse,
+              stimulus:
+                "<p>You reloaded the page, so you can't rejoin this quiz.</p>" +
+                "<p>Thank you for taking part.</p>",
+              choices: ["Finish"],
+            },
+          ]);
+          return;
+        }
 
         let myName         = "";
         let hostId         = null;

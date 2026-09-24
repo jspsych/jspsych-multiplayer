@@ -641,9 +641,35 @@ var jsPsychModule = (function (exports) {
 	function fromJson(json) {
 	  return deepFreeze(JSON.parse(json));
 	}
+	const RESERVED_KEY = "$mp";
+	function isSlotMeta(value) {
+	  const meta = value;
+	  return typeof meta === "object" && meta !== null && typeof meta.instance === "string" && typeof meta.epoch === "number";
+	}
+	function splitMeta(raw) {
+	  const data = {};
+	  const metas = {};
+	  for (const [id, slot] of Object.entries(raw)) {
+	    if (slot === null || typeof slot !== "object" || !(RESERVED_KEY in slot)) {
+	      data[id] = slot;
+	      continue;
+	    }
+	    const { [RESERVED_KEY]: meta, ...rest } = slot;
+	    if (isSlotMeta(meta)) {
+	      metas[id] = meta;
+	    }
+	    if (!isSlotMeta(meta) || meta.written) {
+	      data[id] = Object.freeze(rest);
+	    }
+	  }
+	  return { data, metas };
+	}
 	function assertRecord(data) {
 	  if (data === null || typeof data !== "object" || Array.isArray(data)) {
 	    throw new TypeError("MultiplayerAPI: data must be a plain object of JSON values.");
+	  }
+	  if (Object.prototype.hasOwnProperty.call(data, RESERVED_KEY)) {
+	    throw new TypeError(`MultiplayerAPI: "${RESERVED_KEY}" is reserved for the multiplayer API.`);
 	  }
 	}
 	function newBatch() {
@@ -656,17 +682,24 @@ var jsPsychModule = (function (exports) {
 	  return { promise, resolve, reject };
 	}
 	class MultiplayerSession {
-	  constructor(connection, options) {
+	  constructor(connection, options, identity) {
 	    this.connection = connection;
 	    this.options = options;
+	    this.identity = identity;
 	    this.currentStatus = "connected";
 	    /** Why the session closed; pending and later waits reject with it. */
 	    this.closeReason = null;
 	    /** Memoized so overlapping disconnect() calls close the connection once. */
 	    this.closing = null;
-	    /** The adapter's latest session data, as a frozen copy, and its JSON text. */
+	    /**
+	     * The adapter's latest session data as a frozen copy with the reserved key
+	     * removed, the JSON text of the raw and the cleaned data, and each
+	     * participant's reserved bookkeeping.
+	     */
 	    this.remote = {};
 	    this.remoteJson = "{}";
+	    this.remoteDataJson = "{}";
+	    this.metas = {};
 	    /** True when the backend is known to hold the current slot. */
 	    this.slotConfirmed = true;
 	    /** Frozen snapshot shared by every reader: `remote` with `slot` on top. */
@@ -674,6 +707,17 @@ var jsPsychModule = (function (exports) {
 	    this.presenceData = {};
 	    this.presenceStatus = /* @__PURE__ */ new Map();
 	    this.awayTimers = /* @__PURE__ */ new Map();
+	    /** Each participant's page load, as last seen while they were connected. */
+	    this.knownInstance = /* @__PURE__ */ new Map();
+	    /**
+	     * Each absent participant's bookkeeping as of when they dropped out (null if
+	     * they had none). They count as back only after a write made since then.
+	     */
+	    this.dropMeta = /* @__PURE__ */ new Map();
+	    /** `${id}\n${instance}` for every restart already reported. */
+	    this.restartsReported = /* @__PURE__ */ new Set();
+	    /** Callbacks to researcher code, run once the session's state is settled. */
+	    this.events = [];
 	    this.listeners = /* @__PURE__ */ new Set();
 	    this.pendingWaits = /* @__PURE__ */ new Set();
 	    this.notifying = false;
@@ -690,9 +734,14 @@ var jsPsychModule = (function (exports) {
 	    this.participantId = connection.participantId;
 	    this.dropoutTimeout = options.dropoutTimeout === void 0 ? DEFAULT_DROPOUT_TIMEOUT : toTimeout(options.dropoutTimeout);
 	    this.remoteJson = JSON.stringify(connection.getAll() ?? {});
-	    this.remote = fromJson(this.remoteJson);
+	    const { data, metas } = splitMeta(fromJson(this.remoteJson));
+	    this.remote = data;
+	    this.remoteDataJson = JSON.stringify(data);
+	    this.metas = metas;
 	    this.slot = this.remote[this.participantId];
 	    this.slotJson = this.slot === void 0 ? void 0 : JSON.stringify(this.slot);
+	    const ownMeta = metas[this.participantId];
+	    this.previousInstance = ownMeta && ownMeta.instance !== identity.instance ? ownMeta.instance : null;
 	    this.refreshPresence();
 	    this.rebuild();
 	  }
@@ -700,7 +749,7 @@ var jsPsychModule = (function (exports) {
 	   * Connect with an adapter. Once `signal` is aborted this rejects, but only
 	   * after any connection the adapter opened has been closed.
 	   */
-	  static async open(adapter, signal, options) {
+	  static async open(adapter, signal, options, identity) {
 	    const cancelled = () => new MultiplayerCancelledError("MultiplayerAPI: connect() was cancelled before it finished.");
 	    if (signal.aborted) {
 	      throw cancelled();
@@ -728,11 +777,12 @@ var jsPsychModule = (function (exports) {
 	      throw cancelled();
 	    }
 	    try {
-	      session = new MultiplayerSession(connection, options);
+	      session = new MultiplayerSession(connection, options, identity);
 	    } catch (e) {
 	      await closeQuietly();
 	      throw e;
 	    }
+	    session.announce();
 	    return session;
 	  }
 	  /** This client's connection status. */
@@ -804,6 +854,33 @@ var jsPsychModule = (function (exports) {
 	    }
 	    return promise;
 	  }
+	  /**
+	   * Push this page's identity with a new epoch, so the group can tell that this
+	   * participant is (back) on this page load. Runs on connect and whenever the
+	   * connection recovers.
+	   */
+	  announce() {
+	    if (this.isClosed) {
+	      return;
+	    }
+	    this.identity.epoch++;
+	    this.slotConfirmed = false;
+	    if (!this.nextBatch) {
+	      this.nextBatch = newBatch();
+	      this.nextBatch.promise.catch(() => {
+	      });
+	    }
+	    this.requestSend();
+	  }
+	  /** The slot as pushed: this participant's data plus the reserved bookkeeping. */
+	  payload() {
+	    const meta = {
+	      instance: this.identity.instance,
+	      epoch: this.identity.epoch,
+	      written: this.slot !== void 0
+	    };
+	    return deepFreeze({ ...this.slot, [RESERVED_KEY]: meta });
+	  }
 	  /** Start the sender if it's idle; a running sender picks up the change itself. */
 	  requestSend() {
 	    this.hasUnsentChanges = true;
@@ -820,14 +897,15 @@ var jsPsychModule = (function (exports) {
 	    this.sending = true;
 	    try {
 	      while (this.hasUnsentChanges && !this.isClosed) {
-	        const snapshot = this.slot;
+	        const slot = this.slot;
+	        const epoch = this.identity.epoch;
 	        const batch = this.nextBatch;
 	        this.hasUnsentChanges = false;
 	        this.nextBatch = null;
 	        this.inFlightBatch = batch;
 	        try {
-	          await this.connection.push(snapshot);
-	          if (snapshot === this.slot) {
+	          await this.connection.push(this.payload());
+	          if (slot === this.slot && epoch === this.identity.epoch) {
 	            this.slotConfirmed = true;
 	          }
 	          batch.resolve();
@@ -1018,9 +1096,15 @@ var jsPsychModule = (function (exports) {
 	    try {
 	      const json = JSON.stringify(this.connection.getAll() ?? {});
 	      if (json !== this.remoteJson) {
-	        this.remote = fromJson(json);
 	        this.remoteJson = json;
-	        dataChanged = true;
+	        const { data, metas } = splitMeta(fromJson(json));
+	        this.metas = metas;
+	        const dataJson = JSON.stringify(data);
+	        if (dataJson !== this.remoteDataJson) {
+	          this.remote = data;
+	          this.remoteDataJson = dataJson;
+	          dataChanged = true;
+	        }
 	      }
 	    } catch (e) {
 	      console.error("MultiplayerAPI: could not read the adapter's session data", e);
@@ -1030,6 +1114,7 @@ var jsPsychModule = (function (exports) {
 	      this.rebuild();
 	      this.notify();
 	    }
+	    this.flushEvents();
 	  }
 	  handleStatus(status) {
 	    if (this.isClosed || status === this.currentStatus) {
@@ -1047,10 +1132,12 @@ var jsPsychModule = (function (exports) {
 	        if (presence === "away") this.startAwayTimer(id);
 	      }
 	      this.refreshPresence();
+	      this.announce();
 	    }
 	    this.rebuild();
 	    this.notify();
 	    this.reportStatus();
+	    this.flushEvents();
 	  }
 	  reportStatus() {
 	    try {
@@ -1084,22 +1171,78 @@ var jsPsychModule = (function (exports) {
 	    let changed = false;
 	    for (const id of ids) {
 	      const current = this.presenceStatus.get(id);
-	      if (current === "left") {
-	        continue;
-	      }
-	      if (connectedNow.has(id)) {
-	        if (current !== "connected") {
-	          this.presenceStatus.set(id, "connected");
-	          this.clearAwayTimer(id);
+	      const meta = this.metas[id];
+	      if (!connectedNow.has(id)) {
+	        if (current === void 0 || current === "connected") {
+	          this.presenceStatus.set(id, "away");
+	          this.dropMeta.set(id, meta ?? null);
+	          this.startAwayTimer(id);
 	          changed = true;
 	        }
-	      } else if (current !== "away") {
-	        this.presenceStatus.set(id, "away");
-	        this.startAwayTimer(id);
+	        continue;
+	      }
+	      if (current === void 0) {
+	        this.presenceStatus.set(id, "connected");
+	        if (meta) this.knownInstance.set(id, meta.instance);
 	        changed = true;
+	      } else if (current === "connected") {
+	        const known = this.knownInstance.get(id);
+	        if (meta && known !== void 0 && meta.instance !== known) {
+	          changed = this.markRestarted(id, meta, known) || changed;
+	        } else if (meta) {
+	          this.knownInstance.set(id, meta.instance);
+	        }
+	      } else {
+	        const drop = this.dropMeta.get(id) ?? null;
+	        if (!meta) {
+	          continue;
+	        }
+	        if (drop && meta.instance !== drop.instance) {
+	          changed = this.markRestarted(id, meta, drop.instance) || changed;
+	        } else if (!drop || meta.epoch > drop.epoch) {
+	          this.presenceStatus.set(id, "connected");
+	          this.clearAwayTimer(id);
+	          this.dropMeta.delete(id);
+	          this.knownInstance.set(id, meta.instance);
+	          if (current === "left") {
+	            this.events.push(() => this.options.onParticipantRejoined?.(id));
+	          }
+	          changed = true;
+	        }
 	      }
 	    }
 	    return changed;
+	  }
+	  /**
+	   * A participant came back from a new page load, so their experiment restarted.
+	   * They stay (or become) `left`. Returns whether their presence changed.
+	   */
+	  markRestarted(id, meta, previous) {
+	    const key = `${id}
+${meta.instance}`;
+	    if (this.restartsReported.has(key)) {
+	      return false;
+	    }
+	    this.restartsReported.add(key);
+	    this.dropMeta.set(id, { instance: previous, epoch: Infinity, written: true });
+	    this.clearAwayTimer(id);
+	    const wasLeft = this.presenceStatus.get(id) === "left";
+	    this.presenceStatus.set(id, "left");
+	    if (!wasLeft) {
+	      this.events.push(() => this.options.onParticipantLeft?.(id));
+	    }
+	    this.events.push(() => this.options.onParticipantRestarted?.(id));
+	    return !wasLeft;
+	  }
+	  /** Run queued researcher callbacks, after the session's state and snapshots are settled. */
+	  flushEvents() {
+	    for (const event of this.events.splice(0)) {
+	      try {
+	        event();
+	      } catch (e) {
+	        console.error("MultiplayerAPI: a participant callback threw", e);
+	      }
+	    }
 	  }
 	  startAwayTimer(id) {
 	    this.clearAwayTimer(id);
@@ -1131,11 +1274,8 @@ var jsPsychModule = (function (exports) {
 	    this.presenceStatus.set(id, "left");
 	    this.rebuild();
 	    this.notify();
-	    try {
-	      this.options.onParticipantLeft?.(id);
-	    } catch (e) {
-	      console.error("MultiplayerAPI: onParticipantLeft threw", e);
-	    }
+	    this.events.push(() => this.options.onParticipantLeft?.(id));
+	    this.flushEvents();
 	  }
 	  // ---------------------------------------------------------------- closing
 	  /**
@@ -1175,6 +1315,14 @@ var jsPsychModule = (function (exports) {
 	  constructor() {
 	    this.current = null;
 	    this.connecting = null;
+	    /**
+	     * This page load's identity, shared by every session opened from it, so the
+	     * group can tell a reconnect of this page from a reload.
+	     */
+	    this.identity = {
+	      instance: Math.random().toString(36).slice(2) + Date.now().toString(36),
+	      epoch: 0
+	    };
 	    autoBind$1(this);
 	  }
 	  /** The current session. Null until connect() resolves and after disconnect(). */
@@ -1184,6 +1332,14 @@ var jsPsychModule = (function (exports) {
 	  /** This participant's ID within the group. Null until connect() resolves and after disconnect(). */
 	  get participantId() {
 	    return this.current?.participantId ?? null;
+	  }
+	  /**
+	   * Set when this participant's slot came from an earlier page load: they
+	   * reloaded or reopened the study, so the group is ahead of them. Null
+	   * otherwise, and when there is no session.
+	   */
+	  get previousInstance() {
+	    return this.current?.previousInstance ?? null;
 	  }
 	  /** The current session's connection status, or null when there is no session. */
 	  get status() {
@@ -1219,7 +1375,7 @@ var jsPsychModule = (function (exports) {
 	    }
 	    const connecting = {
 	      controller,
-	      attempt: MultiplayerSession.open(adapter, controller.signal, sessionOptions)
+	      attempt: MultiplayerSession.open(adapter, controller.signal, sessionOptions, this.identity)
 	    };
 	    this.connecting = connecting;
 	    try {
@@ -4841,6 +4997,7 @@ var jsPsychModule = (function (exports) {
 
 	exports.DataCollection = DataCollection;
 	exports.JsPsych = JsPsych;
+	exports.MULTIPLAYER_RESERVED_KEY = RESERVED_KEY;
 	exports.MultiplayerCancelledError = MultiplayerCancelledError;
 	exports.MultiplayerConnectionClosedError = MultiplayerConnectionClosedError;
 	exports.MultiplayerParticipantLeftError = MultiplayerParticipantLeftError;

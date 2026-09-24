@@ -434,6 +434,59 @@ describe("FirebaseAdapter — with the jsPsych multiplayer core", () => {
     await a.multiplayer.disconnect();
   });
 
+  it("a participant whose connection comes back after they left rejoins", async () => {
+    const rtdb = new FakeRtdb();
+    const rejoined = jest.fn();
+    const a = initJsPsych();
+    await a.multiplayer.connect(
+      makeAdapter(new FakeBackend({ rtdb, uid: "a", ownsApp: false }), { participantId: "a" }),
+      { dropoutTimeout: 20, onParticipantRejoined: rejoined },
+    );
+    const bBackend = new FakeBackend({ rtdb, uid: "b", ownsApp: false });
+    const b = initJsPsych();
+    const statuses: string[] = [];
+    await b.multiplayer.connect(makeAdapter(bBackend, { participantId: "b" }), {
+      onStatusChange: (status) => statuses.push(status),
+    });
+    await b.multiplayer.update({ score: 1 });
+
+    bBackend.simulateDrop();
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(a.multiplayer.presence().b).toBe("left");
+
+    bBackend.setConnected(true);
+    await flush();
+    expect(statuses).toEqual(["reconnecting", "connected"]);
+    expect(a.multiplayer.presence().b).toBe("connected");
+    expect(rejoined).toHaveBeenCalledWith("b");
+    expect(a.multiplayer.get("b")).toEqual({ score: 1 });
+    await b.multiplayer.disconnect();
+    await a.multiplayer.disconnect();
+  });
+
+  it("a new page load under the same participant id is a restart, not a rejoin", async () => {
+    const rtdb = new FakeRtdb();
+    const rejoined = jest.fn();
+    const restarted = jest.fn();
+    const a = initJsPsych();
+    await a.multiplayer.connect(
+      makeAdapter(new FakeBackend({ rtdb, uid: "a", ownsApp: false }), { participantId: "a" }),
+      { onParticipantRejoined: rejoined, onParticipantRestarted: restarted },
+    );
+    const before = await connectJsPsych(rtdb, "b");
+    await before.multiplayer.update({ round: 2 });
+    await before.multiplayer.disconnect();
+
+    // A reload: a new page (new jsPsych.multiplayer) with the same participant id
+    const after = await connectJsPsych(rtdb, "b");
+    expect(after.multiplayer.previousInstance).not.toBeNull();
+    expect(a.multiplayer.presence().b).toBe("left");
+    expect(restarted).toHaveBeenCalledWith("b");
+    expect(rejoined).not.toHaveBeenCalled();
+    await after.multiplayer.disconnect();
+    await a.multiplayer.disconnect();
+  });
+
   it("closes the session when the adapter loses read access", async () => {
     jest.spyOn(console, "error").mockImplementation(() => {});
     const rtdb = new FakeRtdb();

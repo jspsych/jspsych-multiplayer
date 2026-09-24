@@ -66,18 +66,34 @@ export interface JatosAdapterOptions {
   connectTimeoutMs?: number;
   /**
    * How long the channel can stay down before the connection counts as lost for good, in
-   * ms. jatos.js keeps trying to reopen a dropped channel; after this long the adapter stops
-   * waiting and reports the connection as closed. Default 30000. `null` or `Infinity` means
-   * never give up.
+   * ms. jatos.js keeps trying to reopen a dropped channel, and a participant whose channel
+   * reopens on the same page rejoins the group. After this long the adapter stops waiting
+   * and reports the connection as closed. Default `null` (never give up), so a participant
+   * can rejoin however long they were gone; set a limit if the study should instead end for
+   * a participant who stays offline.
    */
   closeAfterReconnectingMs?: number | null;
 }
 
+/** First and longest wait, in ms, before retrying a join that jatos.js refused. */
+const JOIN_RETRY_MIN_MS = 100;
+const JOIN_RETRY_MAX_MS = 1000;
+
 /**
- * The connection that currently owns jatos.js's group callbacks, or has a join in flight.
- * jatos.js supports one group channel per page, and joinGroup() replaces the page's
+ * jatos.js refuses to open a group channel while the previous one is still closing, e.g.
+ * right after leaveGroup(), which resolves before the socket has finished closing. It rejects
+ * the join without calling onError, so the refusal is recognized by its message.
+ */
+function isStillClosing(reason: unknown): boolean {
+  return String(reason).includes("readyState CLOSED");
+}
+
+/**
+ * The connection that currently owns jatos.js's group callbacks, or has a join or a leave in
+ * flight. jatos.js supports one group channel per page, and joinGroup() replaces the page's
  * callbacks even when it then refuses to open a second channel, so no other connection may
- * call it until this one is done.
+ * call it until this one is done. A new connection waits for a closed one to finish; only an
+ * open one blocks it.
  */
 let activeConnection: JatosConnection | null = null;
 
@@ -109,18 +125,17 @@ export default class JatosAdapter implements MultiplayerAdapter {
     this.connectTimeoutMs = options.connectTimeoutMs ?? 20_000;
     const closeAfter = options.closeAfterReconnectingMs;
     this.closeAfterReconnectingMs =
-      closeAfter === undefined
-        ? 30_000
-        : typeof closeAfter === "number" && Number.isFinite(closeAfter) && closeAfter >= 0
-          ? closeAfter
-          : null;
+      typeof closeAfter === "number" && Number.isFinite(closeAfter) && closeAfter >= 0
+        ? closeAfter
+        : null;
   }
 
   connect(options: AdapterConnectOptions): Promise<MultiplayerConnection> {
     if (options.signal.aborted) {
       return Promise.reject(new Error("JatosAdapter: connect() was cancelled."));
     }
-    if (activeConnection) {
+    const previous = activeConnection;
+    if (previous && !previous.isClosed()) {
       return Promise.reject(
         new Error(
           "JatosAdapter: a JATOS group connection is already open or opening on this page. " +
@@ -138,7 +153,9 @@ export default class JatosAdapter implements MultiplayerAdapter {
       closeAfterReconnectingMs: this.closeAfterReconnectingMs,
     });
     activeConnection = connection;
-    return connection.open();
+    // A closed connection may still be leaving the group or settling a cancelled join; the
+    // new one takes over jatos.js only after it has.
+    return connection.open(previous?.released);
   }
 }
 
@@ -161,6 +178,12 @@ class JatosConnection implements MultiplayerConnection {
   private joinPending = false;
 
   private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+  private joinRetryTimer: ReturnType<typeof setTimeout> | undefined;
+
+  /** Resolves once this connection has released jatos.js to the next one. */
+  readonly released: Promise<void>;
+  private resolveReleased!: () => void;
+  private isReleased = false;
 
   /** push() calls waiting for a dropped channel to reopen. */
   private reopenWaiters: Array<{ resolve: () => void; reject: (error: Error) => void }> = [];
@@ -174,9 +197,19 @@ class JatosConnection implements MultiplayerConnection {
       connectTimeoutMs: number;
       closeAfterReconnectingMs: number | null;
     },
-  ) {}
+  ) {
+    this.released = new Promise((resolve) => (this.resolveReleased = resolve));
+  }
 
-  open(): Promise<MultiplayerConnection> {
+  isClosed(): boolean {
+    return this.state === "closed";
+  }
+
+  /**
+   * Join the group once `previous` (a closed connection still leaving) has released jatos.js.
+   * The connect timeout and the abort signal cover the whole wait.
+   */
+  open(previous?: Promise<void>): Promise<MultiplayerConnection> {
     return new Promise((resolve, reject) => {
       const { signal } = this.options;
       // If JATOS reports neither success nor failure (a dropped handshake or an unreachable
@@ -206,42 +239,63 @@ class JatosConnection implements MultiplayerConnection {
         },
       };
 
-      let joining: JatosPromise | void;
-      try {
-        joining = jatos.joinGroup({
-          onOpen: () => this.handleOpen(),
-          onClose: () => this.handleDrop(),
-          onError: (errMsg) => this.handleError(errMsg),
-          onGroupSession: () => this.handleChange(),
-          onMemberJoin: () => this.handleChange(),
-          onMemberOpen: () => this.handleChange(),
-          onMemberLeave: () => this.handleChange(),
-          onMemberClose: () => this.handleChange(),
+      if (previous) {
+        void previous.then(() => {
+          if (this.state === "connecting") this.join(JOIN_RETRY_MIN_MS);
         });
-      } catch (e) {
-        this.failOpen(e instanceof Error ? e : new Error(String(e)));
-        return;
-      }
-      // The promise settles even when jatos.js refuses to open a channel without calling
-      // onError (e.g. while a previous channel is still closing), and resolves even if onOpen
-      // is missed, so it is used alongside the callbacks.
-      if (joining && typeof joining.then === "function") {
-        this.joinPending = true;
-        joining.then(
-          () => {
-            this.joinPending = false;
-            this.handleOpen();
-          },
-          (reason) => {
-            this.joinPending = false;
-            this.failOpen(
-              new Error(`JatosAdapter: failed to join group — ${reason ?? "unknown error"}`),
-            );
-            this.release();
-          },
-        );
+      } else {
+        this.join(JOIN_RETRY_MIN_MS);
       }
     });
+  }
+
+  /** Ask jatos.js to join the group, retrying while the previous channel is still closing. */
+  private join(retryDelayMs: number) {
+    let joining: JatosPromise | void;
+    try {
+      joining = jatos.joinGroup({
+        onOpen: () => this.handleOpen(),
+        onClose: () => this.handleDrop(),
+        onError: (errMsg) => this.handleError(errMsg),
+        onGroupSession: () => this.handleChange(),
+        onMemberJoin: () => this.handleChange(),
+        onMemberOpen: () => this.handleChange(),
+        onMemberLeave: () => this.handleChange(),
+        onMemberClose: () => this.handleChange(),
+      });
+    } catch (e) {
+      this.failOpen(e instanceof Error ? e : new Error(String(e)));
+      return;
+    }
+    // The promise settles even when jatos.js refuses to open a channel without calling
+    // onError (e.g. while a previous channel is still closing), and resolves even if onOpen
+    // is missed, so it is used alongside the callbacks.
+    if (joining && typeof joining.then === "function") {
+      this.joinPending = true;
+      joining.then(
+        () => {
+          this.joinPending = false;
+          this.handleOpen();
+        },
+        (reason) => {
+          this.joinPending = false;
+          if (this.state === "connecting" && isStillClosing(reason)) {
+            // A socket from an earlier connection on this page hasn't finished closing: try
+            // again shortly, within the connect timeout
+            this.joinRetryTimer = setTimeout(() => {
+              if (this.state === "connecting") {
+                this.join(Math.min(retryDelayMs * 2, JOIN_RETRY_MAX_MS));
+              }
+            }, retryDelayMs);
+            return;
+          }
+          this.failOpen(
+            new Error(`JatosAdapter: failed to join group — ${reason ?? "unknown error"}`),
+          );
+          this.release();
+        },
+      );
+    }
   }
 
   // ---------------------------------------------------------------- MultiplayerConnection
@@ -303,8 +357,9 @@ class JatosConnection implements MultiplayerConnection {
   private handleOpen() {
     if (this.state === "closed") {
       // connect() failed or was cancelled while jatos.js was still joining, and the channel
-      // opened anyway: leave the group so no one is left in it by mistake.
-      if (activeConnection === this && !this.leaving) void this.leave();
+      // opened anyway: leave the group so no one is left in it by mistake. A newer connection
+      // waits for this one to release jatos.js, so this one still owns it.
+      if (!this.isReleased && !this.leaving) void this.leave();
       return;
     }
     this.refresh();
@@ -385,17 +440,23 @@ class JatosConnection implements MultiplayerConnection {
   /**
    * Stop all callbacks and fail pending pushes. Doesn't leave the group or report status.
    * The page-wide guard is kept while a join is still in flight, so a new connection can't
-   * take over jatos.js's callbacks before this channel has opened and been left.
+   * take over jatos.js's callbacks before this channel has opened and been left, and after a
+   * channel opened, until leave() has finished: jatos.js refuses to open a channel while it is
+   * still leaving the group.
    */
   private close(error: Error) {
+    const hadChannel = this.state === "connected" || this.state === "reconnecting";
     this.state = "closed";
     clearTimeout(this.reconnectTimer);
+    clearTimeout(this.joinRetryTimer);
     for (const waiter of this.reopenWaiters.splice(0)) waiter.reject(error);
-    if (!this.joinPending) this.release();
+    if (!hadChannel && !this.joinPending) this.release();
   }
 
   private release() {
     if (activeConnection === this) activeConnection = null;
+    this.isReleased = true;
+    this.resolveReleased();
   }
 
   private whenOpen(lastError: unknown): Promise<void> {

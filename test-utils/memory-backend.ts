@@ -15,6 +15,7 @@ import {
   initJsPsych,
   JsPsych,
   MultiplayerAdapter,
+  MULTIPLAYER_RESERVED_KEY,
   MultiplayerConnection,
 } from "jspsych";
 
@@ -47,7 +48,9 @@ export class MemoryHub {
 
   /**
    * Add a connected participant who has no jsPsych instance in the test, and
-   * optionally write their slot. removePeer() makes them drop out.
+   * optionally write their slot. removePeer() makes them drop out. Such a peer
+   * has no session, so it never writes the bookkeeping a return needs: once
+   * removed, it stays away or left. Use join() for a participant who rejoins.
    */
   addPeer(participantId: string, data?: Record<string, unknown>) {
     this.peers.add(participantId);
@@ -121,9 +124,14 @@ export class MemoryConnection implements MultiplayerConnection {
     this.hub.broadcast();
   }
 
-  /** Simulate this participant's network dropping or recovering, as the others see it. */
+  /**
+   * Simulate this participant's network dropping or recovering. Like a real
+   * adapter, the connection reports its own drop and recovery, which is what
+   * lets a participant who comes back from the same page rejoin.
+   */
   setOnline(online: boolean) {
     this.online = online;
+    this.options.onStatus(online ? "connected" : "reconnecting");
     this.hub.broadcast();
   }
 }
@@ -148,6 +156,16 @@ export class MemoryAdapter implements MultiplayerAdapter {
   get connection(): MemoryConnection | undefined {
     return this.connections[this.connections.length - 1];
   }
+}
+
+/**
+ * A slot as stored on the backend, without the bookkeeping the session keeps
+ * under the reserved key. Use it when asserting on hub.data or pushes.
+ */
+export function stripMeta(slot: Record<string, unknown> | undefined) {
+  if (!slot) return slot;
+  const { [MULTIPLAYER_RESERVED_KEY]: _meta, ...data } = slot;
+  return data;
 }
 
 export function deferred<T = void>() {

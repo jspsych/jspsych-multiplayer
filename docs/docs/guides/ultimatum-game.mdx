@@ -188,6 +188,23 @@ after the proposer's timeout, the proposer sees "your partner left" while the re
 an outcome. Make the timeout much longer than your slowest participant needs, or limit the
 decision screen with `trial_duration`. [Handling dropouts](handling-dropouts) has more.
 
+A player who reloads can't rejoin: the reload restarted their experiment, so the other player
+already sees them as `left`. The example files keep the participant ID across a reload
+(`persistParticipant: true`), which lets the reloaded page notice and show a message instead of
+starting the game over:
+
+```js
+const reloadedScreen = {
+  type: jsPsychHtmlButtonResponse,
+  stimulus: "<p>You reloaded the page, so you can't rejoin this game.</p>",
+  choices: ["Finish"],
+};
+
+jsPsych.multiplayer.connect(adapter).then(() => {
+  jsPsych.run(jsPsych.multiplayer.previousInstance ? [reloadedScreen] : timeline);
+});
+```
+
 </Step>
 <Step>
 

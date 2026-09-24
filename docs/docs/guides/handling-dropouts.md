@@ -2,7 +2,7 @@
 id: handling-dropouts
 title: Handling dropouts
 sidebar_label: Handling dropouts
-description: How the multiplayer plugins detect a participant who leaves, what they record, and how gates stay separate.
+description: How the multiplayer plugins detect a participant who leaves, what they record, how a participant rejoins, and how gates stay separate.
 ---
 
 # Handling dropouts
@@ -17,11 +17,11 @@ follows, and how to set up the few trials that need something different.
 Each adapter reports which participants currently have an open connection. The core turns
 that into a **presence** status for every participant:
 
-| Status      | Meaning                                                                                  |
-| ----------- | ---------------------------------------------------------------------------------------- |
-| `connected` | The participant is connected.                                                            |
-| `away`      | The participant's connection dropped. Brief network interruptions look like this.        |
-| `left`      | The participant has been away longer than the dropout timeout. This status is permanent. |
+| Status      | Meaning                                                                           |
+| ----------- | --------------------------------------------------------------------------------- |
+| `connected` | The participant is connected.                                                     |
+| `away`      | The participant's connection dropped. Brief network interruptions look like this. |
+| `left`      | The participant has been away longer than the dropout timeout.                    |
 
 The dropout timeout defaults to 10 seconds. Change it when you connect:
 
@@ -92,6 +92,109 @@ To build a lobby from another barrier plugin, pass `participants: []`. A mid-gam
 specific partner should name them, as in the
 [ultimatum game](ultimatum-game): `participants: () => [partnerId]`.
 
+## Rejoining
+
+A participant who drops out can come back, but only from the same page. The core tells two
+cases apart:
+
+- **Same page.** Their connection dropped and recovered: a network outage, a laptop going
+  to sleep, a background tab that missed its heartbeats. Their experiment is still where
+  they left it, so they become `connected` again, and `onParticipantRejoined` is called if
+  they had reached `left`.
+- **New page load.** They reloaded, or opened the study again in a new tab, under the same
+  ID. Their experiment started over, so it is out of step with the group. They stay `left`
+  (or become `left` at once, if they were only `away`), and `onParticipantRestarted` is
+  called. On their own page, `jsPsych.multiplayer.previousInstance` is set.
+
+```js
+await jsPsych.multiplayer.connect(adapter, {
+  onParticipantRejoined: (id) => console.log(`${id} is back`),
+  onParticipantRestarted: (id) => console.log(`${id} reloaded and can't rejoin`),
+});
+
+if (jsPsych.multiplayer.previousInstance) {
+  // This participant reloaded. Show a message instead of starting the game again.
+}
+```
+
+To tell a reconnect from a reload, each page writes a random page ID and a counter into its
+slot under the reserved key `$mp`, and writes them again whenever its connection recovers.
+The core removes `$mp` from everything you read, and rejects writes that use it. You will
+see it in raw backend data, such as a JATOS group session or the Firebase console.
+
+Rejoining changes only what happens next. A trial that already ended with `partner_left`
+stays ended, and its data keeps that record. The recipe below shows how to give a partner
+time to come back and then repeat the step.
+
+How each adapter supports rejoining:
+
+| Adapter  | A participant comes back when                                                                                                                                                      |
+| -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| JATOS    | Their group channel reopens. The adapter keeps retrying by default (`closeAfterReconnectingMs: null`), so a participant who is offline for several minutes still rejoins.          |
+| Firebase | Firebase reconnects (`.info/connected` turns true again). The adapter rewrites its presence entry and the core announces the return.                                               |
+| Local    | The tab sends a heartbeat again. A tab whose heartbeats lapsed, for example because the browser throttled it in the background, reports that as a reconnect, so it counts as back. |
+
+### Recipe: wait for a partner to come back
+
+When a step ends because the partner left, you can wait a few minutes for them to return
+and then repeat the step. Wrap the step and a waiting trial in a loop:
+
+```js
+const RETURN_WINDOW = 3 * 60 * 1000; // how long to wait for the partner, in ms
+
+// The step that needs the partner, e.g. waiting for their decision
+const waitForDecision = {
+  type: jsPsychMultiplayerSync,
+  participants: () => [partnerId],
+  wait_for: (group) => group[partnerId]?.decision !== undefined,
+};
+
+// Runs only if the step above ended because the partner left
+const waitForReturn = {
+  timeline: [
+    {
+      type: jsPsychMultiplayerSync,
+      message: "<p>Your partner lost their connection. Waiting for them to come back…</p>",
+      wait_for: (_group, presence) => presence[partnerId] === "connected",
+      timeout: RETURN_WINDOW,
+      data: { return_wait: true },
+    },
+  ],
+  conditional_function: () => jsPsych.data.get().last(1).values()[0].partner_left === true,
+};
+
+const decisionStep = {
+  timeline: [waitForDecision, waitForReturn],
+  // Repeat the step if the partner left and came back in time
+  loop_function: (data) => {
+    const [step, returnWait] = data.values();
+    return step.partner_left === true && returnWait?.timed_out === false;
+  },
+};
+
+// After the loop: if the partner never came back, end the session
+const partnerGone = {
+  timeline: [
+    {
+      type: jsPsychHtmlButtonResponse,
+      stimulus: "<p>Your partner didn't come back, so the game has ended.</p>",
+      choices: ["Finish"],
+      on_finish: () => jsPsych.abortExperiment(),
+    },
+  ],
+  conditional_function: () => {
+    const last = jsPsych.data.get().last(1).values()[0];
+    return last.return_wait === true && last.timed_out === true;
+  },
+};
+
+const timeline = [/* …, */ decisionStep, partnerGone /*, … */];
+```
+
+The waiting trial counts a partner as back only when they rejoin from the same page. A
+partner who reloaded stays `left`, so the wait runs out and the game ends. This recipe may
+become a jsPsych extension later.
+
 ## Gates and keys
 
 `ready`, `choice`, and `scoreboard` store each participant's contribution under a key in
@@ -110,5 +213,6 @@ Set `data_key` yourself in two cases:
   `conditional_function`. The participants who skip it don't count it, so their later keys
   would no longer match.
 - **A page reload.** The count restarts at 1 when the page reloads, so a participant who
-  reloads mid-experiment would reuse earlier keys. Explicit keys avoid this; better support
-  for rejoining after a reload is planned.
+  reloads mid-experiment would reuse earlier keys. A reloaded participant can't rejoin the
+  group anyway (see [Rejoining](#rejoining)), but explicit keys keep their data apart.
+  Support for resuming after a reload is planned.

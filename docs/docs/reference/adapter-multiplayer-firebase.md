@@ -198,7 +198,8 @@ participants.
   timeout.
 - **This participant loses their network.** The connection status is `reconnecting` until the
   Firebase SDK reconnects, with no time limit. The others see this participant as `away`, and
-  then `left`, which is permanent even if they come back. The adapter reports a lost connection
+  then `left`. When the SDK reconnects, this participant is back on the same page, so the others
+  see them as `connected` again: they rejoin. The adapter reports a lost connection
   only when the database stops allowing it to read the session, for example after the rules
   change.
 - **`jsPsych.multiplayer.disconnect()`** removes this participant from the connected list at
@@ -207,8 +208,10 @@ participants.
 See [Handling dropouts](../guides/handling-dropouts) for what each plugin records.
 
 Each tab signs in separately, so two tabs on one computer are two participants. With
-`useUidAsParticipantId: true`, a participant who reloads the tab keeps their ID and rejoins the
-same session. Without it, a reload joins as a new participant.
+`useUidAsParticipantId: true`, a participant who reloads the tab keeps their ID, but the reload
+restarted their experiment, so the others keep them `left` and their own page sees
+`previousInstance` (see [Rejoining](../guides/handling-dropouts#rejoining)). Without it, a reload
+joins as a new participant.
 
 ## Example
 

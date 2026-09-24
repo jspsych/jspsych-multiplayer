@@ -40,7 +40,7 @@ Pass these to the constructor, for example
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `connectTimeoutMs` | `number` | `20000` | How long, in ms, `connect()` waits for JATOS to open the group connection before it fails. |
-| `closeAfterReconnectingMs` | `number \| null` | `30000` | How long, in ms, this participant's connection can stay down before it counts as lost for good. `null` or `Infinity` means never. |
+| `closeAfterReconnectingMs` | `number \| null` | `null` | How long, in ms, this participant's connection can stay down before it counts as lost for good. `null` (the default) or `Infinity` means keep retrying. |
 
 Each participant's ID is their JATOS study result ID, as a string. Once `connect()` resolves, it
 is in `jsPsych.multiplayer.participantId`.
@@ -99,15 +99,21 @@ The adapter counts a participant as connected while their JATOS group connection
   their connection is gone, then `left` after the dropout timeout.
 - **This participant loses their network.** jatos.js keeps trying to reconnect, and the
   connection status is `reconnecting`. Data this participant writes in the meantime waits and is
-  sent when the connection returns. If it is still down after `closeAfterReconnectingMs` (30
-  seconds), the connection counts as lost: waiting trials end with `connection_lost: true`.
+  sent when the connection returns. The adapter keeps waiting for as long as it takes, so a
+  participant who comes back after several minutes rejoins: the others see them as `connected`
+  again. To give up instead, set `closeAfterReconnectingMs`: once the connection has been down
+  that long, it counts as lost, and waiting trials end with `connection_lost: true`. Set it also
+  if your JATOS server may close a participant's group channel for good, because jatos.js does
+  not reopen a channel the server closed.
 - **`jsPsych.multiplayer.disconnect()`** leaves the JATOS group. The others see this participant
-  become `away`, then `left`. The participant cannot rejoin the group on the same page.
+  become `away`, then `left`. Calling `connect()` again on the same page joins a group again, but
+  JATOS chooses which one, so it may not be the same group.
 
 A participant's data stays in the group session after they leave. See
 [Handling dropouts](../guides/handling-dropouts) for what each plugin records.
 
-Only one connection per page is possible. `connect()` fails if another is already open.
+Only one connection per page is possible. `connect()` fails if another is already open. After
+`disconnect()`, a new `connect()` waits for the old connection to finish leaving the group.
 
 ## Example
 

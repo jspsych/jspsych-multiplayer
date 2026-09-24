@@ -74,10 +74,10 @@ Create `my-experiment/first-trial.html`:
 <html>
   <head>
     <!-- jsPsych: the #3694 preview build (see "Before the release") -->
-    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@a6e05be017bcadf6ca208ed2fc0ac79e438c9626/packages/jspsych/dist/index.browser.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@49e6a936151ede3f3ce12cac9b1af88daed3ca7e/packages/jspsych/dist/index.browser.min.js"></script>
     <link
       rel="stylesheet"
-      href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@a6e05be017bcadf6ca208ed2fc0ac79e438c9626/packages/jspsych/css/jspsych.css"
+      href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@49e6a936151ede3f3ce12cac9b1af88daed3ca7e/packages/jspsych/css/jspsych.css"
     />
     <script src="https://unpkg.com/@jspsych/plugin-html-button-response@2"></script>
 
@@ -102,12 +102,13 @@ const jsPsych = initJsPsych({
   on_finish: () => jsPsych.data.displayData(),
 });
 
-const adapter = new jsPsychAdapterMultiplayerLocal({ persistParticipant: true });
+const adapter = new jsPsychAdapterMultiplayerLocal();
 ```
 
 The local adapter shares data between tabs of one browser. It is for building and testing
-only; it cannot connect participants on different computers. `persistParticipant: true`
-means a tab that reloads rejoins as the same participant.
+only; it cannot connect participants on different computers. A tab that reloads joins as a
+new participant: reloading restarts the experiment, so it can't rejoin the game it left (see
+[Rejoining](guides/handling-dropouts#rejoining)).
 
 You will hand the adapter to jsPsych in the last step, just before the timeline runs.
 

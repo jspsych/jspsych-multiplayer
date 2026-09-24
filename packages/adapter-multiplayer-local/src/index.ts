@@ -43,7 +43,8 @@ export interface LocalAdapterOptions {
   participantId?: string;
   /**
    * Persist this tab's participant id in `sessionStorage` (per-tab, survives reload, gone when the
-   * tab closes) so a refresh rejoins as the same participant instead of a new one. Ignored if
+   * tab closes) so a refresh keeps the same id instead of a new one. The refreshed page has still
+   * restarted the experiment, so the other tabs see it as restarted, not rejoined. Ignored if
    * `participantId` is given explicitly.
    */
   persistParticipant?: boolean;
@@ -163,6 +164,8 @@ class LocalConnection implements MultiplayerConnection {
   private readonly heartbeat: ReturnType<typeof setInterval>;
   /** Present participants at the last check, as a string, to tell when the set changes. */
   private lastPresent = "";
+  /** When this tab last wrote its heartbeat; 0 before the first write. */
+  private lastBeatAt = 0;
 
   private readonly onPageHide = () => {
     // Best effort: the tab is going away (or into the back/forward cache), so drop our presence
@@ -249,16 +252,29 @@ class LocalConnection implements MultiplayerConnection {
    * Refresh our presence key and check whether anyone else's has appeared or gone stale. A tab
    * that crashed sends no signal, so this periodic check is how the others notice it's gone.
    * `announce` also pings the other tabs, for the moments when our own presence changes.
+   *
+   * localStorage never disconnects, but a tab's heartbeat can still lapse: a throttled background
+   * tab, or a page frozen in the back/forward cache, may go longer than `presenceTimeoutMs`
+   * without a beat, and the other tabs then count it as gone. When that happens this tab reports
+   * a drop and a recovery, so the session tells the group this page is back and it can rejoin.
    */
   private beat(announce = false) {
     if (this.closed) return;
-    const { storage, keyPrefix, sessionId } = this.config;
+    const { storage, keyPrefix, sessionId, presenceTimeoutMs } = this.config;
+    const now = Date.now();
+    const lapsed = this.lastBeatAt > 0 && now - this.lastBeatAt > presenceTimeoutMs;
+    if (lapsed) this.options.onStatus("reconnecting");
+    let written = false;
     try {
-      writePresence(storage, keyPrefix, sessionId, this.participantId, Date.now());
+      writePresence(storage, keyPrefix, sessionId, this.participantId, now);
+      this.lastBeatAt = now;
+      written = true;
     } catch (e) {
       console.error("LocalAdapter: could not write the presence heartbeat", e);
     }
-    if (announce) this.signal.post();
+    if (announce || lapsed) this.signal.post();
+    // Still lapsed if the write failed; the next successful beat reports the recovery
+    if (lapsed && written) this.options.onStatus("connected");
     const present = this.readPresent().join("\n");
     if (present !== this.lastPresent) {
       this.lastPresent = present;
@@ -318,7 +334,7 @@ function resolveSessionId(): string {
   }
 }
 
-/** Resolve this tab's participant id, optionally persisting it per-tab for rejoin-on-refresh. */
+/** Resolve this tab's participant id, optionally persisting it per-tab across refreshes. */
 function resolveParticipantId(
   keyPrefix: string,
   sessionId: string,

@@ -122,11 +122,13 @@ describe("multiplayer-countdown plugin", () => {
   it("keep-if-present: does not overwrite an existing timestamp, and does not re-write", async () => {
     const { jsPsych, multiplayer, me } = await setup({ me: { [KEY]: BASE - 500, role: "x" } });
     const updateSpy = jest.spyOn(multiplayer, "update");
+    // The session announces itself when it connects; count only what the trial sends
+    const pushesBefore = me.connection.pushes.length;
     new MultiplayerCountdownPlugin(jsPsych as never).trial(display(), { ...base } as never);
 
     expect(multiplayer.getAll().me[KEY]).toBe(BASE - 500); // kept, not refreshed to BASE
     expect(updateSpy).not.toHaveBeenCalled(); // no redundant write
-    expect(me.connection.pushes).toHaveLength(0);
+    expect(me.connection.pushes).toHaveLength(pushesBefore);
   });
 
   it("renders the countdown and ends at `duration` (not a tick early)", async () => {

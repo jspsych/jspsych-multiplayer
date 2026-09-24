@@ -42,7 +42,7 @@ Pass these to the constructor, for example
 | --- | --- | --- | --- |
 | `sessionId` | `string` | the `?mp_session=` URL parameter, or a new random ID | Which session this tab joins. Tabs with the same session ID play together. If the URL has no `mp_session` parameter, the adapter makes a new ID and adds it to the URL. Must not contain `:`. |
 | `participantId` | `string` | a new random ID | This tab's participant ID. Must not contain `:`. |
-| `persistParticipant` | `boolean` | `false` | Keep the same participant ID when the tab is reloaded. Without it, a reload joins as a new participant. Ignored if you set `participantId`. |
+| `persistParticipant` | `boolean` | `false` | Keep the same participant ID when the tab is reloaded. The reload restarted the experiment, so the other tabs keep that participant `left`, and the reloaded page sees `previousInstance`. Without it, a reload joins as a new participant. Ignored if you set `participantId`. |
 | `keyPrefix` | `string` | `"mp"` | The prefix of the keys the adapter writes to `localStorage`. Change it only if another page on the same site already uses `mp:` keys. |
 | `storage` | `Storage` | `localStorage` | Where the shared data is kept. For automated tests. |
 | `signal` | `ChangeSignal` | a `BroadcastChannel` plus the `storage` event | How a tab tells the other tabs that something changed. For automated tests. A signal you pass in is yours to close. |
@@ -80,6 +80,9 @@ to tell who is still connected:
   than `presenceTimeoutMs`: 70 seconds by default, plus the dropout timeout. The timeout is long
   because browsers slow down timers in background tabs, to as little as once a minute, and a
   tab in the background should not be counted as gone.
+- **A tab whose heartbeats lapsed** but that is still open, for example one the browser throttled
+  in the background, reports this as a reconnect when it catches up. The other tabs then count it
+  as `connected` again: it rejoins.
 - **Calling `jsPsych.multiplayer.disconnect()`** removes the tab from the session at once, like
   closing it.
 
@@ -127,10 +130,7 @@ it, and paste its address (with `?mp_session=...`) into a second tab.
     };
 
     async function runExperiment() {
-      // Persist the ID so reloading a tab rejoins as the same player.
-      await jsPsych.multiplayer.connect(
-        new jsPsychAdapterMultiplayerLocal({ persistParticipant: true }),
-      );
+      await jsPsych.multiplayer.connect(new jsPsychAdapterMultiplayerLocal());
       await jsPsych.run([lobby, start]);
     }
 

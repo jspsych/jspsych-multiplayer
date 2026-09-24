@@ -66,7 +66,11 @@ Alongside the data, every participant has a **presence** status:
 | --- | --- |
 | `connected` | The participant is connected. |
 | `away` | Their connection dropped. A brief network hiccup looks like this. |
-| `left` | They have been away longer than the dropout timeout (10 seconds by default). This is permanent. |
+| `left` | They have been away longer than the dropout timeout (10 seconds by default). |
+
+A participant whose connection comes back on the same page, after a network outage for example,
+becomes `connected` again. A participant who reloads has restarted the experiment, so they stay
+`left`. [Rejoining](handling-dropouts#rejoining) explains how the two are told apart.
 
 A slot stays in the shared data after its participant leaves, so **count participants by
 presence, not by slot**. Every condition function the plugins take, such as `wait_for`,
