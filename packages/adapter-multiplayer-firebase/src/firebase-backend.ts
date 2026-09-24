@@ -7,7 +7,8 @@
  *
  * Each session node holds one child per participant, and each child's value is a JSON-encoded STRING
  * (never a raw object tree) — see the adapter's JSON-encoding policy. So a session `onValue` snapshot
- * is `Record<participantId, string>`.
+ * is `Record<participantId, string>`. The presence node has the same shape, with a placeholder
+ * string per connected participant.
  */
 
 /** Calling this removes the associated subscription. */
@@ -32,7 +33,7 @@ export interface FirebaseBackend {
   remove(path: string): Promise<void>;
 
   /**
-   * Listen to a session node. `onData` fires with the current snapshot (or `null` when the node is
+   * Listen to a session or presence node. `onData` fires with the current snapshot (or `null` when the node is
    * empty/removed) on every change, including the initial value and the local echo of our own writes.
    * `onError` fires on the listener's cancel path (e.g. a security-rules denial). Returns an
    * unsubscribe.
