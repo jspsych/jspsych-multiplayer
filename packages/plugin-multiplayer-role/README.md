@@ -9,12 +9,10 @@ It builds on the jsPsych multiplayer API (`@jspsych/jspsych` group sessions). Ro
 short barrier trial: it waits until the group is ready, computes the map, exposes your role to
 downstream trials, and saves the assignment to the data record.
 
-> **Status.** The pure assignment core, the role accessors, and the trial wrapper documented below are
-> all implemented and tested. The wrapper is written against a local interface mirroring the jsPsych
-> multiplayer API ([jsPsych#3694](https://github.com/jspsych/jsPsych/pull/3694)); to actually run a
-> trial you still need that API present at runtime (as `jsPsych.multiplayer` in jsPsych core — older
-> preview builds that exposed it on `jsPsych.pluginAPI` are not supported) plus a network adapter
-> (e.g. JATOS group sessions). The parameter and data tables below describe the shipped wrapper.
+> **Status.** Requires the jsPsych multiplayer API
+> ([jsPsych#3694](https://github.com/jspsych/jsPsych/pull/3694)), which is not yet in a jsPsych
+> release, plus a network adapter (e.g. JATOS group sessions). On a jsPsych without
+> `jsPsych.multiplayer`, the trial throws an error saying so.
 
 ## Loading
 
@@ -43,33 +41,37 @@ adapter (e.g. JATOS group sessions).
 
 ## Parameters
 
-| Parameter       | Type            | Default                     | Description                                                                                                                                                                       |
-| --------------- | --------------- | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `roles`         | array \| object | _required_                  | The roles to hand out. An array is one slot per entry (`["proposer", "responder"]`); an object is counts (`{ leader: 1, follower: 3 }`).                                          |
-| `strategy`      | string \| fn    | `"join_order"`              | How participants are ordered into the role slots. One of `"join_order"`, `"random"`, `"rotate"`, or a custom `(snapshot, ctx) => roleMap` function (see below).                   |
-| `group_size`    | int             | `null`                      | If set, assignment waits for **exactly** this many participants before computing (fail-loud, not `>=`). `null` assumes an upstream waiting-room barrier already capped the group. |
-| `round`         | int             | `0`                         | Round index, for `rotate` and per-round `random`. Increment it each time you re-run the trial.                                                                                    |
-| `balanced`      | bool            | `false`                     | For `rotate`: use the balanced (Latin-square) variant — see [Rotation](#rotation-rotate).                                                                                         |
-| `seed`          | string          | `null`                      | Shared seed for `random`. Defaults to a hash of the sorted ids + round, so the shuffle re-randomizes each round and is identical on every client.                                 |
-| `rank_by`       | fn              | `null`                      | `(entry, id, ctx) => number`. Order participants by a numeric key (highest first), e.g. a task score.                                                                             |
-| `role_from`     | fn              | `null`                      | `(entry, id, ctx) => string`. The role **is** a value each participant already carries; must return a declared role. Does not enforce per-role counts.                            |
-| `ready`         | fn              | `null`                      | `(snapshot) => boolean`. Override the readiness gate; **required** when `strategy` is a custom function.                                                                          |
-| `overflow_role` | string          | `null`                      | Role for participants beyond the declared slots — applies whenever the participant count exceeds the number of declared slots, whether or not `group_size` is set. If unset, overflow throws.                    |
-| `push_data`     | object          | `{}`                        | Round-scoped data this client contributes to the snapshot (e.g. the score `rank_by` ranks on). Namespaced under the round so it never clobbers earlier rounds, and written with `update()`, so other top-level fields in this client's slot survive the trial.                    |
-| `save_group`    | bool            | `false`                     | Include the full group snapshot in the trial data. Off by default to avoid data bloat.                                                                                            |
-| `timeout`       | int             | `30000`                     | Milliseconds to wait for readiness before giving up. `null` — like any negative or non-finite value — waits forever (discouraged); `0` gives up at once.                                                                                          |
-| `on_timeout`    | fn              | `null`                      | Hook run on timeout. Default ends the trial with `role: null`, `timed_out: true`.                                                                                                 |
-| `message`       | HTML string     | `"<p>Assigning roles…</p>"` | Shown while waiting.                                                                                                                                                              |
+| Parameter       | Type            | Default                     | Description                                                                                                                                                                                                                                                             |
+| --------------- | --------------- | --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `roles`         | array \| object | _required_                  | The roles to hand out. An array is one slot per entry (`["proposer", "responder"]`); an object is counts (`{ leader: 1, follower: 3 }`).                                                                                                                                |
+| `strategy`      | string \| fn    | `"join_order"`              | How participants are ordered into the role slots. One of `"join_order"`, `"random"`, `"rotate"`, or a custom `(snapshot, ctx) => roleMap` function (see below).                                                                                                         |
+| `group_size`    | int             | `null`                      | If set, assignment waits for **exactly** this many participants before computing (fail-loud, not `>=`). Participants who have left the session don't count and aren't assigned. `null` assumes an upstream waiting-room barrier already capped the group.               |
+| `round`         | int             | `0`                         | Round index, for `rotate` and per-round `random`. Increment it each time you re-run the trial.                                                                                                                                                                          |
+| `balanced`      | bool            | `false`                     | For `rotate`: use the balanced (Latin-square) variant — see [Rotation](#rotation-rotate).                                                                                                                                                                               |
+| `seed`          | string          | `null`                      | Shared seed for `random`. Defaults to a hash of the sorted ids + round, so the shuffle re-randomizes each round and is identical on every client.                                                                                                                       |
+| `rank_by`       | fn              | `null`                      | `(entry, id, ctx) => number`. Order participants by a numeric key (highest first), e.g. a task score.                                                                                                                                                                   |
+| `role_from`     | fn              | `null`                      | `(entry, id, ctx) => string`. The role **is** a value each participant already carries; must return a declared role. Does not enforce per-role counts.                                                                                                                  |
+| `ready`         | fn              | `null`                      | `(snapshot, presence) => boolean`. Override the readiness gate; **required** when `strategy` is a custom function. `snapshot` excludes participants who have left; both arguments are frozen, so don't modify them.                                                     |
+| `overflow_role` | string          | `null`                      | Role for participants beyond the declared slots — applies whenever the participant count exceeds the number of declared slots, whether or not `group_size` is set. If unset, overflow throws.                                                                           |
+| `push_data`     | object          | `{}`                        | Round-scoped data this client contributes to the snapshot (e.g. the score `rank_by` ranks on). Namespaced under the round so it never clobbers earlier rounds, and written with `update()`, so other top-level fields in this client's slot survive the trial.          |
+| `save_group`    | bool            | `false`                     | Include the full group snapshot in the trial data. Off by default to avoid data bloat.                                                                                                                                                                                  |
+| `timeout`       | int             | `30000`                     | Milliseconds to wait for readiness before giving up. `null` — like any negative or non-finite value — waits forever (discouraged); `0` gives up at once.                                                                                                                |
+| `on_timeout`    | fn              | `null`                      | Hook run on timeout. Default ends the trial with `role: null`, `timed_out: true`.                                                                                                                                                                                       |
+| `participants`  | array \| null   | `null`                      | Participants the assignment depends on. If one leaves the session before the group is ready, the trial ends with `role: null, partner_left: true`. `null` means every other participant who hasn't already left when this participant arrives; `[]` ignores departures. |
+| `message`       | HTML string     | `"<p>Assigning roles…</p>"` | Shown while waiting.                                                                                                                                                                                                                                                    |
 
 ## Data generated
 
-| Name            | Type   | Description                                                                                                                                                               |
-| --------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `role`          | string | This participant's assigned role (`null` on timeout).                                                                                                                     |
-| `role_map`      | object | The full `participantId -> { role }` map every client agreed on.                                                                                                          |
-| `assigned_self` | bool   | Whether this participant appears in the agreed map. `false` only when an assignment ran but a **custom strategy** left this participant out (a spectator) — overflow participants are in the map (with `overflow_role`), so they read `true`. Distinguishes that spectator case from a timeout (where `role_map` is also `null`). |
-| `timed_out`     | bool   | `true` if readiness was not reached before `timeout`. If the wait is instead **cancelled** because the experiment ended or was aborted, the trial stops quietly and writes no record at all.                                                                                                                     |
-| `group`         | object | The full snapshot assigned over — only present when `save_group: true`.                                                                                                   |
+| Name               | Type   | Description                                                                                                                                                                                                                                                                                                                       |
+| ------------------ | ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `role`             | string | This participant's assigned role (`null` on timeout).                                                                                                                                                                                                                                                                             |
+| `role_map`         | object | The full `participantId -> { role }` map every client agreed on.                                                                                                                                                                                                                                                                  |
+| `assigned_self`    | bool   | Whether this participant appears in the agreed map. `false` only when an assignment ran but a **custom strategy** left this participant out (a spectator) — overflow participants are in the map (with `overflow_role`), so they read `true`. Distinguishes that spectator case from a timeout (where `role_map` is also `null`). |
+| `timed_out`        | bool   | `true` if readiness was not reached before `timeout`. If the wait is instead **cancelled** because the experiment ended or was aborted, the trial stops quietly and writes no record at all.                                                                                                                                      |
+| `partner_left`     | bool   | `true` if the trial ended with `role: null` because a participant in `participants` left the session.                                                                                                                                                                                                                             |
+| `left_participant` | string | The ID of the participant who left, when `partner_left` is true; `null` otherwise.                                                                                                                                                                                                                                                |
+| `connection_lost`  | bool   | `true` if the trial ended with `role: null` because this participant's connection was lost for good.                                                                                                                                                                                                                              |
+| `group`            | object | The full snapshot assigned over — only present when `save_group: true`.                                                                                                                                                                                                                                                           |
 
 ## Strategies
 
@@ -125,8 +127,10 @@ const proposerOffer = {
 };
 
 // Need the *identity* of the player in another role (e.g. to read their pushed decision):
-const { responder: [responderId] } = MultiplayerRole.participantsByRole();
-const theirDecision = api.get(responderId)?.rounds[round].decision;
+const {
+  responder: [responderId],
+} = MultiplayerRole.participantsByRole();
+const theirDecision = jsPsych.multiplayer.get(responderId)?.rounds[round].decision;
 
 // The full agreed map, if you need it:
 const map = MultiplayerRole.getRoleMap(); // { p1: { role: "proposer" }, p2: { role: "responder" } }
@@ -149,6 +153,14 @@ quantifies only over participants present so far, so it can resolve the instant 
 assigning over a partial group. Note that an upstream barrier admitting N participants does not by
 itself guarantee those N have pushed into this trial's session; the plugin emits a console warning when
 `group_size` and `ready` are both omitted.
+
+## Accessors that throw
+
+Readiness calls `rank_by`, `role_from`, and `ready` speculatively, before every participant's data has
+arrived, so a natural accessor like `(e) => e.rounds[round].score` throws until then. A throw counts
+as "not ready yet", so accessors don't need to be null-safe. If the group never becomes ready (a
+timeout, a departure, or a lost connection), the plugin logs the last error an accessor threw, since
+it may explain why — for example, an accessor that tries to modify the frozen snapshot.
 
 ## Author / Citation
 

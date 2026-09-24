@@ -1,4 +1,4 @@
-import { JsPsych, JsPsychPlugin, ParameterType, TrialType } from "jspsych";
+import { GroupSessionData, JsPsych, JsPsychPlugin, ParameterType, TrialType } from "jspsych";
 
 import { version } from "../package.json";
 import {
@@ -8,12 +8,7 @@ import {
   resolveStartedAt,
   startedAtKey,
 } from "./countdown-core";
-import {
-  GroupSessionData,
-  MultiplayerApiLike,
-  Unsubscribe,
-  resolveMultiplayerApi,
-} from "./multiplayer-api";
+import { getMultiplayer } from "./multiplayer";
 
 const info = <const>{
   name: "multiplayer-countdown",
@@ -97,7 +92,15 @@ const info = <const>{
       type: ParameterType.STRING,
       default: undefined,
     },
-    /** Full group-session snapshot at trial end. Only stored when `save_group` is true. */
+    /**
+     * True if this participant's connection was lost for good during the countdown. The countdown
+     * still runs to the end locally, from the start time it had already agreed on.
+     */
+    connection_lost: {
+      type: ParameterType.BOOL,
+      default: false,
+    },
+    /** Full group-session snapshot at trial end (frozen). Only stored when `save_group` is true. */
     group: {
       type: ParameterType.OBJECT,
       default: undefined,
@@ -155,8 +158,8 @@ class MultiplayerCountdownPlugin implements JsPsychPlugin<Info> {
   // would end the trial immediately. A sync `trial` makes jsPsych fire `on_load` itself and wait for
   // `finishTrial()`. (Same footgun the chat/sync plugins fixed — see chat/src/index.ts:131.)
   trial(display_element: HTMLElement, trial: TrialType<Info>) {
-    const api = resolveMultiplayerApi(this.jsPsych);
-    const me = api.participantId;
+    const multiplayer = getMultiplayer(this.jsPsych);
+    const me = multiplayer.participantId;
 
     // --- Validate required params (the pure core deliberately does not) -----------------------
     const name = trial.name;
@@ -184,16 +187,16 @@ class MultiplayerCountdownPlugin implements JsPsychPlugin<Info> {
     // peers, and makes a reused name fail deterministically (the started-expired warning below
     // catches it). The write itself is a one-key `update()`, which merges into our slot, so other
     // keys (role, joinedAt, …) survive without us spreading them back ourselves.
-    const existing = api.get(me)?.[key];
+    const existing = multiplayer.get(me)?.[key];
     const alreadyRegistered = typeof existing === "number" && Number.isFinite(existing);
     const ownStartedAt = alreadyRegistered ? (existing as number) : Date.now();
 
     if (!alreadyRegistered) {
-      // Fire-and-forget: a sync subscribe-trial has no trial-promise to reject (unlike ready's
-      // `await api.push`), so a failed one-shot registration is surfaced loudly and un-relabeled via
-      // console.error rather than being silently swallowed. The display still continues from whatever
-      // timestamps remain readable (this client's own local fallback at minimum).
-      api.update({ [key]: ownStartedAt }).catch((err) => {
+      // Fire-and-forget: a sync subscribe-trial has no trial-promise to reject, so a failed one-shot
+      // registration is surfaced loudly via console.error rather than being silently swallowed. The
+      // display still continues from whatever timestamps remain readable; this client's own view
+      // always includes its own timestamp.
+      multiplayer.update({ [key]: ownStartedAt }).catch((err) => {
         console.error(
           "multiplayer-countdown: failed to push this participant's start timestamp; this client " +
             "will not contribute to the shared consensus start time.",
@@ -234,7 +237,8 @@ class MultiplayerCountdownPlugin implements JsPsychPlugin<Info> {
     // Never null: fall back to our own timestamp until peers' (possibly lower) timestamps arrive.
     let currentStartedAt = ownStartedAt;
     let ended = false;
-    let unsubscribe: Unsubscribe | null = null;
+    // Aborted when the trial ends, which removes the subscription
+    const controller = new AbortController();
     // `number`, not ReturnType<typeof setTimeout>: pluginAPI.setTimeout returns a numeric handle.
     let tickTimer: number | null = null;
 
@@ -269,19 +273,29 @@ class MultiplayerCountdownPlugin implements JsPsychPlugin<Info> {
       if (ended) return; // guard against a tick racing a subscribe-driven end
       ended = true;
       if (tickTimer != null) clearTimeout(tickTimer);
-      unsubscribe?.();
+      controller.abort();
       this.jsPsych.finishTrial({
         started_at: currentStartedAt,
         own_started_at: ownStartedAt,
         displayed_duration: Math.round(performance.now() - start),
         mode,
-        ...(trial.save_group ? { group: api.getAll() } : {}),
+        connection_lost: multiplayer.status === "closed",
+        ...(trial.save_group ? { group: safeGetAll() } : {}),
       });
     };
 
-    // Seed from the current snapshot, then subscribe (which replays it — the seed is
-    // belt-and-suspenders, kept because replay lives on the un-landed #3694 side of the API seam).
-    resolve(api.getAll());
+    /** The latest snapshot, or `{}` if there is no session anymore (after disconnect()). */
+    const safeGetAll = (): GroupSessionData => {
+      try {
+        return multiplayer.getAll();
+      } catch {
+        return {};
+      }
+    };
+
+    // Resolve from the current snapshot first, so an already-expired countdown is caught (and
+    // warned about) before subscribing.
+    resolve(multiplayer.getAll());
     renderTime();
 
     // Already expired at start ⇒ a reused `name` (its timestamp is still in the session) or this
@@ -299,16 +313,21 @@ class MultiplayerCountdownPlugin implements JsPsychPlugin<Info> {
 
     // subscribe re-resolves the consensus min on every group change; a newly-arrived lower timestamp
     // can move `currentStartedAt` earlier (converging down) and may itself push us past expiry.
-    unsubscribe = api.subscribe((group) => {
-      if (ended) return;
-      try {
-        resolve(group);
-        renderTime();
-      } catch {
-        // A bad frame must not tear down the subscription or the trial.
-      }
-      if (isExpired(Date.now())) end();
-    });
+    // The session keeps running the countdown locally if the connection is lost: the consensus
+    // start time is already known, so the display and the end time stay correct.
+    multiplayer.subscribe(
+      (group) => {
+        if (ended) return;
+        try {
+          resolve(group);
+          renderTime();
+        } catch {
+          // A bad frame must not tear down the subscription or the trial.
+        }
+        if (isExpired(Date.now())) end();
+      },
+      { signal: controller.signal },
+    );
 
     // The tick ONLY re-renders from Date.now() against the currently-resolved start — it never
     // touches the API (that's subscribe's job). Every tick recomputes from Date.now() rather than

@@ -6,35 +6,35 @@ Partition a multiplayer group into matched sub-groups (pairs by default, or tria
 
 In addition to the [parameters available in all plugins](https://www.jspsych.org/latest/overview/plugins#parameters-available-in-all-plugins), this plugin accepts the following parameters. Parameters with a default value of undefined must be specified.
 
-| Parameter          | Type        | Default Value                  | Description                                                                                                                        |
-| ------------------ | ----------- | ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------- |
-| `group_size`       | integer     | `2`                            | Members per matched group (2 = dyads, 3 = triads). Integer ≥ 2.                                                                   |
-| `expected_players` | integer     | `null`                         | Wait for exactly this many participants before partitioning. `null` trusts an upstream barrier (warns).                          |
-| `strategy`         | string      | `"ordered"`                    | Ordering before chunking: `"ordered"` (by id), `"join_order"` (by `joinedAt`), or `"random"` (seeded, per-round).                |
-| `seed`             | string      | `null`                         | Shared seed for `"random"`; defaults to a hash of the sorted ids + `round`.                                                      |
-| `round`            | integer     | `0`                            | Round index, for `"random"` re-pairing.                                                                                          |
-| `leftover`         | string      | `"error"`                      | Non-divisible count policy: `"error"`, `"spectator"`, or `"smaller_group"`.                                                      |
-| `ready`            | function    | `null`                         | `(snapshot) => boolean` overriding the readiness gate.                                                                           |
+| Parameter          | Type        | Default Value                  | Description                                                                                                                                                                               |
+| ------------------ | ----------- | ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `group_size`       | integer     | `2`                            | Members per matched group (2 = dyads, 3 = triads). Integer ≥ 2.                                                                                                                           |
+| `expected_players` | integer     | `null`                         | Wait for exactly this many participants before partitioning. `null` trusts an upstream barrier (warns).                                                                                   |
+| `strategy`         | string      | `"ordered"`                    | Ordering before chunking: `"ordered"` (by id), `"join_order"` (by `joinedAt`), or `"random"` (seeded, per-round).                                                                         |
+| `seed`             | string      | `null`                         | Shared seed for `"random"`; defaults to a hash of the sorted ids + `round`.                                                                                                               |
+| `round`            | integer     | `0`                            | Round index, for `"random"` re-pairing.                                                                                                                                                   |
+| `leftover`         | string      | `"error"`                      | Non-divisible count policy: `"error"`, `"spectator"`, or `"smaller_group"`.                                                                                                               |
+| `ready`            | function    | `null`                         | `(snapshot) => boolean` overriding the readiness gate.                                                                                                                                    |
 | `push_data`        | object      | `{}`                           | Extra data merged into this client's session entry (alongside `joinedAt`). Must be JSON-safe — it is deep-copied with `JSON.stringify`, so `Date`/`undefined`/`Map`/`NaN` do not survive. |
-| `save_group`       | boolean     | `false`                        | Include the full snapshot in the trial data.                                                                                     |
-| `timeout`          | integer     | `30000`                        | Milliseconds to wait for readiness before failing loud. `null` waits forever.                                                    |
-| `on_timeout`       | function    | `null`                         | Hook run on timeout; the trial always ends `matched_self: false, timed_out: true`.                                              |
-| `message`          | HTML string | `"<p>Finding your match…</p>"` | Shown while waiting.                                                                                                             |
+| `save_group`       | boolean     | `false`                        | Include the full snapshot in the trial data.                                                                                                                                              |
+| `timeout`          | integer     | `30000`                        | Milliseconds to wait for readiness before failing loud. `null` waits forever.                                                                                                             |
+| `on_timeout`       | function    | `null`                         | Hook run on timeout; the trial always ends `matched_self: false, timed_out: true`.                                                                                                        |
+| `message`          | HTML string | `"<p>Finding your match…</p>"` | Shown while waiting.                                                                                                                                                                      |
 
 ## Data Generated
 
 In addition to the [default data collected by all plugins](https://www.jspsych.org/latest/overview/plugins#data-collected-by-all-plugins), this plugin collects:
 
-| Name           | Type    | Value                                                                                 |
-| -------------- | ------- | ------------------------------------------------------------------------------------- |
-| `match_group`  | integer | This participant's group index; `null` if a spectator or on timeout.                  |
-| `partners`     | array   | The other members of the group; `null` on timeout, `[]` if a spectator.               |
-| `members`      | array   | All members (including self) in consensus order; `null` on timeout.                   |
-| `position`     | integer | This participant's 0-based seat within its group; `null` if a spectator/timeout.      |
+| Name           | Type    | Value                                                                                      |
+| -------------- | ------- | ------------------------------------------------------------------------------------------ |
+| `match_group`  | integer | This participant's group index; `null` if a spectator or on timeout.                       |
+| `partners`     | array   | The other members of the group; `null` on timeout, `[]` if a spectator.                    |
+| `members`      | array   | All members (including self) in consensus order; `null` on timeout.                        |
+| `position`     | integer | This participant's 0-based seat within its group; `null` if a spectator/timeout.           |
 | `match_map`    | object  | The full `participantId -> { group, members, partners, position }` map; `null` on timeout. |
-| `matched_self` | boolean | Whether this participant was placed in a group (distinguishes spectator from timeout). |
-| `timed_out`    | boolean | `true` if readiness was not reached before `timeout`.                                  |
-| `group`        | object  | The full snapshot — only when `save_group: true`.                                     |
+| `matched_self` | boolean | Whether this participant was placed in a group (distinguishes spectator from timeout).     |
+| `timed_out`    | boolean | `true` if readiness was not reached before `timeout`.                                      |
+| `group`        | object  | The full snapshot — only when `save_group: true`.                                          |
 
 ## Install
 
