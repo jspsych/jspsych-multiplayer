@@ -39,7 +39,7 @@ available the moment it starts. A multiplayer experiment breaks that assumption 
   left is a design that strands the partner who stayed.
 
 Hand-rolling these — polling loops, sorting participant IDs in an `on_finish`, ad-hoc
-timeout flags — is exactly the code that makes multiplayer experiments brittle. The
+timeout flags to guess who left — is exactly the code that makes multiplayer experiments brittle. The
 packages below turn each concern into a declarative trial parameter instead.
 
 ## The building blocks
@@ -105,8 +105,7 @@ Two things to note:
 - **`connect` before `run`.** Every multiplayer trial talks to the group session through
   the connected adapter, so the connection must exist before the timeline starts.
 - **`persistParticipant: true`** stores this tab's participant ID in `sessionStorage`, so a
-  mid-game refresh rejoins as the *same* participant instead of abandoning a ghost slot
-  (which would, for example, falsely satisfy the lobby's "two players present" condition).
+  mid-game refresh rejoins as the *same* participant.
 
 This is the only backend-specific code in the whole file. Everything after this point runs
 unchanged on JATOS (step 8).
@@ -120,21 +119,28 @@ The first trial holds each arriving player until a partner exists:
 ```js
 const lobby = {
   type: jsPsychMultiplayerSync,
+  participants: [],
   push_data: { status: "ready" },
-  wait_for: (group) => Object.keys(group).length >= 2,
+  wait_for: (_group, presence) =>
+    Object.values(presence).filter((status) => status === "connected").length >= 2,
   message: `<p>Waiting for another player to join…</p>`,
 };
 ```
 
 That is the sync plugin's whole contract in one trial: **push data, then wait until a
 predicate over the group holds.** `push_data` writes `{ status: "ready" }` into the
-participant's own slot; `wait_for` receives the full group map every time it changes and
-returns `true` once at least two participants are present. The plugin shows `message` while
-waiting and ends the trial the moment the predicate passes.
+participant's own slot. `wait_for` runs every time the group changes and receives two
+arguments: the group's data and its *presence*, which says whether each participant is
+`connected`, `away` (dropped out, may come back), or `left`. The lobby counts connected
+participants rather than slots, because a participant's slot stays in the group after they
+leave. The plugin shows `message` while waiting and ends the trial the moment the predicate
+passes.
 
-There is deliberately **no timeout** here: waiting indefinitely for a partner to arrive is
-correct for a recruitment lobby. Timeouts belong on mid-game waits, where an absent partner
-means the round cannot finish (step 7).
+`participants: []` tells the barrier not to depend on anyone in particular. By default a
+sync barrier ends early, with `partner_left: true`, if another connected participant leaves;
+that suits a mid-game wait (step 6) but not a lobby, where someone leaving just means waiting
+a little longer. There is also deliberately **no timeout**: waiting indefinitely for a partner
+to arrive is correct for a recruitment lobby.
 
 </Step>
 
@@ -152,12 +158,19 @@ const assignRoles = {
   roles: ["proposer", "responder"],
   strategy: "join_order",
   overflow_role: "spectator",
-  ready: (group) =>
-    Object.keys(group).length >= 2 &&
-    Object.values(group).every(
-      (entry) =>
-        entry.joinedAt != null || entry.offer !== undefined || entry.decision !== undefined
-    ),
+  ready: (group, presence) => {
+    const ids = Object.keys(group);
+    return (
+      ids.length >= 2 &&
+      ids.every(
+        (id) =>
+          presence[id] === "connected" &&
+          (group[id].joinedAt != null ||
+            group[id].offer !== undefined ||
+            group[id].decision !== undefined),
+      )
+    );
+  },
   save_group: true,
   message: "<p>Assigning roles…</p>",
   on_finish: (data) => {
@@ -178,8 +191,11 @@ Piece by piece:
   first two fill `roles`; anyone beyond them gets `overflow_role: "spectator"`.
 - **The `ready` predicate gates *when* a snapshot is safe to assign over** — and supplying a
   custom one *replaces* the plugin's built-in gate, so it must check two things.
-  *Membership*: at least two participants. *Field readiness*: every present entry actually
-  carries the data `join_order` sorts on.
+  *Membership*: at least two participants, all connected. *Field readiness*: every entry
+  actually carries the data `join_order` sorts on. The plugin has already removed
+  participants who left, but a slot left over from an earlier member starts out `away` and
+  only becomes `left` after the dropout timeout; requiring `connected` keeps such a slot out
+  of the assignment until it drops out.
 
   <details>
   <summary>Why a count-only predicate is a real bug</summary>
@@ -290,13 +306,14 @@ const proposerWaitTrial = {
   type: jsPsychMultiplayerSync,
   push_data: () => ({ offer: proposerOffer, joinedAt: myJoinedAt }),
   wait_for: (group) => group[responderId]?.decision !== undefined,
+  participants: () => [responderId],
   timeout: PARTNER_TIMEOUT_MS,
-  on_timeout: () => {
-    partnerLeft = true;
-  },
   message: () => `<p>You offered the Responder <strong>$${proposerOffer}</strong>…</p>`,
   on_finish: (data) => {
-    if (data.timed_out) return;
+    if (data.partner_left || data.timed_out || data.connection_lost) {
+      partnerLeft = true;
+      return;
+    }
     responderDecision = data.group[responderId].decision;
   },
 };
@@ -319,11 +336,14 @@ The responder mirrors this, with the wait on the other side of the input:
 const responderWaitTrial = {
   type: jsPsychMultiplayerSync,
   wait_for: (group) => group[proposerId]?.offer !== undefined,
+  participants: () => [proposerId],
   timeout: PARTNER_TIMEOUT_MS,
-  on_timeout: () => { partnerLeft = true; },
   message: "<p>Waiting for the Proposer's offer…</p>",
   on_finish: (data) => {
-    if (data.timed_out) return;
+    if (data.partner_left || data.timed_out || data.connection_lost) {
+      partnerLeft = true;
+      return;
+    }
     proposerOffer = data.group[proposerId].offer;
   },
 };
@@ -341,10 +361,9 @@ const responderSendDecisionTrial = {
 };
 ```
 
-Its `wait_for` checks the responder's **own** slot — it just confirms the decision landed
-in shared state before moving on. Like the lobby it carries no timeout: a wait on a
-client's own data either succeeds promptly or something is wrong at a level a timeout would
-not fix.
+Its `wait_for` checks the responder's **own** slot. Your own writes show up in your reads
+immediately, so this barrier passes at once; it is there to publish the decision. Like the
+lobby it carries no timeout.
 
 Both roles' timelines hang off `conditional_function`s checking `myRole`, so one file
 serves both players; which client runs which branch is decided entirely by the role trial's
@@ -359,16 +378,21 @@ The happy path ends in a shared outcome screen: both clients hold `proposerOffer
 
 The unhappy path is what distinguishes a demo from a deployable design. In open
 recruitment, a partner can close their tab mid-round. Every barrier that waits on the
-**other** player's data therefore sets:
+**other** player's data therefore names that player:
 
 ```js
-timeout: PARTNER_TIMEOUT_MS,   // 60 s — one tunable constant at the top of the file
-on_timeout: () => { partnerLeft = true; },
+participants: () => [responderId],   // or [proposerId] on the responder's side
+timeout: PARTNER_TIMEOUT_MS,         // 60 s — one tunable constant at the top of the file
 ```
 
-If the timeout elapses, the barrier finishes with `timed_out: true` in its data (which is
-why both `on_finish` handlers bail out early on that flag — the group snapshot will not
-contain what they came for), and downstream conditionals route around the outcome:
+The adapter reports who is connected, and jsPsych marks a participant who stays
+disconnected for longer than the dropout timeout (10 s by default) as `left`. When the
+named partner reaches `left`, the barrier ends with `partner_left: true` and
+`left_participant` set to their ID. If this client's own connection is lost for good, it
+ends with `connection_lost: true`. `timeout` remains as a backstop for a partner who stays
+connected but never acts; it ends the barrier with `timed_out: true`. Both `on_finish`
+handlers treat all three the same way, because in each case the group snapshot will not
+contain what they came for, and downstream conditionals route around the outcome:
 
 ```js
 const partnerLeftScreen = { timeline: [/* "The other player left…" */],
@@ -379,12 +403,13 @@ const outcome = { timeline: [outcomeTrial],
 
 So the stranded player gets a clean exit instead of an infinite spinner.
 
-:::caution Each client times out independently
-There is no handshake in which the two clients agree that one of them has left. If a present-but-slow responder ponders
-past `PARTNER_TIMEOUT_MS`, the proposer concludes they left while the responder completes
-the round normally, and the two walk away with contradictory end-states. Keep the timeout
-generous relative to your slowest plausible participant, and consider capping decision
-screens with a `trial_duration` below it.
+:::caution The timeout still decides alone
+Departures are detected from connections, so a slow but connected responder is never
+mistaken for one who left. The `timeout` backstop has no such check: if a responder ponders
+past `PARTNER_TIMEOUT_MS`, the proposer gives up while the responder completes the round,
+and the two walk away with contradictory end-states. Keep the timeout generous relative to
+your slowest plausible participant, and consider capping decision screens with a
+`trial_duration` below it.
 :::
 
 Open recruitment produces one more character: the third player. The lobby admits *at least*
@@ -407,8 +432,8 @@ participant is ever left on a blank page.
 
 One last piece of hygiene: when a client is done with the session, leave it explicitly —
 `on_finish: () => jsPsych.multiplayer.disconnect()` on the final trial (or at experiment
-end) releases the participant's slot and cancels any live subscriptions, which is how the
-example's exit screens end.
+end) closes the connection and cancels any live subscriptions, which is how the example's
+exit screens end. The participant's slot stays in the group; the others see them as `left`.
 
 </Step>
 
@@ -437,7 +462,7 @@ jatos.onLoad(async () => {
 
 (Plus the `<script src="jatos.js">` tag JATOS injects, and loading the JATOS adapter bundle
 instead of the local one.) The coordination that makes this a *multiplayer* experiment —
-lobby, role consensus, barriers, timeout handling — is identical across both files, because
+lobby, role consensus, barriers, dropout handling — is identical across both files, because
 none of it is backend-specific.
 
 That is the development loop these packages are designed for: **iterate on game logic in
@@ -455,7 +480,8 @@ Each multiplayer trial records structured data alongside the usual jsPsych field
 real run (proposer's tab, abridged):
 
 ```json
-{ "trial_type": "multiplayer-sync", "wait_time": 1, "timed_out": false, "wait_error": null,
+{ "trial_type": "multiplayer-sync", "wait_time": 1, "timed_out": false, "partner_left": false,
+  "left_participant": null, "connection_lost": false, "wait_error": null,
   "group": { "031cc…": { "status": "ready" }, "dbad5…": { "status": "ready" } } }
 
 { "trial_type": "multiplayer-role", "role": "proposer", "assigned_self": true, "timed_out": false,
@@ -469,7 +495,8 @@ real run (proposer's tab, abridged):
 ```
 
 Everything you would analyze is here: the barrier's `wait_time` (how long this client
-actually waited), `timed_out` / `wait_error` for data-quality filtering, the full
+actually waited), `timed_out`, `partner_left`, `connection_lost`, and `wait_error` for
+data-quality filtering, the full
 `role_map` (so you can verify both clients agreed), and — because barriers snapshot the
 group they resolved over — the offer and decision themselves, with `joinedAt` visibly
 riding along in every mid-game slot.

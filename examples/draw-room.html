@@ -7,7 +7,7 @@
          This URL is pinned to the same #3694 preview SHA as chat-room.html. A SHA-pinned URL keeps
          loading indefinitely (it never 404s); what goes stale is the #3694 API it was pinned against,
          so if the demo misbehaves against a newer #3694, re-pin — see examples/README.md "Running it". -->
-    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@9eec555f5e55f09b64b40cd8278d0518396f195f/packages/jspsych/dist/index.browser.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@a6e05be017bcadf6ca208ed2fc0ac79e438c9626/packages/jspsych/dist/index.browser.min.js"></script>
     <script src="https://unpkg.com/@jspsych/plugin-html-button-response"></script>
     <!-- The multiplayer packages resolve from the sibling packages' built dist/ in this repo (run
          `npm install && npm run build` from the repo root first — dist/ is gitignored). Once they are
@@ -21,7 +21,7 @@
     <script src="../packages/plugin-multiplayer-countdown/dist/index.browser.min.js?v=1"></script>
     <link
       rel="stylesheet"
-      href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@9eec555f5e55f09b64b40cd8278d0518396f195f/packages/jspsych/css/jspsych.css"
+      href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@a6e05be017bcadf6ca208ed2fc0ac79e438c9626/packages/jspsych/css/jspsych.css"
     />
     <style>
       /* The draw plugin ships no CSS of its own (matching the other multiplayer plugins), so this
@@ -171,8 +171,8 @@
     const jsPsych = initJsPsych();
 
     // Connecting the adapter is the only network setup the timeline needs. persistParticipant keeps
-    // this tab's participant id in sessionStorage, so a mid-lobby refresh rejoins as the SAME
-    // participant instead of leaving a stale "ghost" slot that would falsely satisfy the lobby.
+    // this tab's participant id in sessionStorage, so a mid-lobby refresh rejoins as the same
+    // participant. The adapter tracks presence itself, including when a tab closes.
     const localAdapter = new jsPsychAdapterMultiplayerLocal({ persistParticipant: true });
 
     // Turns a participant id into a "Player N" label by JOIN ORDER: sort the group's entries by the
@@ -181,7 +181,7 @@
     // entry reads "You" instead. Shared by the lobby's message and the draw trial's roster_label so
     // both stages agree on numbering.
     const playerLabel = (participantId, group) => {
-      if (participantId === localAdapter.participantId) return "You";
+      if (participantId === jsPsych.multiplayer.participantId) return "You";
       const ordered = Object.entries(group)
         .filter(([, entry]) => entry && typeof entry.joinedAt === "number")
         .sort(([idA, a], [idB, b]) => a.joinedAt - b.joinedAt || (idA < idB ? -1 : 1));
@@ -192,13 +192,17 @@
     // 1) Lobby: publish our join time, then wait until enough players are present.
     const lobbyTrial = {
       type: jsPsychMultiplayerSync,
+      // A lobby counts who is here, so someone leaving shouldn't end the wait
+      participants: [],
       push_data: () => ({ joinedAt: Date.now() }),
       // NB: the sync plugin's waiting-HTML parameter is `message`, not `prompt`.
       message: `<p>Waiting for at least ${MIN_PLAYERS} players to join…</p>
                <p>Open this page in another tab (keep the <code>?mp_session=</code> in the URL) to add a player.</p>`,
-      wait_for: (group) =>
-        Object.values(group).filter((entry) => entry && typeof entry.joinedAt === "number").length >=
-        MIN_PLAYERS,
+      // Count connected players who have pushed a join time; slots stay after a player leaves.
+      wait_for: (group, presence) =>
+        Object.keys(group).filter(
+          (id) => typeof group[id]?.joinedAt === "number" && presence[id] === "connected",
+        ).length >= MIN_PLAYERS,
     };
 
     // 2) The shared canvas. roster_label uses playerLabel (above) to turn each participant id into a
@@ -240,14 +244,14 @@
         const label = playerLabel(participantId, group);
         return entry && entry.draw_done === true ? `${label} ✓` : label;
       },
-      // Only participants who made it through the lobby (i.e. pushed a `joinedAt`) count toward
-      // "everyone is done" — an as-yet-unjoined slot from a mid-lobby refresh shouldn't block the room
-      // forever.
-      end_when: (group) => {
-        const present = Object.values(group).filter(
-          (entry) => entry && typeof entry.joinedAt === "number"
+      // "Everyone" means participants who made it through the lobby (pushed a `joinedAt`) and haven't
+      // left. A participant who leaves also ends the room by default (end_on_participant_left), but
+      // skipping them here keeps the condition correct if you turn that off.
+      end_when: (group, presence) => {
+        const present = Object.keys(group).filter(
+          (id) => typeof group[id]?.joinedAt === "number" && presence[id] !== "left",
         );
-        return present.length > 0 && present.every((entry) => entry.draw_done === true);
+        return present.length > 0 && present.every((id) => group[id].draw_done === true);
       },
       // Adds the demo's own "I'm done" button below the canvas (see the on_finish/on_load note
       // above) — deliberately NOT the plugin's `end_button_label`, which would end only the
@@ -259,7 +263,7 @@
           .querySelector(".jspsych-multiplayer-draw-canvas-wrap");
         canvasRef = wrap.querySelector(".jspsych-multiplayer-draw-canvas");
         const markDone = () => {
-          const mine = jsPsych.multiplayer.get(localAdapter.participantId) || {};
+          const mine = jsPsych.multiplayer.get(jsPsych.multiplayer.participantId) || {};
           if (mine.draw_done === true) return;
           jsPsych.multiplayer
             .update({ draw_done: true })
@@ -278,7 +282,7 @@
         // refresh resumes the same deadline. `update` merges just this key, leaving the
         // `joinedAt`/`draw_done` this participant already wrote intact. The write is fire-and-forget;
         // the clock falls back to our own start until (possibly lower) peer timestamps arrive.
-        const mineAtLoad = jsPsych.multiplayer.get(localAdapter.participantId) || {};
+        const mineAtLoad = jsPsych.multiplayer.get(jsPsych.multiplayer.participantId) || {};
         const already =
           typeof mineAtLoad[DRAW_START_KEY] === "number" && Number.isFinite(mineAtLoad[DRAW_START_KEY]);
         const ownStart = already ? mineAtLoad[DRAW_START_KEY] : Date.now();

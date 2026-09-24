@@ -1,9 +1,8 @@
 // Shared protocol for the Group Quiz demo.
 // Loaded as a plain <script> by index.html, by BOTH the host view and the player timeline.
 //
-// Deliberately dependency-free: the host view is vanilla JS driving the adapter directly (no
-// jsPsych, no plugins), so anything both sides share has to be plain functions over the group
-// session. That is why the leaderboard is computed here rather than through
+// Deliberately dependency-free: the host view is vanilla JS on jsPsych.multiplayer (no timeline,
+// no plugins), so anything both sides share has to be plain functions over the group session. That is why the leaderboard is computed here rather than through
 // plugin-multiplayer-scoreboard's `buildLeaderboard` static — see DESIGN.md.
 //
 // questions.js (correct answers) is host-only and never loaded by players.

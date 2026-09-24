@@ -19,7 +19,7 @@ an error saying so.
   scoreboard) is honored again.
 - **Departures.** The barrier plugins (sync, ready, choice, match, role, scoreboard) take a
   `participants` parameter: the participants the barrier depends on, defaulting to every other
-  participant who hasn't left when the wait starts (`[]` ignores departures). If one leaves, the
+  participant who is connected when the wait starts (`[]` ignores departures). If one leaves, the
   trial ends the way a timeout would, and records `partner_left: true` and `left_participant`.
   Counts, lobbies, and partitions ignore participants who have left.
 - **Lost connections** end the wait with `connection_lost: true` instead of failing the trial.

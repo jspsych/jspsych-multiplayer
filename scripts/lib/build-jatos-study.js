@@ -198,8 +198,28 @@ export function zipStudy({ distDir, assetsDir, jasFileName, studyDirName, zipNam
  */
 export function printPre3694Caveat() {
   console.log(
-    `\n  NOTE: the bundled jsPsych core is a published release, which does NOT yet carry the\n` +
-      `  multiplayer API (jsPsych#3694). The archive imports into JATOS fine, but the study will\n` +
-      `  fail at connect() until #3694 ships — or until you swap jspsych.js for a #3694 build.`,
+    `\n  NOTE: the bundled jsPsych core is the vendored preview build of jsPsych#3694\n` +
+      `  (vendor/jspsych), because no jsPsych release carries the multiplayer API yet. Refresh it\n` +
+      `  with \`npm run vendor-jspsych <sha>\` when #3694 changes.`,
   );
+}
+
+/**
+ * Path rewrites for the jsPsych core `<script>` and stylesheet an example loads, whatever URL it
+ * uses: the published package on unpkg, or a #3694 preview build pinned on jsDelivr. Reading the
+ * URLs from the HTML means re-pinning the examples to a new preview SHA needs no change here.
+ */
+export function jspsychCoreRewrites(html) {
+  const script = html.match(
+    /"(https:\/\/(?:unpkg\.com\/jspsych|cdn\.jsdelivr\.net\/gh\/jspsych\/jsPsych@[0-9a-f]+\/packages\/jspsych\/dist\/index\.browser\.min\.js))"/,
+  );
+  const css = html.match(
+    /"(https:\/\/(?:unpkg\.com\/jspsych|cdn\.jsdelivr\.net\/gh\/jspsych\/jsPsych@[0-9a-f]+\/packages\/jspsych)\/css\/jspsych\.css)"/,
+  );
+  if (!script || !css) {
+    throw new Error(
+      "Couldn't find the jsPsych core <script> and stylesheet URLs in the example's HTML.",
+    );
+  }
+  return { [css[1]]: "jspsych.css", [script[1]]: "jspsych.js" };
 }

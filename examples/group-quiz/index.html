@@ -9,7 +9,7 @@
     <script src="jatos.js"></script>
     <!-- jsPsych core MUST carry the multiplayer API (jsPsych#3694). The published `jspsych` on
          unpkg does not yet, so this loads it as a placeholder — swap in a build of #3694 to run. -->
-    <script src="https://unpkg.com/jspsych"></script>
+    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@a6e05be017bcadf6ca208ed2fc0ac79e438c9626/packages/jspsych/dist/index.browser.min.js"></script>
     <script src="https://unpkg.com/@jspsych/plugin-call-function"></script>
     <script src="https://unpkg.com/@jspsych/plugin-html-button-response"></script>
     <script src="https://unpkg.com/@jspsych/plugin-html-keyboard-response"></script>
@@ -22,7 +22,7 @@
          convenience, but see the security note in the header comment below. -->
     <script src="protocol.js"></script>
     <script src="questions.js"></script>
-    <link rel="stylesheet" href="https://unpkg.com/jspsych/css/jspsych.css" />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@a6e05be017bcadf6ca208ed2fc0ac79e438c9626/packages/jspsych/css/jspsych.css" />
     <style>
       * { box-sizing: border-box; margin: 0; padding: 0; }
       body { font-family: sans-serif; background: #0f2b38; color: #fff; min-height: 100vh; }
@@ -117,9 +117,9 @@
     // Group Quiz — a live, Kahoot-style quiz on the jsPsych multiplayer packages.
     //
     // ONE link, two roles, chosen by the participant on the landing screen:
-    //   • HOST   — the presenter screen. Vanilla JS driving `adapter-multiplayer-jatos` DIRECTLY
-    //              (no jsPsych timeline): it reacts continuously to `subscribe`, and it is the one
-    //              client that advances the game.
+    //   • HOST   — the presenter screen. Vanilla JS on `jsPsych.multiplayer` with no jsPsych
+    //              timeline: it reacts continuously to `subscribe`, and it is the one client that
+    //              advances the game.
     //   • PLAYER — a phone. An ordinary jsPsych timeline whose every "wait for the host to advance"
     //              point is a single declarative `plugin-multiplayer-sync` barrier.
     //
@@ -166,29 +166,26 @@
       document.getElementById("player-btn").onclick = () => startPlayer();
 
       // ════════════════════════════════════════════════════════
-      //  HOST FLOW — vanilla JS, uses adapter directly
+      //  HOST FLOW — vanilla JS on jsPsych.multiplayer, no timeline
       // ════════════════════════════════════════════════════════
       async function startHost() {
         document.getElementById("selector").style.display   = "none";
         document.getElementById("host-view").style.display  = "block";
 
-        const adapter = new jsPsychAdapterMultiplayerJatos();
-        await adapter.connect();
-        const hostId = adapter.participantId;
+        // The host never runs a timeline, but a jsPsych instance still provides the multiplayer API
+        const jsPsych = initJsPsych();
+        const multiplayer = jsPsych.multiplayer;
+        await multiplayer.connect(new jsPsychAdapterMultiplayerJatos());
+        const hostId = multiplayer.participantId;
 
         let currentGroup = {};
         let countdownInterval = null;
         let revealScheduled   = false;
 
-        await adapter.push({ role: "host", phase: PHASES.LOBBY, step: phaseStep(undefined, PHASES.LOBBY) });
-        adapter.subscribe(group => { currentGroup = group; render(group); });
-
-        // The raw adapter's subscribe() fires only on future updates, not the
-        // current snapshot (replay is handled by MultiplayerAPI, not the adapter).
-        // Render once now so players who joined before the host subscribed appear
-        // immediately in the lobby.
-        currentGroup = adapter.getAll();
-        render(currentGroup);
+        // subscribe() calls back at once with the current group, so players who joined before the
+        // host appear in the lobby right away. The host's own writes show up immediately too.
+        multiplayer.subscribe(group => { currentGroup = group; render(group); });
+        await multiplayer.push({ role: "host", phase: PHASES.LOBBY, step: phaseStep(undefined, PHASES.LOBBY) });
 
         function render(group) {
           const state = group[hostId];
@@ -335,7 +332,7 @@
 
         async function startGame() {
           const question = QUESTIONS[0];
-          await adapter.push({
+          await multiplayer.push({
             role: "host", phase: PHASES.QUESTION, questionIndex: 0,
             questionPrompt: question.prompt, questionChoices: question.choices,
             questionStartTime: Date.now(), questionDurationMs: QUESTION_DURATION_MS,
@@ -345,17 +342,17 @@
         async function advanceToReveal() {
           clearInterval(countdownInterval); countdownInterval = null;
           const state = currentGroup[hostId];
-          await adapter.push({ ...state, phase: PHASES.REVEAL, correctChoice: QUESTIONS[state.questionIndex].correct, step: phaseStep(state.questionIndex, PHASES.REVEAL) });
+          await multiplayer.push({ ...state, phase: PHASES.REVEAL, correctChoice: QUESTIONS[state.questionIndex].correct, step: phaseStep(state.questionIndex, PHASES.REVEAL) });
         }
         async function advanceToLeaderboard() {
           const state = currentGroup[hostId];
-          await adapter.push({ ...state, phase: PHASES.LEADERBOARD, step: phaseStep(state.questionIndex, PHASES.LEADERBOARD) });
+          await multiplayer.push({ ...state, phase: PHASES.LEADERBOARD, step: phaseStep(state.questionIndex, PHASES.LEADERBOARD) });
         }
         async function advanceToNextQuestion() {
           const nextIndex = currentGroup[hostId].questionIndex + 1;
           const question  = QUESTIONS[nextIndex];
           clearInterval(countdownInterval); countdownInterval = null;
-          await adapter.push({
+          await multiplayer.push({
             role: "host", phase: PHASES.QUESTION, questionIndex: nextIndex,
             questionPrompt: question.prompt, questionChoices: question.choices,
             questionStartTime: Date.now(), questionDurationMs: QUESTION_DURATION_MS,
@@ -364,7 +361,7 @@
         }
         async function advanceToEnded() {
           const state = currentGroup[hostId];
-          await adapter.push({ ...state, phase: PHASES.ENDED, step: phaseStep(state.questionIndex, PHASES.ENDED) });
+          await multiplayer.push({ ...state, phase: PHASES.ENDED, step: phaseStep(state.questionIndex, PHASES.ENDED) });
           // jatos.endStudy() is on the "End Study" button in renderEnded — don't call it here
           // or the study ends before renderEnded has a chance to show the podium.
         }
@@ -383,6 +380,13 @@
 
         let myName         = "";
         let hostId         = null;
+        let hostGone       = false; // set when the host leaves or this player's connection is lost
+
+        // Every mid-game barrier depends on the host alone: another player leaving must not stop
+        // this one. If the host leaves, the barrier ends with partner_left and the game stops.
+        const endIfHostGone = (data) => {
+          if (data.partner_left || data.connection_lost) hostGone = true;
+        };
         let myAnswers      = {};
         let myTotalScore   = 0;
         let lastQuestionIndex = -1;
@@ -410,8 +414,8 @@
 
         // ── Lobby ────────────────────────────────────────────────────────────────────────────────
         // The one push-then-wait barrier that publishes this player into the group session. It has
-        // no `timeout` on purpose: waiting indefinitely for the host to press Start is correct
-        // (see the note on the mid-game barriers below, where the tradeoff is different).
+        // no `timeout` on purpose: waiting indefinitely for the host to press Start is correct.
+        // The mid-game barriers below instead end the game if the host leaves.
         const lobbyBarrier = {
           type: jsPsychMultiplayerSync,
           push_data: () => ({ role: "player", name: myName, answers: {}, totalScore: 0 }),
@@ -421,6 +425,8 @@
             return hId !== null && hostStepValue(group) >= phaseStep(0, PHASES.QUESTION);
           },
           message: "<p style='font-size:1.2rem'>Waiting for the host to start…</p>",
+          // The host isn't known yet, and other players coming and going doesn't matter here
+          participants: [],
           on_finish: (data) => { hostId = getHostId(data.group); },
         };
 
@@ -453,8 +459,11 @@
         const revealBarrier = {
           type: jsPsychMultiplayerSync,
           wait_for: (group) => hostStepValue(group) >= phaseStep(lastQuestionIndex, PHASES.REVEAL),
+          participants: () => [hostId],
           message: "<p>Waiting for results…</p>",
           on_finish: (data) => {
+            endIfHostGone(data);
+            if (hostGone) return;
             const state       = data.group[hostId];
             lastCorrect       = lastChoice !== null && lastChoice === state?.correctChoice;
             lastPointsEarned  = scoreAnswer(lastCorrect, lastTimeMs, state?.questionDurationMs ?? QUESTION_DURATION_MS);
@@ -497,7 +506,9 @@
           type: jsPsychMultiplayerSync,
           // ENDED has a step above any question, so it satisfies this too.
           wait_for: (group) => hostStepValue(group) >= phaseStep(lastQuestionIndex, PHASES.LEADERBOARD),
+          participants: () => [hostId],
           message: "<p>Calculating scores…</p>",
+          on_finish: endIfHostGone,
         };
 
         const leaderboardDisplay = {
@@ -521,18 +532,23 @@
           type: jsPsychMultiplayerSync,
           // Wait for the *next* question to start (or the game to end).
           wait_for: (group) => hostStepValue(group) >= phaseStep(lastQuestionIndex + 1, PHASES.QUESTION),
+          participants: () => [hostId],
           message: "<p>Get ready…</p>",
+          on_finish: endIfHostGone,
         };
 
         const questionLoop = {
-          timeline: [questionTrial, revealBarrier, pushScoreTrial, revealDisplay, leaderboardBarrier, leaderboardDisplay, nextQuestionBarrier],
-          loop_function: () => jsPsych.multiplayer.get(hostId)?.phase !== PHASES.ENDED,
+          // Each step is skipped once the host is gone, so the rest of the round doesn't play out
+          timeline: [questionTrial, revealBarrier, pushScoreTrial, revealDisplay, leaderboardBarrier, leaderboardDisplay, nextQuestionBarrier]
+            .map((trial) => ({ timeline: [trial], conditional_function: () => !hostGone })),
+          loop_function: () => !hostGone && jsPsych.multiplayer.get(hostId)?.phase !== PHASES.ENDED,
         };
 
         const endScreen = {
           type: jsPsychHtmlKeyboardResponse,
           stimulus: () => `
             <p style="font-size:2rem;font-weight:bold">Game Over!</p>
+            ${hostGone ? "<p>The game ended early because the host left or the connection was lost.</p>" : ""}
             <p style="font-size:1.3rem;margin-top:12px">Final score: <strong>${myTotalScore}</strong> pts</p>
             <p style="margin-top:8px;opacity:0.7">Thanks for playing!</p>`,
           choices: "NO_KEYS",
