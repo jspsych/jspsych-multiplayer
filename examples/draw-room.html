@@ -8,7 +8,7 @@
          This URL is pinned to the same #3694 preview SHA as chat-room.html. A SHA-pinned URL keeps
          loading indefinitely (it never 404s); what goes stale is the #3694 API it was pinned against,
          so if the demo misbehaves against a newer #3694, re-pin — see examples/README.md "Running it". -->
-    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@a6e05be017bcadf6ca208ed2fc0ac79e438c9626/packages/jspsych/dist/index.browser.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@49e6a936151ede3f3ce12cac9b1af88daed3ca7e/packages/jspsych/dist/index.browser.min.js"></script>
     <script src="https://unpkg.com/@jspsych/plugin-html-button-response"></script>
     <!-- The multiplayer packages resolve from the sibling packages' built dist/ in this repo (run
          `npm install && npm run build` from the repo root first — dist/ is gitignored). Once they are
@@ -22,7 +22,7 @@
     <script src="../packages/plugin-multiplayer-countdown/dist/index.browser.min.js?v=1"></script>
     <link
       rel="stylesheet"
-      href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@a6e05be017bcadf6ca208ed2fc0ac79e438c9626/packages/jspsych/css/jspsych.css"
+      href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@49e6a936151ede3f3ce12cac9b1af88daed3ca7e/packages/jspsych/css/jspsych.css"
     />
     <style>
       /* The draw plugin ships no CSS of its own (matching the other multiplayer plugins), so this
@@ -171,10 +171,10 @@
 
     const jsPsych = initJsPsych();
 
-    // Connecting the adapter is the only network setup the timeline needs. persistParticipant keeps
-    // this tab's participant id in sessionStorage, so a mid-lobby refresh rejoins as the same
-    // participant. The adapter tracks presence itself, including when a tab closes.
-    const localAdapter = new jsPsychAdapterMultiplayerLocal({ persistParticipant: true });
+    // Connecting the adapter is the only network setup the timeline needs. The adapter tracks
+    // presence itself, including when a tab closes. A refreshed tab gets a new participant id and
+    // joins as a new participant: a page that reloaded can't rejoin the group it left.
+    const localAdapter = new jsPsychAdapterMultiplayerLocal();
 
     // Turns a participant id into a "Player N" label by JOIN ORDER: sort the group's entries by the
     // `joinedAt` timestamp each pushes in the lobby (ties broken by participant id, so the ordering

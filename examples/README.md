@@ -86,10 +86,11 @@ When #3694's API changes, update both together:
    `?mp_session=…`) into a second tab to bring another player into the same room. Opening the bare
    URL again would start a different session.
 
-   The demo constructs the adapter with `persistParticipant: true`, so **refreshing a tab rejoins as
-   the same participant**. (Closing a tab clears that tab's `sessionStorage`, and reopening the bare
-   URL still starts a fresh session.) The adapter tracks presence itself, so the other tabs see a
-   closed tab as `left` without any unload handler in the page.
+   **Refreshing a tab joins as a new participant.** A page that reloads has restarted its
+   experiment, so it can't rejoin the group it left (see "Rejoining" in the dropouts guide). The
+   ultimatum examples keep the participant ID across a refresh with `persistParticipant: true` and
+   show a "you can't rejoin" screen instead. The adapter tracks presence itself, so the other tabs
+   see a closed tab as `left` without any unload handler in the page.
 
 The examples were updated for the current API (sessions and presence) and have not yet been
 re-verified end to end in a browser since.

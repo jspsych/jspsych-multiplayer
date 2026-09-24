@@ -47,14 +47,17 @@ tutorials use it. Develop your entire game here, then swap the constructor.
 Two options matter in practice:
 
 - `persistParticipant: true` — keep this tab's participant ID in `sessionStorage`, so a
-  refresh rejoins as the same participant. Almost always what you want while developing.
+  refresh keeps the same ID and its slot data. The other tabs see a refreshed tab as having
+  restarted, so it stays `left` for them (see
+  [Rejoining](/guides/handling-dropouts#rejoining)).
 - The session is identified by the `?mp_session=` URL parameter. A tab without one mints a
   fresh session, which is why joining means **copying the full URL** into the second tab.
 
 Each tab writes a heartbeat every 2 seconds. A tab that closes normally drops out at once.
 A tab that crashes drops out once its heartbeat is 70 seconds old (`presenceTimeoutMs`);
 the timeout is long because browsers run timers in background tabs as rarely as once a
-minute, and a waiting background tab must not look disconnected.
+minute, and a waiting background tab must not look disconnected. A tab whose heartbeats
+lapsed anyway reports that as a reconnect when it catches up, so it rejoins.
 
 ## `adapter-multiplayer-jatos`
 
@@ -77,10 +80,11 @@ jatos.onLoad(async () => {
 ```
 
 Presence comes from the group members JATOS reports as having an open channel. When this
-participant's own channel drops, jatos.js reopens it; if it stays down for longer than
-`closeAfterReconnectingMs` (30 seconds by default), the adapter treats the connection as
-lost for good. jatos.js supports one group channel per page, so the adapter allows one
-connection at a time.
+participant's own channel drops, jatos.js reopens it, and the adapter keeps waiting for as
+long as it takes, so a participant who comes back after several minutes rejoins. To give up
+instead, set `closeAfterReconnectingMs`: after the channel has been down that long, the
+adapter treats the connection as lost for good. jatos.js supports one group channel per
+page, so the adapter allows one connection at a time.
 
 ## `adapter-multiplayer-firebase`
 

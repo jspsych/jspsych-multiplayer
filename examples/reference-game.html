@@ -5,9 +5,9 @@
     <title>Repeated Reference Game — sequential (local, two-tab) — jsPsych multiplayer</title>
     <!-- jsPsych core MUST carry the multiplayer API (jsPsych#3694), which is not yet in a release.
          Until it merges, load the PR's preview build from jsDelivr instead of the published `jspsych`.
-         SHA-pinned to #3694 commit eddf2f6 (preview SHA 151ab52) — see examples/README.md "Running
+         SHA-pinned to #3694 commit f309a68 (preview SHA 49e6a93) — see examples/README.md "Running
          it" for how to re-pin if the demo misbehaves against a newer #3694. -->
-    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@a6e05be017bcadf6ca208ed2fc0ac79e438c9626/packages/jspsych/dist/index.browser.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@49e6a936151ede3f3ce12cac9b1af88daed3ca7e/packages/jspsych/dist/index.browser.min.js"></script>
     <script src="https://unpkg.com/@jspsych/plugin-survey-text"></script>
     <script src="https://unpkg.com/@jspsych/plugin-html-button-response"></script>
     <script src="https://unpkg.com/@jspsych/plugin-html-keyboard-response"></script>
@@ -19,7 +19,7 @@
     <script src="../packages/plugin-multiplayer-reference-game/dist/index.browser.min.js?v=1"></script>
     <link
       rel="stylesheet"
-      href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@a6e05be017bcadf6ca208ed2fc0ac79e438c9626/packages/jspsych/css/jspsych.css"
+      href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@49e6a936151ede3f3ce12cac9b1af88daed3ca7e/packages/jspsych/css/jspsych.css"
     />
   </head>
 
@@ -52,7 +52,9 @@
     const MIN_PLAYERS = 2;
 
     const jsPsych = initJsPsych();
-    const localAdapter = new jsPsychAdapterMultiplayerLocal({ persistParticipant: true });
+    // A refreshed tab gets a new participant id and joins as a new participant: a page that
+    // reloaded can't rejoin the game it left.
+    const localAdapter = new jsPsychAdapterMultiplayerLocal();
 
     // ── Twelve self-contained "tangram-like" silhouettes (no external assets) ──────────────────────
     // Regular polygons (3–8 sides) and star polygons (3–8 points) — abstract and distinct, so naming
