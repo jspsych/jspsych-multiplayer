@@ -1,7 +1,9 @@
 import {
   AdapterConnectOptions,
   ConnectionStatus,
+  ConnectOptions,
   initJsPsych,
+  MultiplayerAdapter,
   MultiplayerConnection,
 } from "jspsych";
 
@@ -15,7 +17,10 @@ import JatosAdapter from ".";
  *   settles when the channel opens or fails to open;
  * - groupChannels lists the members whose channel is open;
  * - when the channel closes, jatos.js wipes its local copy of the session data and the
- *   channel list (clearGroupChannel) before calling onClose.
+ *   channel list (clearGroupChannel) before calling onClose;
+ * - leaveGroup() resolves when the server confirms, which can be before the socket has
+ *   finished closing; until it has, joinGroup() is refused with jatos.js's "not in readyState
+ *   CLOSED" rejection, without onError.
  */
 function makeMockJatos(
   // Pass null to simulate a context where studyResultId is not populated.
@@ -23,10 +28,20 @@ function makeMockJatos(
   workerId: string | number = "worker-99",
 ) {
   // What the JATOS server holds; the local copy is wiped while the channel is closed
-  const store: Record<string, unknown> = {};
+  const store: Record<string, Record<string, unknown>> = {};
   let wiped = false;
   let callbacks: Record<string, ((...args: unknown[]) => void) | undefined> = {};
   let join: { resolve: () => void; reject: (reason: unknown) => void } | null = null;
+  /** The socket from a left channel is still closing. */
+  let closing = false;
+  /** Leaving leaves the socket closing, until finishClosing(). */
+  let leaveLeavesSocketClosing = false;
+  /** Held leave requests, released by finishLeave(). */
+  let heldLeave: (() => void) | null = null;
+  let holdLeaves = false;
+  /** Called whenever what the server holds changes: data or open channels. */
+  const serverListeners = new Set<() => void>();
+  const serverChanged = () => serverListeners.forEach((listener) => listener());
 
   const jatos = {
     studyResultId: studyResultId ?? undefined,
@@ -34,17 +49,30 @@ function makeMockJatos(
     groupChannels: [] as Array<string | number>,
     joinGroup: jest.fn((cbs: Record<string, (...args: unknown[]) => void>): unknown => {
       callbacks = cbs;
+      if (closing) {
+        return Promise.reject("Can't open a WebSocket that is not in readyState CLOSED.");
+      }
       return new Promise<void>((resolve, reject) => {
         join = { resolve, reject };
       });
     }),
     groupSession: {
       set: jest.fn(async (key: string, value: unknown) => {
-        store[key] = value;
+        store[key] = value as Record<string, unknown>;
+        serverChanged();
       }),
       getAll: jest.fn(() => (wiped ? {} : JSON.parse(JSON.stringify(store)))),
     },
-    leaveGroup: jest.fn((onSuccess?: () => void) => onSuccess?.()),
+    leaveGroup: jest.fn((onSuccess?: () => void) => {
+      const done = () => {
+        jatos.groupChannels = jatos.groupChannels.filter((c) => c !== self);
+        if (leaveLeavesSocketClosing) closing = true;
+        serverChanged();
+        onSuccess?.();
+      };
+      if (holdLeaves) heldLeave = done;
+      else done();
+    }),
   };
 
   const self = studyResultId ?? workerId;
@@ -52,6 +80,24 @@ function makeMockJatos(
   return {
     jatos,
     store,
+    serverListeners,
+    /** Make later leaves leave the socket closing until finishClosing(). */
+    leaveSlowly() {
+      leaveLeavesSocketClosing = true;
+    },
+    /** The closing socket finishes closing, so jatos.js can open a new channel. */
+    finishClosing() {
+      closing = false;
+    },
+    /** Hold later leave requests until finishLeave(). */
+    holdLeave() {
+      holdLeaves = true;
+    },
+    finishLeave() {
+      holdLeaves = false;
+      heldLeave?.();
+      heldLeave = null;
+    },
     /** The channel opens: jatos.js resolves the join and calls onOpen for this member. */
     open() {
       wiped = false;
@@ -59,6 +105,7 @@ function makeMockJatos(
       join?.resolve();
       join = null;
       callbacks.onOpen?.(self);
+      serverChanged();
     },
     /** jatos.js refuses to open, rejecting the join without calling onError. */
     refuse(reason: string) {
@@ -76,17 +123,24 @@ function makeMockJatos(
     memberOpen(id: number) {
       jatos.groupChannels.push(id);
       callbacks.onMemberOpen?.(id);
+      serverChanged();
     },
     /** Another member's channel closes. */
     memberClose(id: number) {
       jatos.groupChannels = jatos.groupChannels.filter((c) => c !== id);
       callbacks.onMemberClose?.(id);
+      serverChanged();
     },
-    /** This member's channel drops: jatos.js wipes its local state, then calls onClose. */
+    /**
+     * This member's channel drops: jatos.js wipes its local state, then calls onClose.
+     * (groupChannels keeps the server's view, which other members see: the adapter doesn't
+     * read it while reconnecting.)
+     */
     drop() {
       wiped = true;
-      jatos.groupChannels = [];
+      jatos.groupChannels = jatos.groupChannels.filter((c) => c !== self);
       callbacks.onClose?.();
+      serverChanged();
     },
   };
 }
@@ -132,6 +186,44 @@ async function connected(adapter = new JatosAdapter()) {
 
 async function flushPromises() {
   for (let i = 0; i < 10; i++) await Promise.resolve();
+}
+
+/**
+ * Member 2002 as a real jsPsych session that sees what the JATOS server holds (not jatos.js's
+ * local copy), as another participant's browser would.
+ */
+async function serverPeer(connect?: ConnectOptions) {
+  const adapter: MultiplayerAdapter = {
+    async connect(options) {
+      mock.serverListeners.add(options.onChange);
+      mock.memberOpen(2002);
+      return {
+        participantId: "2002",
+        getAll: () => JSON.parse(JSON.stringify(mock.store)),
+        connectedParticipants: () => mock.jatos.groupChannels.map(String),
+        push: async (data) => {
+          mock.store["2002"] = JSON.parse(JSON.stringify(data));
+          mock.fireGroupSession();
+          mock.serverListeners.forEach((listener) => listener());
+        },
+        disconnect: async () => {
+          mock.serverListeners.delete(options.onChange);
+        },
+      };
+    },
+  };
+  const jsPsych = initJsPsych();
+  await jsPsych.multiplayer.connect(adapter, connect);
+  return jsPsych;
+}
+
+/** A jsPsych instance connected through a JatosAdapter, with the handshake completed. */
+async function jatosSession(adapter = new JatosAdapter()) {
+  const jsPsych = initJsPsych();
+  const connecting = jsPsych.multiplayer.connect(adapter);
+  mock.open();
+  await connecting;
+  return jsPsych;
 }
 
 describe("construction", () => {
@@ -181,8 +273,8 @@ describe("connect", () => {
   test("rejects promptly when jatos.js refuses to open the channel without calling onError", async () => {
     const { options } = connectOptions();
     const promise = new JatosAdapter().connect(options);
-    mock.refuse("Can't open a WebSocket that is not in readyState CLOSED.");
-    await expect(promise).rejects.toThrow(/readyState CLOSED/);
+    mock.refuse("Can't open group channel. This study run is invalid.");
+    await expect(promise).rejects.toThrow(/study run is invalid/);
   });
 
   test("resolves when the join promise resolves, even if onOpen never fires", async () => {
@@ -247,10 +339,10 @@ describe("connect", () => {
     controller.abort();
     await expect(promise).rejects.toThrow(/cancelled/);
 
-    // Until the join settles, no new connection may take over jatos.js's callbacks
-    await expect(new JatosAdapter().connect(connectOptions().options)).rejects.toThrow(
-      /already open or opening/,
-    );
+    // Until the join settles, a new connection waits instead of taking over jatos.js's callbacks
+    const next = new JatosAdapter().connect(connectOptions().options);
+    await flushPromises();
+    expect(mock.jatos.joinGroup).toHaveBeenCalledTimes(1);
 
     mock.open();
     await flushPromises();
@@ -258,8 +350,10 @@ describe("connect", () => {
     expect(options.onChange).not.toHaveBeenCalled();
     expect(options.onStatus).not.toHaveBeenCalled();
 
-    // Now the page is free again
-    await connected();
+    // The cancelled channel has been left, so the waiting connection joins
+    expect(mock.jatos.joinGroup).toHaveBeenCalledTimes(2);
+    mock.open();
+    open.push(await next);
   });
 });
 
@@ -323,9 +417,19 @@ describe("connection status", () => {
     expect(statuses).toEqual(["reconnecting"]);
   });
 
-  test("a channel that stays down for 30 s reports closed", async () => {
+  test("by default, a channel that stays down never reports closed", async () => {
     jest.useFakeTimers();
     const { statuses } = await connected();
+    mock.drop();
+    jest.advanceTimersByTime(60 * 60_000);
+    expect(statuses).toEqual(["reconnecting"]);
+    mock.open();
+    expect(statuses).toEqual(["reconnecting", "connected"]);
+  });
+
+  test("with closeAfterReconnectingMs, a channel that stays down that long reports closed", async () => {
+    jest.useFakeTimers();
+    const { statuses } = await connected(new JatosAdapter({ closeAfterReconnectingMs: 30_000 }));
     mock.drop();
     jest.advanceTimersByTime(29_999);
     expect(statuses).toEqual(["reconnecting"]);
@@ -425,7 +529,7 @@ describe("push", () => {
 
   test("a push waiting for the channel rejects once the connection is lost", async () => {
     jest.useFakeTimers();
-    const { connection } = await connected();
+    const { connection } = await connected(new JatosAdapter({ closeAfterReconnectingMs: 30_000 }));
     mock.drop();
     const assertion = connection.push({ x: 1 }).catch((e: unknown) => e);
     jest.advanceTimersByTime(30_000);
@@ -500,5 +604,151 @@ describe("with the jsPsych multiplayer session", () => {
     expect(jsPsych.multiplayer.status).toBe("connected");
 
     await jsPsych.multiplayer.disconnect();
+  });
+});
+
+describe("reconnecting on the same page", () => {
+  test("a new connection waits for a closed one to finish leaving the group", async () => {
+    const first = await connected();
+    mock.holdLeave();
+    const leaving = first.connection.disconnect();
+    const { options } = connectOptions();
+    const second = new JatosAdapter().connect(options);
+    await flushPromises();
+    // jatos.js refuses to open a channel while it is still leaving the group
+    expect(mock.jatos.joinGroup).toHaveBeenCalledTimes(1);
+
+    mock.finishLeave();
+    await leaving;
+    await flushPromises();
+    expect(mock.jatos.joinGroup).toHaveBeenCalledTimes(2);
+    mock.open();
+    const connection = await second;
+    open.push(connection);
+    expect(connection.participantId).toBe("1001");
+  });
+
+  test("a join refused because the old socket is still closing is retried", async () => {
+    jest.useFakeTimers();
+    mock.leaveSlowly();
+    const first = await connected();
+    await first.connection.disconnect();
+
+    const { options } = connectOptions();
+    const second = new JatosAdapter().connect(options);
+    await flushPromises();
+    expect(mock.jatos.joinGroup).toHaveBeenCalledTimes(2); // refused: still closing
+    jest.advanceTimersByTime(100);
+    await flushPromises();
+    expect(mock.jatos.joinGroup).toHaveBeenCalledTimes(3); // refused again
+
+    mock.finishClosing();
+    jest.advanceTimersByTime(200);
+    await flushPromises();
+    expect(mock.jatos.joinGroup).toHaveBeenCalledTimes(4);
+    mock.open();
+    open.push(await second);
+  });
+
+  test("a join that keeps being refused fails at the connect timeout", async () => {
+    jest.useFakeTimers();
+    mock.leaveSlowly();
+    const first = await connected();
+    await first.connection.disconnect();
+
+    const { options } = connectOptions();
+    const second = new JatosAdapter({ connectTimeoutMs: 2000 })
+      .connect(options)
+      .catch((e: unknown) => e);
+    await jest.advanceTimersByTimeAsync(2000);
+    expect(((await second) as Error).message).toMatch(/timed out/);
+  });
+});
+
+describe("rejoining", () => {
+  test("a participant whose channel reopens after leaving rejoins", async () => {
+    jest.useFakeTimers();
+    const jsPsych = await jatosSession();
+    await jsPsych.multiplayer.update({ round: 2 });
+    const rejoined = jest.fn();
+    const restarted = jest.fn();
+    const peer = await serverPeer({
+      dropoutTimeout: 5000,
+      onParticipantRejoined: rejoined,
+      onParticipantRestarted: restarted,
+    });
+    expect(peer.multiplayer.presence()["1001"]).toBe("connected");
+
+    mock.drop();
+    expect(jsPsych.multiplayer.status).toBe("reconnecting");
+    expect(peer.multiplayer.presence()["1001"]).toBe("away");
+    // Long past the dropout timeout; by default the adapter keeps waiting
+    jest.advanceTimersByTime(10 * 60_000);
+    expect(peer.multiplayer.presence()["1001"]).toBe("left");
+    expect(jsPsych.multiplayer.status).toBe("reconnecting");
+
+    mock.open();
+    await flushPromises();
+    expect(jsPsych.multiplayer.status).toBe("connected");
+    expect(peer.multiplayer.presence()["1001"]).toBe("connected");
+    expect(rejoined).toHaveBeenCalledWith("1001");
+    expect(restarted).not.toHaveBeenCalled();
+    expect(peer.multiplayer.get("1001")).toEqual({ round: 2 });
+
+    await peer.multiplayer.disconnect();
+    await jsPsych.multiplayer.disconnect();
+  });
+
+  test("disconnecting and connecting again on the same page rejoins, even while the old socket closes", async () => {
+    jest.useFakeTimers();
+    mock.leaveSlowly();
+    const jsPsych = await jatosSession();
+    const rejoined = jest.fn();
+    const restarted = jest.fn();
+    const peer = await serverPeer({
+      dropoutTimeout: 1000,
+      onParticipantRejoined: rejoined,
+      onParticipantRestarted: restarted,
+    });
+
+    await jsPsych.multiplayer.disconnect();
+    expect(peer.multiplayer.presence()["1001"]).toBe("away");
+    jest.advanceTimersByTime(1000);
+    expect(peer.multiplayer.presence()["1001"]).toBe("left");
+
+    const connecting = jsPsych.multiplayer.connect(new JatosAdapter());
+    await flushPromises();
+    mock.finishClosing();
+    await jest.advanceTimersByTimeAsync(100);
+    mock.open();
+    await connecting;
+    await flushPromises();
+
+    expect(jsPsych.multiplayer.participantId).toBe("1001");
+    expect(jsPsych.multiplayer.previousInstance).toBeNull();
+    expect(peer.multiplayer.presence()["1001"]).toBe("connected");
+    expect(rejoined).toHaveBeenCalledWith("1001");
+    expect(restarted).not.toHaveBeenCalled();
+
+    await peer.multiplayer.disconnect();
+    await jsPsych.multiplayer.disconnect();
+  });
+
+  test("a reloaded page under the same study result id counts as restarted", async () => {
+    jest.useFakeTimers();
+    const first = await jatosSession();
+    const restarted = jest.fn();
+    const peer = await serverPeer({ dropoutTimeout: 1000, onParticipantRestarted: restarted });
+    await first.multiplayer.disconnect();
+
+    // A reload: a new page (new jsPsych) under the same study result id
+    const reloaded = await jatosSession();
+    await flushPromises();
+    expect(reloaded.multiplayer.previousInstance).not.toBeNull();
+    expect(peer.multiplayer.presence()["1001"]).toBe("left");
+    expect(restarted).toHaveBeenCalledWith("1001");
+
+    await peer.multiplayer.disconnect();
+    await reloaded.multiplayer.disconnect();
   });
 });
