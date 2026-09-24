@@ -61,32 +61,35 @@ What "ends" means depends on the plugin. `sync` and `ready` finish the trial; `m
 
 ### Which participants a trial depends on
 
-- **Barrier plugins** (`sync`, `ready`, `choice`, `match`, `role`, `scoreboard`) take a
+- **Barrier plugins** (`ready`, `choice`, `match`, `role`, `scoreboard`) take a
   `participants` parameter. The default, `null`, means every other participant who is
   `connected` when the wait starts. Participants who are only `away` at that moment are left
   out, because a slot left over from an earlier member starts out `away` and becomes `left`
   a few seconds later. Pass a list to depend on specific participants, or `[]` to ignore
   departures.
+- **`sync`** takes the same `participants` parameter, but its default is `[]`, which
+  ignores departures, because `sync` is often used as a lobby (see below). Pass `null` or a
+  list to make a `sync` barrier end when someone leaves.
 - **Live plugins** (`chat`, `draw`, `reference-game`) take `end_on_participant_left`,
   default `true`: the trial ends when a participant who was connected when it started
   leaves. Set it to `false` to carry on with whoever remains.
 
-### Lobbies need `participants: []`
+### Lobbies
 
 A lobby waits until enough participants are present. Someone leaving should mean waiting a
-little longer, not ending the lobby, so set `participants: []` and count by presence:
+little longer, not ending the lobby. `sync` ignores departures by default, so count by
+presence in `wait_for`:
 
 ```js
 const lobby = {
   type: jsPsychMultiplayerSync,
-  participants: [],
   push_data: { status: "ready" },
   wait_for: (_group, presence) =>
     Object.values(presence).filter((status) => status === "connected").length >= 2,
 };
 ```
 
-The same applies to any barrier where only some participants matter. A mid-game wait for a
+To build a lobby from another barrier plugin, pass `participants: []`. A mid-game wait for a
 specific partner should name them, as in the
 [ultimatum tutorial](/tutorials/ultimatum-game): `participants: () => [partnerId]`.
 

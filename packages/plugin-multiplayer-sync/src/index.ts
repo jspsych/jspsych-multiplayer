@@ -54,13 +54,14 @@ const info = <const>{
     },
     /**
      * Participants the barrier depends on. If one of them leaves the session before `wait_for` is
-     * satisfied, the trial ends with `partner_left: true`. Null (the default) means every other
-     * participant who is connected when the wait starts. Pass `[]` to ignore departures.
+     * satisfied, the trial ends with `partner_left: true`. The default, `[]`, ignores departures,
+     * which suits lobbies that keep waiting for others to join. Pass `null` to depend on every other
+     * participant who is connected when the wait starts.
      */
     participants: {
-      // An array of participant IDs, or null; COMPLEX because array parameters can't default to null
+      // An array of participant IDs, or null; COMPLEX because array parameters can't be null
       type: ParameterType.COMPLEX,
-      default: null,
+      default: [],
     },
     /**
      * Minimum time, in milliseconds, to keep the waiting message on screen. Prevents the screen

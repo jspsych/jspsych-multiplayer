@@ -295,6 +295,23 @@ describe("multiplayer-sync plugin", () => {
     errSpy.mockRestore();
   });
 
+  it("ignores departures by default, so a lobby keeps waiting", async () => {
+    const hub = new MemoryHub();
+    const { jsPsych } = await hub.join("p1", { connect: { dropoutTimeout: 10 } });
+    const peer = await hub.join("p2");
+
+    const { getData, expectFinished } = await startTimeline(
+      [{ type: MultiplayerSyncPlugin, wait_for: () => false, timeout: 60 }],
+      jsPsych,
+    );
+    await peer.jsPsych.multiplayer.disconnect();
+    await sleep(100);
+    await expectFinished();
+
+    expect(jsPsych.multiplayer.presence().p2).toBe("left");
+    expect(getData().values()[0]).toMatchObject({ partner_left: false, timed_out: true });
+  });
+
   it("runs through the real jsPsych pipeline (startTimeline smoke test)", async () => {
     const hub = new MemoryHub();
     const { jsPsych } = await hub.join("p1");
