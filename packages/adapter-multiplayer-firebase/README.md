@@ -10,7 +10,7 @@ It is a sibling of [`adapter-multiplayer-local`](../adapter-multiplayer-local) a
 | **`firebase`** | **any device, anywhere** | **a free Firebase project** | **real cross-device data collection** |
 | `jatos` | any device | a self-hosted JATOS server | lab-hosted studies |
 
-> **Status:** built against the jsPsych multiplayer API from [jsPsych#3694](https://github.com/jspsych/jsPsych/pull/3694), which is not yet released. The adapter implements a local interface mirroring that API's `MultiplayerAdapter` (`src/multiplayer-adapter.ts`) — the single seam to re-verify once #3694 lands. Connecting an adapter requires `jsPsych.multiplayer.connect()`, which only exists in #3694, so experiments cannot *run* until that ships regardless of which adapter you choose.
+> **Status:** built against the jsPsych multiplayer API from [jsPsych#3694](https://github.com/jspsych/jsPsych/pull/3694), which is not yet in a jsPsych release. The adapter implements that API's `MultiplayerAdapter` and `MultiplayerConnection` interfaces, imported from `jspsych`. Experiments need a jsPsych build that includes `jsPsych.multiplayer`.
 
 ## Usage
 
@@ -63,6 +63,15 @@ new jsPsychAdapterMultiplayerFirebase({ firebaseConfig, useUidAsParticipantId: t
         }
       }
     },
+    "mp-sessions-presence": {
+      "$session": {
+        ".read": "auth != null && root.child('mp-sessions-memberships').child(auth.uid).val() === $session",
+        "$pid": {
+          ".write": "auth != null && $pid === auth.uid && root.child('mp-sessions-memberships').child(auth.uid).val() === $session",
+          ".validate": "newData.isString() && newData.val().length < 64"
+        }
+      }
+    },
     "mp-sessions-memberships": {
       "$uid": {
         ".read": "auth != null && $uid === auth.uid",
@@ -76,7 +85,7 @@ new jsPsychAdapterMultiplayerFirebase({ firebaseConfig, useUidAsParticipantId: t
 
 They enforce three properties, all **server-side** (Firebase evaluates rules on its servers — a client that modifies or skips its half of the protocol is simply denied):
 
-1. **Own-slot writes only.** A client may only write the slot whose key equals its own auth uid — no participant can forge another's offer or flip another's ready flag (`$slot === auth.uid`, which is why these rules require uid-as-key mode).
+1. **Own-slot writes only.** A client may only write the slot whose key equals its own auth uid — no participant can forge another's offer or flip another's ready flag (`$slot === auth.uid`, which is why these rules require uid-as-key mode). The same holds for presence: a client can only mark itself as connected (`$pid === auth.uid`).
 2. **Session binding — a client can only touch the session it first joined.** During `connect()` the adapter registers `mp-sessions-memberships/<uid> = sessionId` *before* attaching the session listener. The membership rule is **first-write-wins**: only that uid can write its own record, and once set it can be re-asserted but never changed or deleted (`!data.exists() || data.val() === newData.val()`). Every session read and write then requires the membership to match (`…memberships/<uid> === $session`). So the same client identity cannot read or write any *other* session — rejoining its own session after a refresh works (same value, re-assertion passes), joining a different one is `PERMISSION_DENIED`.
 3. **Bounded writes.** Slot payloads are capped (128 KB) so a buggy or hostile client can't balloon your database.
 
@@ -98,6 +107,12 @@ Any signed-in (anonymous) client may read and write **any** session. Fine for a 
         ".read": "auth != null",
         ".write": "auth != null"
       }
+    },
+    "mp-sessions-presence": {
+      "$session": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      }
     }
   }
 }
@@ -105,7 +120,9 @@ Any signed-in (anonymous) client may read and write **any** session. Fine for a 
 
 These rules have no memberships node, so don't combine them with `useUidAsParticipantId: true` (which defaults `sessionBinding` on — the membership write would be denied). If you need uid-as-key without session binding for some reason, pass `sessionBinding: false` explicitly.
 
-In uid-as-key mode the adapter adopts the anonymous auth uid as `participantId` during `connect()`, so **`adapter.participantId` is a placeholder until `connect()` resolves — don't read or cache it off the adapter before connecting. (Through the API, `jsPsych.multiplayer.participantId` is simply `null` until then.)** It is incompatible with a supplied `participantId` (constructing with both throws).
+In uid-as-key mode each connection uses the anonymous auth uid as its `participantId`, so read the id from `jsPsych.multiplayer.participantId` once `connect()` resolves. The mode is incompatible with a supplied `participantId` (constructing with both throws).
+
+All three nodes are named after `pathPrefix`: `<pathPrefix>` holds the data slots, `<pathPrefix>-presence` records who is connected, and `<pathPrefix>-memberships` holds the session bindings. If you change `pathPrefix`, rename all three in your rules.
 
 ## Options
 
@@ -117,8 +134,7 @@ In uid-as-key mode the adapter adopts the anonymous auth uid as `participantId` 
 | `participantId` | a fresh random id | This participant's slot key. Incompatible with `useUidAsParticipantId`. |
 | `useUidAsParticipantId` | `false` | Adopt the auth uid as the id during connect (enables the recommended rules). |
 | `sessionBinding` | same as `useUidAsParticipantId` | Register the first-write-wins `mp-sessions-memberships/<uid>` record during connect (required by the recommended rules; must be `false` with the quick-start rules). |
-| `pathPrefix` | `"mp-sessions"` | RTDB path namespace. |
-| `removeOnDisconnect` | `true` | Server-remove the slot on disconnect via `onDisconnect().remove()`. |
+| `pathPrefix` | `"mp-sessions"` | RTDB path namespace (see the note on node names above). |
 | `connectTimeoutMs` | `20000` | Timeout for the await-first-snapshot step of `connect()`. |
 
 Ids (`participantId`, `sessionId`, `pathPrefix`) must not contain `. # $ [ ] /` (RTDB key rules) or `:` (reserved for cross-adapter portability with the local adapter). The default generated ids comply.
@@ -137,6 +153,12 @@ npx firebase-tools emulators:start --project demo-local
 
 ## How it works
 
-The contract's `getAll()`/`get()` are synchronous but every Firebase read is async, so the adapter keeps an in-memory **mirror** of the session node, kept live by a single `onValue` listener, and answers reads from it. `connect()` does not resolve until the first snapshot arrives (and rejects on a rules denial or a timeout). Each participant's payload is stored **JSON-encoded as a string**, so pushes round-trip exactly over RTDB's JSON coercion (empty arrays, `undefined`, and nested arrays are otherwise mangled). A `.info/connected` handler re-arms `onDisconnect` and re-pushes your last data after a transient network blip, so a brief drop can't erase a still-present participant.
+The adapter holds configuration only; each `connect()` opens a new connection with its own Firebase app (or your injected database), listeners, and state.
+
+- **Data.** jsPsych reads the shared data synchronously, but every Firebase read is async, so each connection keeps an in-memory **mirror** of the session node, kept live by an `onValue` listener. Each participant's slot is stored **JSON-encoded as a string**, so pushes round-trip exactly over RTDB's JSON coercion (empty arrays and nested arrays are otherwise mangled).
+- **Presence.** Each connection writes `<pathPrefix>-presence/<sessionId>/<participantId>` and arms `onDisconnect().remove()` on it, so the server removes it when the participant's connection drops. A second listener mirrors the presence node, which is how jsPsych learns that a participant is `away` or has `left`. Data slots are never removed: a participant who drops out keeps their last data, and presence tells the others they're gone.
+- **Connecting.** `connect()` resolves once both nodes have delivered a first snapshot, and rejects on a rules denial, a timeout, or when jsPsych cancels the attempt.
+- **Connection status.** When `.info/connected` goes false, the connection reports `reconnecting`. When it comes back, the connection re-arms and re-writes its presence node, then reports `connected`. If a listener is cancelled after connecting (for example, because the rules no longer grant read access), it reports `closed`.
+- **Disconnecting.** `disconnect()` removes this participant's presence node, cancels the armed removal, and releases an app the adapter created. The data slot stays.
 
 The network layer sits behind a small `FirebaseBackend` interface (`src/firebase-backend.ts`); the whole adapter is unit-tested against an in-memory fake with zero Firebase credentials.

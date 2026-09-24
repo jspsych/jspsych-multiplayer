@@ -105,8 +105,9 @@ This repo has `scoreboard`, `countdown`, `choice`, `vote`, `ready`, and `role` p
 `ultimatum-game-jatos.html` was deliberately rewritten to compose packages rather than hand-roll
 coordination. This demo was **not**, and the reason is structural rather than historical:
 
-- **The host view is not a jsPsych timeline.** It is vanilla JS driving the adapter directly, because
-  a presenter screen reacts continuously (`subscribe`) rather than advancing through trials. Plugins
+- **The host view is not a jsPsych timeline.** It is vanilla JS calling `jsPsych.multiplayer` without
+  running a timeline, because a presenter screen reacts continuously (`subscribe`) rather than
+  advancing through trials. Plugins
   are trials; there is nowhere to put one. Half the game is therefore out of reach by construction.
 - **`countdown` resolves the consensus start as the _minimum_ start timestamp across all slots** —
   peer-to-peer agreement with no authority. This quiz's clock is **host-authoritative**: the host
@@ -135,13 +136,12 @@ one declarative barrier trial rather than bespoke coordination code.
 
 ## Known limitations
 
-- **No host-vanished timeout.** The player's mid-game barriers (`revealBarrier`,
-  `leaderboardBarrier`, `nextQuestionBarrier`) wait indefinitely. If the host closes the presenter
-  screen mid-game, every player hangs on the current barrier. `plugin-multiplayer-sync` supports
-  `timeout` / `on_timeout` / `wait_error` (`ultimatum-game-jatos.html` uses them for exactly this),
-  so the fix is mechanical: add a generous `timeout` and route to an "the host left" screen. It is
-  left off here because the right value is a function of how long a presenter pauses between
-  questions, which is a deployment decision rather than a demo default.
+- **A host who leaves ends the game.** The player's mid-game barriers (`revealBarrier`,
+  `leaderboardBarrier`, `nextQuestionBarrier`) name the host in `participants`. If the host closes
+  the presenter screen, each barrier ends with `partner_left: true` once the host counts as `left`
+  (after the dropout timeout, 10 s by default), and every player skips to the end screen. There is
+  no host hand-over. The barriers have no `timeout`, because a presenter pausing between questions
+  while still connected is normal.
 - **Group size is unproven at audience scale.** JATOS group studies were designed for small groups,
   and the "room full of phones" premise assumes the group session stays responsive with ~20+
   members pushing. That has not been load-tested. It is the demo's single biggest risk, and it is a

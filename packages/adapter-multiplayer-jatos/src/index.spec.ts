@@ -1,79 +1,136 @@
-import type { GroupSessionData } from "./multiplayer-adapter";
+import {
+  AdapterConnectOptions,
+  ConnectionStatus,
+  initJsPsych,
+  MultiplayerConnection,
+} from "jspsych";
+
 import JatosAdapter from ".";
 
 /**
- * These tests drive the adapter against a mock of the `jatos` global injected by
- * jatos.js. The mock keeps a stateful group-session store and lets each test fire
- * the joinGroup lifecycle callbacks (onOpen / onError / onGroupSession) by hand.
- *
- * Note on subscribe(): the adapter's subscribe() is intentionally *future-only* —
- * it fans out on every onGroupSession event and does not replay the current
- * snapshot on registration. The core MultiplayerAPI (jsPsych#3694) now performs
- * replay-on-registration itself, emitting the current snapshot once when it wraps
- * this adapter's subscribe(); keeping the adapter future-only is exactly what that
- * relies on — an adapter that also replayed would make core emit the snapshot twice.
+ * These tests drive the adapter against a mock of the `jatos` global injected by jatos.js.
+ * The mock follows jatos.js's behavior where it matters to the adapter:
+ * - joinGroup() replaces the page's single set of callbacks and returns a promise that
+ *   settles when the channel opens or fails to open;
+ * - groupChannels lists the members whose channel is open;
+ * - when the channel closes, jatos.js wipes its local copy of the session data and the
+ *   channel list (clearGroupChannel) before calling onClose.
  */
-
-/** Build a controllable mock of the jatos global plus helpers to drive its callbacks. */
 function makeMockJatos(
   // Pass null to simulate a context where studyResultId is not populated.
-  studyResultId: string | number | null = "w1",
+  studyResultId: string | number | null = 1001,
   workerId: string | number = "worker-99",
 ) {
+  // What the JATOS server holds; the local copy is wiped while the channel is closed
   const store: Record<string, unknown> = {};
-  let callbacks: Record<string, ((arg?: unknown) => void) | undefined> = {};
+  let wiped = false;
+  let callbacks: Record<string, ((...args: unknown[]) => void) | undefined> = {};
+  let join: { resolve: () => void; reject: (reason: unknown) => void } | null = null;
 
   const jatos = {
-    // Mirrors real jatos.js semantics: groupMemberId is null until the first group
-    // message arrives AFTER joinGroup (updateGroupVars then assigns it from
-    // studyResultId). It is NEVER populated at construction time, so the adapter
-    // must not read it in its constructor — keeping it null here makes any such
-    // regression fail the participantId tests instead of silently passing.
-    groupMemberId: null,
     studyResultId: studyResultId ?? undefined,
     workerId,
-    joinGroup: jest.fn((cbs: Record<string, (arg?: unknown) => void>) => {
+    groupChannels: [] as Array<string | number>,
+    joinGroup: jest.fn((cbs: Record<string, (...args: unknown[]) => void>): unknown => {
       callbacks = cbs;
+      return new Promise<void>((resolve, reject) => {
+        join = { resolve, reject };
+      });
     }),
     groupSession: {
-      get: jest.fn((key: string) => store[key]),
       set: jest.fn(async (key: string, value: unknown) => {
         store[key] = value;
       }),
-      getAll: jest.fn(() => ({ ...store })),
+      getAll: jest.fn(() => (wiped ? {} : JSON.parse(JSON.stringify(store)))),
     },
     leaveGroup: jest.fn((onSuccess?: () => void) => onSuccess?.()),
   };
 
+  const self = studyResultId ?? workerId;
+
   return {
     jatos,
     store,
-    fireOpen: () => callbacks.onOpen?.(),
-    fireGroupSession: () => callbacks.onGroupSession?.(),
-    fireError: (msg?: string) => callbacks.onError?.(msg),
-    fireClose: () => callbacks.onClose?.(),
+    /** The channel opens: jatos.js resolves the join and calls onOpen for this member. */
+    open() {
+      wiped = false;
+      if (!jatos.groupChannels.includes(self)) jatos.groupChannels.push(self);
+      join?.resolve();
+      join = null;
+      callbacks.onOpen?.(self);
+    },
+    /** jatos.js refuses to open, rejecting the join without calling onError. */
+    refuse(reason: string) {
+      join?.reject(reason);
+      join = null;
+    },
+    /** A channel error: like jatos.js, report it through onError and fail a pending join. */
+    fireError(msg?: string) {
+      callbacks.onError?.(msg);
+      join?.reject(msg);
+      join = null;
+    },
+    fireGroupSession: () => callbacks.onGroupSession?.("/", "add"),
+    /** Another member's channel opens. */
+    memberOpen(id: number) {
+      jatos.groupChannels.push(id);
+      callbacks.onMemberOpen?.(id);
+    },
+    /** Another member's channel closes. */
+    memberClose(id: number) {
+      jatos.groupChannels = jatos.groupChannels.filter((c) => c !== id);
+      callbacks.onMemberClose?.(id);
+    },
+    /** This member's channel drops: jatos.js wipes its local state, then calls onClose. */
+    drop() {
+      wiped = true;
+      jatos.groupChannels = [];
+      callbacks.onClose?.();
+    },
   };
 }
 
 let mock: ReturnType<typeof makeMockJatos>;
+let open: MultiplayerConnection[] = [];
 
 beforeEach(() => {
   mock = makeMockJatos();
   (globalThis as Record<string, unknown>).jatos = mock.jatos;
 });
 
-afterEach(() => {
-  delete (globalThis as Record<string, unknown>).jatos;
+afterEach(async () => {
   jest.useRealTimers();
+  // Release the adapter's page-wide one-connection guard
+  await Promise.all(open.map((c) => c.disconnect()));
+  open = [];
+  // Settle a join a test left in flight, as jatos.js eventually does, so the guard is released
+  mock.refuse("test cleanup");
+  await flushPromises();
+  delete (globalThis as Record<string, unknown>).jatos;
 });
 
-/** Construct an adapter and complete the connect handshake. */
-async function connectedAdapter() {
-  const adapter = new JatosAdapter();
-  const promise = adapter.connect();
-  mock.fireOpen();
-  await promise;
-  return adapter;
+function connectOptions(signal = new AbortController().signal) {
+  const statuses: ConnectionStatus[] = [];
+  const options: AdapterConnectOptions = {
+    signal,
+    onChange: jest.fn(),
+    onStatus: jest.fn((status: ConnectionStatus) => statuses.push(status)),
+  };
+  return { options, statuses };
+}
+
+/** Connect and complete the handshake. */
+async function connected(adapter = new JatosAdapter()) {
+  const { options, statuses } = connectOptions();
+  const promise = adapter.connect(options);
+  mock.open();
+  const connection = await promise;
+  open.push(connection);
+  return { connection, options, statuses };
+}
+
+async function flushPromises() {
+  for (let i = 0; i < 10; i++) await Promise.resolve();
 }
 
 describe("construction", () => {
@@ -81,215 +138,255 @@ describe("construction", () => {
     delete (globalThis as Record<string, unknown>).jatos;
     expect(() => new JatosAdapter()).toThrow(/jatos global is not defined/);
   });
-
-  test("derives participantId from the study result id as a string", () => {
-    // studyResultId, not workerId: it is unique per study run (and is what jatos.js
-    // later exposes as groupMemberId), whereas the same workerId can recur when a
-    // worker runs the study more than once. groupMemberId itself is still null at
-    // construction time — the mock pins it to null to enforce that.
-    (globalThis as Record<string, unknown>).jatos = makeMockJatos(12345, 777).jatos;
-    expect(new JatosAdapter().participantId).toBe("12345");
-  });
-
-  test("falls back to the worker id when studyResultId is absent", () => {
-    (globalThis as Record<string, unknown>).jatos = makeMockJatos(null, 777).jatos;
-    expect(new JatosAdapter().participantId).toBe("777");
-  });
 });
 
 describe("connect", () => {
-  test("resolves once the group channel opens", async () => {
+  test("resolves with a connection keyed by the study result id", async () => {
+    const { connection } = await connected();
+    expect(connection.participantId).toBe("1001");
+    expect(mock.jatos.joinGroup).toHaveBeenCalledTimes(1);
+  });
+
+  test("falls back to the worker id when studyResultId is absent", async () => {
+    mock = makeMockJatos(null, 777);
+    (globalThis as Record<string, unknown>).jatos = mock.jatos;
+    const { connection } = await connected();
+    expect(connection.participantId).toBe("777");
+  });
+
+  test("each connect() returns a new connection", async () => {
     const adapter = new JatosAdapter();
-    const promise = adapter.connect();
-    mock.fireOpen();
-    await expect(promise).resolves.toBeUndefined();
+    const first = await connected(adapter);
+    await first.connection.disconnect();
+    const second = await connected(adapter);
+    expect(second.connection).not.toBe(first.connection);
+    expect(mock.jatos.joinGroup).toHaveBeenCalledTimes(2);
+  });
+
+  test("rejects a second connection while one is open, without touching jatos.js", async () => {
+    await connected();
+    const { options } = connectOptions();
+    await expect(new JatosAdapter().connect(options)).rejects.toThrow(/already open or opening/);
     expect(mock.jatos.joinGroup).toHaveBeenCalledTimes(1);
   });
 
   test("rejects, surfacing the error message, if joining the group fails", async () => {
-    const adapter = new JatosAdapter();
-    const promise = adapter.connect();
+    const { options } = connectOptions();
+    const promise = new JatosAdapter().connect(options);
     mock.fireError("boom");
     await expect(promise).rejects.toThrow(/boom/);
   });
 
-  test("rejects with a diagnostic if neither onOpen nor onError ever fires", async () => {
-    jest.useFakeTimers();
-    const adapter = new JatosAdapter();
-    const promise = adapter.connect();
-    const assertion = promise.catch((e: unknown) => e);
-
-    // JATOS never calls back; the bounded wait should reject instead of hanging forever.
-    await jest.runAllTimersAsync();
-    const err = (await assertion) as Error;
-
-    expect(err.message).toMatch(/timed out/);
+  test("rejects promptly when jatos.js refuses to open the channel without calling onError", async () => {
+    const { options } = connectOptions();
+    const promise = new JatosAdapter().connect(options);
+    mock.refuse("Can't open a WebSocket that is not in readyState CLOSED.");
+    await expect(promise).rejects.toThrow(/readyState CLOSED/);
   });
 
-  test("calling connect() again returns the same promise instead of rejoining the group", async () => {
-    const adapter = new JatosAdapter();
-    const first = adapter.connect();
-    const second = adapter.connect(); // while still in flight
-    mock.fireOpen();
-    await first;
-    const third = adapter.connect(); // after it settled
-
-    expect(second).toBe(first);
-    expect(third).toBe(first);
-    expect(mock.jatos.joinGroup).toHaveBeenCalledTimes(1);
+  test("resolves when the join promise resolves, even if onOpen never fires", async () => {
+    const { options } = connectOptions();
+    const promise = new JatosAdapter().connect(options);
+    // Resolve the join but swallow onOpen
+    const onOpen = (mock.jatos.joinGroup.mock.calls[0][0] as Record<string, unknown>).onOpen;
+    (mock.jatos.joinGroup.mock.calls[0][0] as Record<string, unknown>).onOpen = undefined;
+    mock.open();
+    const connection = await promise;
+    open.push(connection);
+    expect(onOpen).toBeDefined();
+    expect(connection.participantId).toBe("1001");
   });
 
-  test("a failed connect() does not block a retry", async () => {
+  test("works with older jatos.js builds whose joinGroup returns nothing", async () => {
+    mock.jatos.joinGroup.mockImplementationOnce((cbs) => {
+      mock.jatos.joinGroup.mock.calls[0][0] = cbs;
+      return undefined;
+    });
+    const { options } = connectOptions();
+    const promise = new JatosAdapter().connect(options);
+    (mock.jatos.joinGroup.mock.calls[0][0] as { onOpen: () => void }).onOpen();
+    const connection = await promise;
+    open.push(connection);
+    expect(connection.participantId).toBe("1001");
+  });
+
+  test("a failed connect() allows a retry", async () => {
     const adapter = new JatosAdapter();
-    const first = adapter.connect();
+    const { options } = connectOptions();
+    const first = adapter.connect(options);
     mock.fireError("boom");
     await expect(first).rejects.toThrow(/boom/);
+    await flushPromises();
 
-    const retry = adapter.connect();
-    mock.fireOpen();
-    await expect(retry).resolves.toBeUndefined();
+    const { connection } = await connected(adapter);
+    expect(connection.participantId).toBe("1001");
     expect(mock.jatos.joinGroup).toHaveBeenCalledTimes(2);
   });
 
-  test("honors a custom connectTimeoutMs option", async () => {
+  test("rejects with a diagnostic if JATOS never reports success or failure", async () => {
     jest.useFakeTimers();
-    const adapter = new JatosAdapter({ connectTimeoutMs: 5 });
-    const promise = adapter.connect();
-    const assertion = promise.catch((e: unknown) => e);
-
+    const { options } = connectOptions();
+    const assertion = new JatosAdapter({ connectTimeoutMs: 5 })
+      .connect(options)
+      .catch((e: unknown) => e);
     await jest.advanceTimersByTimeAsync(5);
-    const err = (await assertion) as Error;
+    expect(((await assertion) as Error).message).toMatch(/timed out after 5 ms/);
+  });
 
-    expect(err.message).toMatch(/timed out after 5 ms/);
+  test("an already-aborted signal rejects without joining", async () => {
+    const { options } = connectOptions(AbortSignal.abort());
+    await expect(new JatosAdapter().connect(options)).rejects.toThrow(/cancelled/);
+    expect(mock.jatos.joinGroup).not.toHaveBeenCalled();
+  });
+
+  test("aborting mid-join rejects, and leaves the group if the channel opens later", async () => {
+    const controller = new AbortController();
+    const { options } = connectOptions(controller.signal);
+    const promise = new JatosAdapter().connect(options);
+    controller.abort();
+    await expect(promise).rejects.toThrow(/cancelled/);
+
+    // Until the join settles, no new connection may take over jatos.js's callbacks
+    await expect(new JatosAdapter().connect(connectOptions().options)).rejects.toThrow(
+      /already open or opening/,
+    );
+
+    mock.open();
+    await flushPromises();
+    expect(mock.jatos.leaveGroup).toHaveBeenCalledTimes(1);
+    expect(options.onChange).not.toHaveBeenCalled();
+    expect(options.onStatus).not.toHaveBeenCalled();
+
+    // Now the page is free again
+    await connected();
   });
 });
 
-describe("reads", () => {
-  test("getAll() returns the full store", async () => {
-    const adapter = await connectedAdapter();
-    mock.store.w1 = { a: 1 };
-    mock.store.w2 = { b: 2 };
-    expect(adapter.getAll()).toEqual({ w1: { a: 1 }, w2: { b: 2 } });
+describe("reading", () => {
+  test("getAll() returns the group session and connectedParticipants() the open channels", async () => {
+    mock.store["1001"] = { a: 1 };
+    mock.store["2002"] = { b: 2 };
+    const { connection } = await connected();
+    mock.memberOpen(2002);
+    expect(connection.getAll()).toEqual({ "1001": { a: 1 }, "2002": { b: 2 } });
+    expect(connection.connectedParticipants()).toEqual(["1001", "2002"]);
   });
 
   test("getAll() returns {} when JATOS reports a null session", async () => {
-    const adapter = await connectedAdapter();
-    mock.jatos.groupSession.getAll.mockReturnValueOnce(null);
-    expect(adapter.getAll()).toEqual({});
+    mock.jatos.groupSession.getAll.mockReturnValue(null);
+    const { connection } = await connected();
+    expect(connection.getAll()).toEqual({});
   });
 
-  test("get() reads a single participant's entry, or undefined", async () => {
-    const adapter = await connectedAdapter();
-    mock.store.w2 = { name: "Bob" };
-    expect(adapter.get("w2")).toEqual({ name: "Bob" });
-    expect(adapter.get("nobody")).toBeUndefined();
+  test("group session updates and member changes call onChange", async () => {
+    const { connection, options } = await connected();
+    mock.store["2002"] = { hi: 1 };
+    mock.fireGroupSession();
+    expect(options.onChange).toHaveBeenCalledTimes(1);
+    expect(connection.getAll()).toEqual({ "2002": { hi: 1 } });
+
+    mock.memberOpen(2002);
+    expect(connection.connectedParticipants()).toEqual(["1001", "2002"]);
+    mock.memberClose(2002);
+    expect(connection.connectedParticipants()).toEqual(["1001"]);
+    expect(options.onChange).toHaveBeenCalledTimes(3);
+  });
+
+  test("while the channel is down, reads return the last data jatos.js had", async () => {
+    mock.store["2002"] = { hi: 1 };
+    const { connection, options } = await connected();
+    mock.memberOpen(2002);
+    const changes = (options.onChange as jest.Mock).mock.calls.length;
+
+    mock.drop();
+    expect(connection.getAll()).toEqual({ "2002": { hi: 1 } });
+    expect(connection.connectedParticipants()).toEqual(["1001", "2002"]);
+    mock.fireGroupSession();
+    expect(options.onChange).toHaveBeenCalledTimes(changes);
   });
 });
 
-describe("subscribe", () => {
-  test("fans out every group-session update to all subscribers", async () => {
-    const adapter = await connectedAdapter();
-    const a: GroupSessionData[] = [];
-    const b: GroupSessionData[] = [];
-    adapter.subscribe((data) => a.push(data));
-    adapter.subscribe((data) => b.push(data));
-
-    mock.store.w1 = { hi: 1 };
-    mock.fireGroupSession();
-
-    expect(a).toEqual([{ w1: { hi: 1 } }]);
-    expect(b).toEqual([{ w1: { hi: 1 } }]);
+describe("connection status", () => {
+  test("a dropped channel reports reconnecting, and a reopened one connected", async () => {
+    const { options, statuses } = await connected();
+    mock.drop();
+    expect(statuses).toEqual(["reconnecting"]);
+    mock.open();
+    expect(statuses).toEqual(["reconnecting", "connected"]);
+    expect(options.onChange).toHaveBeenCalled();
   });
 
-  test("does not replay current state on registration (future-only)", async () => {
-    const adapter = await connectedAdapter();
-    mock.store.w1 = { already: "here" };
-    const received: GroupSessionData[] = [];
-    adapter.subscribe((data) => received.push(data));
-    // No callback until the next group-session event.
-    expect(received).toHaveLength(0);
-    mock.fireGroupSession();
-    expect(received).toHaveLength(1);
+  test("an error after the channel opened reports reconnecting", async () => {
+    const { statuses } = await connected();
+    mock.fireError("Group channel heartbeat fail");
+    expect(statuses).toEqual(["reconnecting"]);
   });
 
-  test("a throwing subscriber does not stop the fan-out to the others", async () => {
-    const adapter = await connectedAdapter();
-    const errSpy = jest.spyOn(console, "error").mockImplementation(() => {});
-    const received: GroupSessionData[] = [];
-    adapter.subscribe(() => {
-      throw new Error("subscriber blew up");
-    });
-    adapter.subscribe((data) => received.push(data));
+  test("a channel that stays down for 30 s reports closed", async () => {
+    jest.useFakeTimers();
+    const { statuses } = await connected();
+    mock.drop();
+    jest.advanceTimersByTime(29_999);
+    expect(statuses).toEqual(["reconnecting"]);
+    jest.advanceTimersByTime(1);
+    expect(statuses).toEqual(["reconnecting", "closed"]);
 
-    mock.store.w1 = { hi: 1 };
-    expect(() => mock.fireGroupSession()).not.toThrow();
-    expect(received).toEqual([{ w1: { hi: 1 } }]);
-
-    errSpy.mockRestore();
+    // jatos.js reopening afterward doesn't revive the connection
+    mock.open();
+    expect(statuses).toEqual(["reconnecting", "closed"]);
   });
 
-  test("unsubscribe stops further updates without affecting other subscribers", async () => {
-    const adapter = await connectedAdapter();
-    const kept: GroupSessionData[] = [];
-    const dropped: GroupSessionData[] = [];
-    adapter.subscribe((data) => kept.push(data));
-    const unsub = adapter.subscribe((data) => dropped.push(data));
+  test("closeAfterReconnectingMs sets how long to wait, and null waits forever", async () => {
+    jest.useFakeTimers();
+    const short = await connected(new JatosAdapter({ closeAfterReconnectingMs: 100 }));
+    mock.drop();
+    jest.advanceTimersByTime(100);
+    expect(short.statuses).toEqual(["reconnecting", "closed"]);
+    await short.connection.disconnect();
 
-    mock.fireGroupSession();
-    unsub();
-    mock.fireGroupSession();
-
-    expect(kept).toHaveLength(2);
-    expect(dropped).toHaveLength(1);
+    const never = await connected(new JatosAdapter({ closeAfterReconnectingMs: null }));
+    mock.drop();
+    jest.advanceTimersByTime(10 * 60_000);
+    expect(never.statuses).toEqual(["reconnecting"]);
   });
 });
 
 describe("push", () => {
   test("writes data keyed by participantId", async () => {
-    const adapter = await connectedAdapter();
-    await adapter.push({ score: 5 });
-    expect(mock.jatos.groupSession.set).toHaveBeenCalledWith("w1", { score: 5 });
-  });
-
-  test("throws if push() is called before connect()", async () => {
-    const adapter = new JatosAdapter();
-    await expect(adapter.push({ x: 1 })).rejects.toThrow(/before connect/);
-    expect(mock.jatos.groupSession.set).not.toHaveBeenCalled();
+    const { connection } = await connected();
+    await connection.push({ score: 5 });
+    expect(mock.jatos.groupSession.set).toHaveBeenCalledWith("1001", { score: 5 });
   });
 
   test("retries on a version conflict and eventually succeeds", async () => {
     jest.useFakeTimers();
-    const adapter = await connectedAdapter();
+    const { connection } = await connected();
     let calls = 0;
     mock.jatos.groupSession.set.mockImplementation(async () => {
       calls += 1;
       if (calls < 3) throw new Error("version conflict");
     });
 
-    const promise = adapter.push({ x: 1 });
+    const promise = connection.push({ x: 1 });
     await jest.runAllTimersAsync();
 
     await expect(promise).resolves.toBeUndefined();
-    expect(calls).toBe(3);
-    // Every attempt must re-send the SAME (participantId -> data) write, so a retry
-    // can't lose or mutate the value — the property that makes retrying safe.
+    // Every attempt re-sends the same (participantId -> data) write, which is what makes
+    // retrying safe
     expect(mock.jatos.groupSession.set.mock.calls).toEqual([
-      ["w1", { x: 1 }],
-      ["w1", { x: 1 }],
-      ["w1", { x: 1 }],
+      ["1001", { x: 1 }],
+      ["1001", { x: 1 }],
+      ["1001", { x: 1 }],
     ]);
   });
 
   test("throws after exhausting all retry attempts, preserving the cause", async () => {
     jest.useFakeTimers();
-    const adapter = await connectedAdapter();
+    const { connection } = await connected();
     const underlying = new Error("version conflict");
     mock.jatos.groupSession.set.mockRejectedValue(underlying);
 
-    const promise = adapter.push({ x: 1 });
-    // Attach the rejection expectation before advancing timers so the eventual
-    // rejection is never momentarily unhandled.
-    const assertion = promise.catch((e: unknown) => e);
+    const assertion = connection.push({ x: 1 }).catch((e: unknown) => e);
     await jest.runAllTimersAsync();
     const err = (await assertion) as Error & { cause?: unknown };
 
@@ -297,85 +394,110 @@ describe("push", () => {
     expect(err.cause).toBe(underlying);
     expect(mock.jatos.groupSession.set).toHaveBeenCalledTimes(8);
   });
-});
 
-describe("channel lifecycle", () => {
-  test("push() bails immediately, without retrying, after the channel closes", async () => {
-    const adapter = await connectedAdapter();
-    mock.fireClose();
-
-    await expect(adapter.push({ x: 1 })).rejects.toThrow(/channel closed/);
-    // No set() attempt and no 6s of backoff: the closed channel is caught up front.
+  test("a push made while the channel is down is sent once it reopens", async () => {
+    const { connection } = await connected();
+    mock.drop();
+    let done = false;
+    const pushing = connection.push({ x: 1 }).then(() => (done = true));
+    await flushPromises();
+    expect(done).toBe(false);
     expect(mock.jatos.groupSession.set).not.toHaveBeenCalled();
+
+    mock.open();
+    await pushing;
+    expect(mock.store["1001"]).toEqual({ x: 1 });
   });
 
-  test("a close landing mid-retry stops the remaining attempts", async () => {
-    jest.useFakeTimers();
-    const adapter = await connectedAdapter();
-    let calls = 0;
-    mock.jatos.groupSession.set.mockImplementation(async () => {
-      calls += 1;
-      if (calls === 2) mock.fireClose(); // channel dies during the second attempt's backoff
-      throw new Error("version conflict");
+  test("a write that fails because the channel dropped is retried after it reopens", async () => {
+    const { connection } = await connected();
+    mock.jatos.groupSession.set.mockImplementationOnce(async () => {
+      mock.drop();
+      throw new Error("No open group channel");
     });
-
-    const promise = adapter.push({ x: 1 });
-    const assertion = promise.catch((e: unknown) => e);
-    await jest.runAllTimersAsync();
-    const err = (await assertion) as Error & { cause?: unknown };
-
-    // Two attempts ran; the post-backoff re-check then bailed instead of finishing all 8.
-    expect(calls).toBe(2);
-    expect(err.message).toMatch(/channel is closed/);
-    expect(err.cause).toBeInstanceOf(Error); // the version-conflict error from the last attempt
+    const pushing = connection.push({ x: 1 });
+    await flushPromises();
+    mock.open();
+    await pushing;
+    expect(mock.store["1001"]).toEqual({ x: 1 });
   });
 
-  test("an error delivered after the channel opened marks it closed", async () => {
-    const adapter = await connectedAdapter();
-    // A late onError can't reject the already-resolved connect promise, but it must still
-    // bring down the channel so push() reports it accurately rather than retrying blindly.
-    mock.fireError("socket dropped");
+  test("a push waiting for the channel rejects once the connection is lost", async () => {
+    jest.useFakeTimers();
+    const { connection } = await connected();
+    mock.drop();
+    const assertion = connection.push({ x: 1 }).catch((e: unknown) => e);
+    jest.advanceTimersByTime(30_000);
+    expect(((await assertion) as Error).message).toMatch(/stayed closed/);
+  });
 
-    await expect(adapter.push({ x: 1 })).rejects.toThrow(/channel closed/);
+  test("push rejects after disconnect", async () => {
+    const { connection } = await connected();
+    await connection.disconnect();
+    await expect(connection.push({ x: 1 })).rejects.toThrow(/closed/);
     expect(mock.jatos.groupSession.set).not.toHaveBeenCalled();
-  });
-
-  test("push() works again after jatos reopens a closed channel", async () => {
-    const adapter = await connectedAdapter();
-
-    // Channel drops: push must fail loudly.
-    mock.fireClose();
-    await expect(adapter.push({ x: 1 })).rejects.toThrow(/channel closed/);
-
-    // jatos.js reopens the channel (onOpen fires again, long after connect settled).
-    // The adapter must restore its connection flags — not just subscriptions.
-    mock.fireOpen();
-    await expect(adapter.push({ x: 2 })).resolves.toBeUndefined();
-    expect(mock.jatos.groupSession.set).toHaveBeenCalledWith("w1", { x: 2 });
   });
 });
 
 describe("disconnect", () => {
-  test("clears subscribers so later updates are ignored", async () => {
-    const adapter = await connectedAdapter();
-    const received: GroupSessionData[] = [];
-    adapter.subscribe((data) => received.push(data));
-
-    await adapter.disconnect();
-    mock.fireGroupSession();
-
-    expect(received).toHaveLength(0);
-  });
-
-  test("leaves the JATOS group to close the channel", async () => {
-    const adapter = await connectedAdapter();
-    await adapter.disconnect();
+  test("leaves the JATOS group", async () => {
+    const { connection } = await connected();
+    await connection.disconnect();
     expect(mock.jatos.leaveGroup).toHaveBeenCalledTimes(1);
   });
 
+  test("no callbacks fire after disconnect, though jatos.js keeps them registered", async () => {
+    const { connection, options } = await connected();
+    await connection.disconnect();
+    mock.fireGroupSession();
+    mock.memberOpen(2002);
+    mock.drop();
+    mock.open();
+    expect(options.onChange).not.toHaveBeenCalled();
+    expect(options.onStatus).not.toHaveBeenCalled();
+  });
+
   test("resolves even when jatos.js does not expose leaveGroup", async () => {
-    const adapter = await connectedAdapter();
+    const { connection } = await connected();
     (mock.jatos as { leaveGroup?: unknown }).leaveGroup = undefined;
-    await expect(adapter.disconnect()).resolves.toBeUndefined();
+    await expect(connection.disconnect()).resolves.toBeUndefined();
+  });
+});
+
+describe("with the jsPsych multiplayer session", () => {
+  test("reports presence from the open group channels", async () => {
+    jest.useFakeTimers();
+    const jsPsych = initJsPsych();
+    const connecting = jsPsych.multiplayer.connect(new JatosAdapter(), { dropoutTimeout: 5000 });
+    mock.open();
+    await connecting;
+
+    mock.memberOpen(2002);
+    expect(jsPsych.multiplayer.presence()).toEqual({ "1001": "connected", "2002": "connected" });
+
+    mock.memberClose(2002);
+    expect(jsPsych.multiplayer.presence()["2002"]).toBe("away");
+    jest.advanceTimersByTime(5000);
+    expect(jsPsych.multiplayer.presence()["2002"]).toBe("left");
+
+    await jsPsych.multiplayer.disconnect();
+  });
+
+  test("writes reach the group session and a dropped channel shows as reconnecting", async () => {
+    const jsPsych = initJsPsych();
+    const connecting = jsPsych.multiplayer.connect(new JatosAdapter());
+    mock.open();
+    await connecting;
+
+    await jsPsych.multiplayer.update({ ready: true });
+    expect(mock.store["1001"]).toEqual({ ready: true });
+
+    mock.drop();
+    expect(jsPsych.multiplayer.status).toBe("reconnecting");
+    expect(jsPsych.multiplayer.get("1001")).toEqual({ ready: true });
+    mock.open();
+    expect(jsPsych.multiplayer.status).toBe("connected");
+
+    await jsPsych.multiplayer.disconnect();
   });
 });

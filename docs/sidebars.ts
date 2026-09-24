@@ -9,7 +9,7 @@ import type { SidebarsConfig } from "@docusaurus/plugin-content-docs";
  */
 const sidebars: SidebarsConfig = {
   tutorials: ["tutorials/first-multiplayer-trial", "tutorials/ultimatum-game"],
-  guides: ["guides/choosing-an-adapter"],
+  guides: ["guides/choosing-an-adapter", "guides/handling-dropouts"],
   reference: ["reference/multiplayer-api"],
 };
 

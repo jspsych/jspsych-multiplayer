@@ -2,8 +2,8 @@
  * Cross-tab change signal. Its only job is to tell *other* tabs "something changed — re-read the
  * store." It deliberately carries **no payload**: the `localStorage` store stays the single source of
  * truth, which sidesteps stale-message-vs-store consistency questions. Neither `BroadcastChannel` nor
- * the `storage` event fires in the tab that performed the write, so a tab's own updates are delivered
- * separately by the adapter (see `LocalAdapter`), not through here.
+ * the `storage` event fires in the tab that performed the write; that's fine, because jsPsych's
+ * multiplayer session shows a tab its own writes without waiting for the store.
  *
  * The interface is injectable so tests can supply an in-memory bus that models N tabs without needing
  * a real `BroadcastChannel` (jsdom doesn't provide one).
@@ -11,8 +11,11 @@
 export interface ChangeSignal {
   /** Notify the other tabs that this tab changed the store. */
   post(): void;
-  /** Register a handler fired when another tab signals a change. */
-  onChange(handler: () => void): void;
+  /**
+   * Register a handler fired when another tab signals a change. Returns a function that removes
+   * the handler, so a closed connection stops hearing from a signal it doesn't own.
+   */
+  onChange(handler: () => void): () => void;
   /** Tear down all listeners/channels. */
   close(): void;
 }
@@ -23,12 +26,20 @@ export interface ChangeSignal {
  * With per-participant keys the `storage` event already fires in other tabs on every write, so it
  * alone can carry the signal where `BroadcastChannel` is unavailable — `post()` is then a harmless
  * no-op because the `localStorage.setItem` itself triggers the event cross-tab. Where both are
- * present they may both fire; that's fine, the adapter coalesces and the re-read is idempotent.
+ * present they may both fire; that's fine, re-reading the store is idempotent.
+ *
+ * @param slotKeyPrefix Any change to a key starting with this prefix fires the signal.
+ * @param presenceKeyPrefix Presence keys fire the signal only when one appears or disappears. Their
+ *   routine heartbeat rewrites don't change who is present, so they stay quiet.
  */
-export function createDefaultSignal(channelName: string, keyPrefix: string): ChangeSignal {
+export function createDefaultSignal(
+  channelName: string,
+  slotKeyPrefix: string,
+  presenceKeyPrefix?: string,
+): ChangeSignal {
   const handlers = new Set<() => void>();
   const fire = () => {
-    for (const h of handlers) h();
+    for (const h of [...handlers]) h();
   };
 
   let channel: BroadcastChannel | null = null;
@@ -40,7 +51,15 @@ export function createDefaultSignal(channelName: string, keyPrefix: string): Cha
   const hasWindow = typeof window !== "undefined" && typeof window.addEventListener === "function";
   const onStorage = (event: StorageEvent) => {
     // A clear() reports key === null; otherwise only react to our own keyspace.
-    if (event.key === null || event.key.startsWith(keyPrefix)) fire();
+    if (event.key === null || event.key.startsWith(slotKeyPrefix)) {
+      fire();
+    } else if (
+      presenceKeyPrefix !== undefined &&
+      event.key.startsWith(presenceKeyPrefix) &&
+      (event.oldValue === null || event.newValue === null)
+    ) {
+      fire();
+    }
   };
   if (hasWindow) window.addEventListener("storage", onStorage);
 
@@ -51,6 +70,9 @@ export function createDefaultSignal(channelName: string, keyPrefix: string): Cha
     },
     onChange(handler) {
       handlers.add(handler);
+      return () => {
+        handlers.delete(handler);
+      };
     },
     close() {
       handlers.clear();

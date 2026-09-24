@@ -1,14 +1,23 @@
 <!DOCTYPE html>
 <html>
   <head>
+    <meta charset="utf-8" />
     <title>jsPsychAdapterMultiplayerJatos Example</title>
-    <script src="https://unpkg.com/jspsych"></script>
+    <!-- The multiplayer API (jsPsych#3694) isn't in a jsPsych release yet, so load a preview build
+         of the PR, pinned to one build. Switch back to https://unpkg.com/jspsych once it's released. -->
+    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@a6e05be017bcadf6ca208ed2fc0ac79e438c9626/packages/jspsych/dist/index.browser.min.js"></script>
     <script src="https://unpkg.com/@jspsych/plugin-html-keyboard-response"></script>
-    <!-- jatos.js is injected by JATOS at runtime; it is not available outside a JATOS study. -->
+    <!-- JATOS serves jatos.js from the study root, but the study page has to load it itself; it is
+         not injected automatically. Without this tag the `jatos` global is undefined and the adapter
+         can't connect. The path only resolves inside a JATOS study. -->
+    <script src="jatos.js"></script>
     <!-- Once this adapter package is published, load it from a CDN instead:
          <script src="https://unpkg.com/@jspsych-multiplayer/adapter-multiplayer-jatos"></script> -->
     <script src="../dist/index.browser.min.js"></script>
-    <link rel="stylesheet" href="https://unpkg.com/jspsych/css/jspsych.css" />
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@a6e05be017bcadf6ca208ed2fc0ac79e438c9626/packages/jspsych/css/jspsych.css"
+    />
   </head>
 
   <body></body>
@@ -16,13 +25,10 @@
     // ---------------------------------------------------------------------------------------------
     // ILLUSTRATIVE example — it shows the intended API, it is NOT a self-contained demo.
     //
-    // This adapter is the network backend that the multiplayer plugins talk through. To run it you
-    // need:
-    //   1. to be running INSIDE JATOS as a group study (so the `jatos` global from jatos.js exists),
-    //      and
-    //   2. the jsPsych multiplayer API (jsPsych#3694), which is not yet in a released jsPsych.
-    // It therefore cannot run from a single browser tab today. The full runnable, end-to-end demo
-    // is the turn-based ultimatum-game example (forthcoming).
+    // This adapter is the network backend that the multiplayer plugins talk through. To run it, the
+    // page must run INSIDE JATOS as a group study, so that the `jatos` global from jatos.js exists;
+    // it can't run from a plain browser tab. For a complete runnable study, see the JATOS
+    // ultimatum-game example in this repository's examples/ folder.
     // ---------------------------------------------------------------------------------------------
 
     const jsPsych = initJsPsych({
@@ -40,7 +46,8 @@
     ];
 
     // Connect the adapter (backed by the JATOS group session) before running the timeline. The IIFE
-    // build exposes the adapter class as the global `jsPsychAdapterMultiplayerJatos`.
+    // build exposes the adapter class as the global `jsPsychAdapterMultiplayerJatos`. Options:
+    // connectTimeoutMs (default 20000) and closeAfterReconnectingMs (default 30000) — see the README.
     jatos.onLoad(async () => {
       await jsPsych.multiplayer.connect(new jsPsychAdapterMultiplayerJatos());
       await jsPsych.run(timeline);

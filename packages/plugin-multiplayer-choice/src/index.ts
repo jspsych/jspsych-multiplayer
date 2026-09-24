@@ -1,4 +1,4 @@
-import { JsPsych, JsPsychPlugin, ParameterType, TrialType } from "jspsych";
+import { JsPsych, JsPsychPlugin, ParameterType, PresenceData, TrialType } from "jspsych";
 
 import { version } from "../package.json";
 import {
@@ -12,10 +12,11 @@ import {
   tally,
 } from "./choice-core";
 import {
-  isMultiplayerCancelledError,
-  isMultiplayerTimeoutError,
-  resolveMultiplayerApi,
-} from "./multiplayer-api";
+  getMultiplayer,
+  isMultiplayerError,
+  nextGateKey,
+  remainingParticipants,
+} from "./multiplayer";
 
 // Public types are part of the API. They erase at build time, so exporting them does not add a
 // runtime named export — the bundle stays a single default export, per the jsPsych plugin packaging
@@ -42,10 +43,14 @@ const info = <const>{
      */
     button_html: { type: ParameterType.FUNCTION, default: null },
     /**
-     * Session field this participant's choice is stored under. Namespacing keeps it from colliding
-     * with other pushed data (a role, a chat log) and lets two choice trials keep separate decisions.
+     * Session field this participant's choice is stored under. Each choice trial needs its own key,
+     * so that a choice left over from an earlier trial can't count toward a later one. Null (the
+     * default) generates `choice-1`, `choice-2`, … in the order this participant reaches choice
+     * trials, which matches across participants as long as everyone passes the same choice trials.
+     * A choice trial that only some participants reach (e.g. inside a `conditional_function`) needs
+     * an explicit key. The count starts over if the page reloads.
      */
-    data_key: { type: ParameterType.STRING, default: "choice" },
+    data_key: { type: ParameterType.STRING, default: null },
     /**
      * The group size — including this participant — that must record a choice before the barrier
      * lifts and the reveal is shown. Set it to the exact expected count. Required.
@@ -64,6 +69,13 @@ const info = <const>{
     timeout: { type: ParameterType.INT, default: null },
     /** Called with the wait rejection if `timeout` elapses before the group has all chosen. */
     on_timeout: { type: ParameterType.FUNCTION, default: null },
+    /**
+     * Participants the barrier depends on. If one of them leaves the session before the group has
+     * chosen, the trial proceeds with whoever chose so far, flagged `partner_left: true`. Null (the
+     * default) means every other participant who is connected when this participant
+     * chooses. Pass `[]` to ignore departures.
+     */
+    participants: { type: ParameterType.COMPLEX, default: null },
     /** Reveal the group's decision after the barrier. `false` ends the trial as soon as the group has chosen. */
     reveal: { type: ParameterType.BOOL, default: true },
     /**
@@ -128,9 +140,17 @@ const info = <const>{
     tied_options: { type: ParameterType.OBJECT },
     /** This client's payoff from the `payoff` hook; `null` if no hook was provided (or it threw/returned a non-number). */
     my_payoff: { type: ParameterType.FLOAT, default: null },
+    /** The session field the choices were stored under (`data_key`, or the generated `choice-N`). */
+    data_key: { type: ParameterType.STRING },
     /** `true` if the trial proceeded because `timeout` elapsed rather than because everyone had chosen. */
     timed_out: { type: ParameterType.BOOL, default: false },
-    /** The `wait()` rejection message when the barrier ended without the full group; `null` otherwise. */
+    /** `true` if the trial proceeded because a participant in `participants` left the session. */
+    partner_left: { type: ParameterType.BOOL, default: false },
+    /** The ID of the participant who left, when `partner_left` is true; otherwise null. */
+    left_participant: { type: ParameterType.STRING, default: null },
+    /** `true` if the trial proceeded because this participant's connection was lost for good. */
+    connection_lost: { type: ParameterType.BOOL, default: false },
+    /** The message of the error that ended the barrier without the full group; `null` otherwise. */
     wait_error: { type: ParameterType.STRING, default: null },
   },
   // prettier-ignore
@@ -174,8 +194,8 @@ class MultiplayerChoicePlugin implements JsPsychPlugin<Info> {
   // plugin-multiplayer-sync — jsPsych does NOT auto-fire on_load; we invoke it once the choice
   // screen is rendered, and end the trial by calling finishTrial after the (optional) reveal.
   async trial(display_element: HTMLElement, trial: TrialType<Info>, on_load?: () => void) {
-    const api = resolveMultiplayerApi(this.jsPsych);
-    const me = api.participantId;
+    const multiplayer = getMultiplayer(this.jsPsych);
+    const me = multiplayer.participantId;
     if (me == null) {
       throw new Error(
         "plugin-multiplayer-choice: no participantId — the multiplayer adapter must be connected " +
@@ -207,7 +227,8 @@ class MultiplayerChoicePlugin implements JsPsychPlugin<Info> {
       );
     }
 
-    const dataKey = trial.data_key;
+    // Take the key now, at the gate, so it doesn't depend on how long the choice takes
+    const dataKey = trial.data_key ?? nextGateKey(this.jsPsych);
     const labels = choices.map(String);
 
     // --- Phase 1: this participant chooses ----------------------------------------------------
@@ -215,12 +236,6 @@ class MultiplayerChoicePlugin implements JsPsychPlugin<Info> {
     const label = labels[index];
 
     // --- Phase 2: write the choice, then barrier on the whole group ---------------------------
-    // `update` MERGES this one key into our slot (unlike `push`, which replaces the whole slot), so
-    // any other data we wrote earlier (a role, a chat log) survives without a read-modify-write here.
-    // Write BEFORE the wait try/catch: a write failure is an infrastructure error, not a barrier
-    // timeout, and must surface loudly (rejecting the trial) rather than being relabeled `timed_out`.
-    await api.update({ [dataKey]: { index, label } });
-
     display_element.innerHTML = `<div class="jspsych-multiplayer-choice-waiting">${trial.waiting_message}</div>`;
     const waitStart = performance.now();
     // Core's `wait()` already reads `null`, negative and non-finite timeouts as "no timeout", so
@@ -228,31 +243,44 @@ class MultiplayerChoicePlugin implements JsPsychPlugin<Info> {
     // this plugin documents ANY non-positive `timeout` as waiting indefinitely.
     const timeout = trial.timeout === 0 ? null : trial.timeout;
 
+    // The barrier counts in-range choices (so it agrees with `tally`) from participants who haven't
+    // left; a departure is handled by `participants` below.
+    const allChosen = (g: GroupSessionData, presence: PresenceData) =>
+      countChosen(withoutLeft(g, presence), dataKey, labels.length) >= expected;
+
     let group: GroupSessionData;
     let timedOut = false;
+    let partnerLeft = false;
+    let leftParticipant: string | null = null;
+    let connectionLost = false;
     let waitError: string | null = null;
     try {
-      // Bound the count by the option range (labels.length) so the barrier counts exactly the
-      // choices `tally` will count — a stale/out-of-range index (e.g. under a reused data_key)
-      // neither lifts the barrier early nor is silently dropped from the aggregate afterward.
-      group = await api.wait((g) => countChosen(g, dataKey, labels.length) >= expected, timeout);
+      // `update` MERGES this one key into our slot, so data written earlier (a role, a chat log)
+      // survives. A write failure is an infrastructure error, not a barrier timeout: it rethrows
+      // below unless it's a lost connection.
+      await multiplayer.update({ [dataKey]: { index, label } });
+      const participants =
+        (trial.participants as string[] | null) ?? remainingParticipants(multiplayer);
+      group = await multiplayer.wait(allChosen, { timeout, participants });
     } catch (e) {
-      // Distinguish the three ways a wait() can reject. jsPsych#3694 names its rejections, and the
-      // helpers below match on that name rather than with `instanceof`, which breaks across two
-      // loaded copies of jspsych.
-      //   1. CANCELLED — jsPsych cancelled the wait because the experiment is ending or being
-      //      aborted. The trial is being torn down, so stop quietly: no reveal, no finishTrial, no
-      //      on_timeout. Treating it as a timeout would record a bogus timed_out trial on abort.
-      //   2. TIMEOUT — the genuine barrier expiry, and the only case that proceeds with a partial
-      //      snapshot (flag timed_out, preserve the message, run on_timeout).
-      //   3. anything else (the condition predicate threw, the backend failed) is a real fault and
-      //      rethrows so the trial halts loudly rather than masquerading as a timeout.
-      if (isMultiplayerCancelledError(e)) return;
-      if (!isMultiplayerTimeoutError(e)) throw e;
-      timedOut = true;
-      waitError = e instanceof Error ? e.message : String(e);
-      if (typeof trial.on_timeout === "function") trial.on_timeout(e);
-      group = api.getAll();
+      // CANCELLED: the experiment is ending or being aborted, so the trial is being torn down.
+      // Stop quietly: no reveal, no finishTrial, no on_timeout.
+      if (isMultiplayerError(e, "MultiplayerCancelledError")) return;
+      // A timeout, a departure, or a lost connection proceeds with whoever chose so far. Anything
+      // else (the condition threw, the backend failed) is a real fault and rethrows.
+      if (isMultiplayerError(e, "MultiplayerTimeoutError")) {
+        timedOut = true;
+        if (typeof trial.on_timeout === "function") trial.on_timeout(e);
+      } else if (isMultiplayerError(e, "MultiplayerParticipantLeftError")) {
+        partnerLeft = true;
+        leftParticipant = e.participantId ?? null;
+      } else if (isMultiplayerError(e, "MultiplayerConnectionClosedError")) {
+        connectionLost = true;
+      } else {
+        throw e;
+      }
+      waitError = e.message;
+      group = safeGetAll(multiplayer);
     }
     const waitTime = Math.round(performance.now() - waitStart);
 
@@ -276,7 +304,11 @@ class MultiplayerChoicePlugin implements JsPsychPlugin<Info> {
         is_tie: winnerResult.isTie,
         tied_options: winnerResult.tied,
         my_payoff: myPayoff,
+        data_key: dataKey,
         timed_out: timedOut,
+        partner_left: partnerLeft,
+        left_participant: leftParticipant,
+        connection_lost: connectionLost,
         wait_error: waitError,
       });
 
@@ -514,6 +546,20 @@ class MultiplayerChoicePlugin implements JsPsychPlugin<Info> {
         );
       }
     });
+  }
+}
+
+/** The group without participants who have left the session. */
+function withoutLeft(group: GroupSessionData, presence: PresenceData): GroupSessionData {
+  return Object.fromEntries(Object.entries(group).filter(([id]) => presence[id] !== "left"));
+}
+
+/** The latest group snapshot, or `{}` if there is no session anymore (after disconnect()). */
+function safeGetAll(multiplayer: ReturnType<typeof getMultiplayer>): GroupSessionData {
+  try {
+    return multiplayer.getAll();
+  } catch {
+    return {};
   }
 }
 

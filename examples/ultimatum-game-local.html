@@ -1,12 +1,13 @@
 <!DOCTYPE html>
 <html>
   <head>
+    <meta charset="utf-8" />
     <title>Multiplayer Ultimatum Game (local, two-tab) — jsPsych multiplayer</title>
     <!-- jsPsych core MUST carry the multiplayer API (jsPsych#3694), which is not yet in a release.
          Until it merges, load the PR's preview build from jsDelivr instead of the published `jspsych`.
          This URL is pinned to the #3694 preview build SHA 151ab52 — see examples/README.md
          "Running it" for how to find/re-pin the current preview link. -->
-    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@9eec555f5e55f09b64b40cd8278d0518396f195f/packages/jspsych/dist/index.browser.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@a6e05be017bcadf6ca208ed2fc0ac79e438c9626/packages/jspsych/dist/index.browser.min.js"></script>
     <script src="https://unpkg.com/@jspsych/plugin-html-button-response"></script>
     <script src="https://unpkg.com/@jspsych/plugin-html-keyboard-response"></script>
     <!-- The three multiplayer packages. These resolve once the sibling packages are built in this
@@ -17,7 +18,7 @@
     <script src="../packages/plugin-multiplayer-sync/dist/index.browser.min.js"></script>
     <link
       rel="stylesheet"
-      href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@9eec555f5e55f09b64b40cd8278d0518396f195f/packages/jspsych/css/jspsych.css"
+      href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@a6e05be017bcadf6ca208ed2fc0ac79e438c9626/packages/jspsych/css/jspsych.css"
     />
   </head>
 
@@ -42,12 +43,14 @@
 
     // Hold the adapter instance directly (no jatos.onLoad wrapper needed for the local backend).
     // persistParticipant keeps this tab's participant id in sessionStorage, so a mid-lobby refresh
-    // rejoins as the SAME participant instead of leaving a stale "ghost" slot.
+    // rejoins as the same participant.
     const localAdapter = new jsPsychAdapterMultiplayerLocal({ persistParticipant: true });
 
     const POT = 10;
 
-    // How long a mid-game barrier waits for the other player before concluding they have left.
+    // A backstop for the mid-game barriers. A player who leaves is detected sooner through presence
+    // (each barrier lists the other player in `participants`), so this only ends a wait for a player
+    // who stays connected but never acts. Keep it well above how long a real player needs to decide.
     const PARTNER_TIMEOUT_MS = 60000;
 
     let myRole; // "proposer" | "responder" | "spectator" (undefined if role assignment timed out)
@@ -56,15 +59,18 @@
     let myJoinedAt; // this client's join timestamp, read back after role assignment (see below)
     let proposerOffer; // integer 0–10
     let responderDecision; // "accept" | "reject"
-    let partnerLeft = false; // set if a mid-game barrier times out waiting for the other player
+    let partnerLeft = false; // set if the other player leaves mid-game (or a barrier times out)
 
     // ── Lobby ────────────────────────────────────────────────────────────────────────────────
     // Push a ready signal and hold until at least two players are present. This is the membership
     // barrier: it caps the group the role trial then assigns over.
     const lobby = {
       type: jsPsychMultiplayerSync,
+      // A lobby counts who is here, so someone leaving shouldn't end the wait
+      participants: [],
       push_data: { status: "ready" },
-      wait_for: (group) => Object.keys(group).length >= 2,
+      wait_for: (_group, presence) =>
+        Object.values(presence).filter((status) => status === "connected").length >= 2,
       message: `<p>Waiting for another player to join…</p>
                <p>Open this page in another tab (keep the <code>?mp_session=</code> in the URL) to add a player.</p>`,
     };
@@ -77,12 +83,22 @@
       roles: ["proposer", "responder"],
       strategy: "join_order",
       overflow_role: "spectator",
-      ready: (group) =>
-        Object.keys(group).length >= 2 &&
-        Object.values(group).every(
-          (entry) =>
-            entry.joinedAt != null || entry.offer !== undefined || entry.decision !== undefined
-        ),
+      // The plugin has already dropped participants who left. Waiting until everyone remaining is
+      // connected keeps leftover slots from earlier members (which start out `away`) out of the
+      // assignment until they turn `left` and drop out.
+      ready: (group, presence) => {
+        const ids = Object.keys(group);
+        return (
+          ids.length >= 2 &&
+          ids.every(
+            (id) =>
+              presence[id] === "connected" &&
+              (group[id].joinedAt != null ||
+                group[id].offer !== undefined ||
+                group[id].decision !== undefined),
+          )
+        );
+      },
       save_group: true,
       message: "<p>Assigning roles…</p>",
       on_finish: (data) => {
@@ -128,16 +144,18 @@
       // `joinedAt` rides along because a push replaces this client's whole entry (see assignRoles).
       push_data: () => ({ offer: proposerOffer, joinedAt: myJoinedAt }),
       wait_for: (group) => group[responderId]?.decision !== undefined,
+      // Only the other player matters here; a spectator leaving must not end the round.
+      participants: () => [responderId],
       timeout: PARTNER_TIMEOUT_MS,
-      on_timeout: () => {
-        partnerLeft = true;
-      },
       message: () => `
         <p>You offered the Responder <strong>$${proposerOffer}</strong> and kept $${POT - proposerOffer}.</p>
         <p>Waiting for the Responder…</p>
       `,
       on_finish: (data) => {
-        if (data.timed_out) return;
+        if (data.partner_left || data.timed_out || data.connection_lost) {
+          partnerLeft = true;
+          return;
+        }
         responderDecision = data.group[responderId].decision;
       },
     };
@@ -151,13 +169,14 @@
     const responderWaitTrial = {
       type: jsPsychMultiplayerSync,
       wait_for: (group) => group[proposerId]?.offer !== undefined,
+      participants: () => [proposerId],
       timeout: PARTNER_TIMEOUT_MS,
-      on_timeout: () => {
-        partnerLeft = true;
-      },
       message: "<p>Waiting for the Proposer's offer…</p>",
       on_finish: (data) => {
-        if (data.timed_out) return;
+        if (data.partner_left || data.timed_out || data.connection_lost) {
+          partnerLeft = true;
+          return;
+        }
         proposerOffer = data.group[proposerId].offer;
       },
     };
@@ -220,7 +239,7 @@
       prompt: "<p>Press space to finish.</p>",
     };
 
-    // Shown instead of the outcome when a mid-game barrier timed out — i.e. the other player left.
+    // Shown instead of the outcome when the other player left mid-game (or a barrier timed out).
     const partnerLeftScreen = {
       timeline: [
         {

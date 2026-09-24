@@ -9,6 +9,15 @@
         }
       }
     },
+    "mp-sessions-presence": {
+      "$session": {
+        ".read": "auth != null && root.child('mp-sessions-memberships').child(auth.uid).val() === $session",
+        "$pid": {
+          ".write": "auth != null && $pid === auth.uid && root.child('mp-sessions-memberships').child(auth.uid).val() === $session",
+          ".validate": "newData.isString() && newData.val().length < 64"
+        }
+      }
+    },
     "mp-sessions-memberships": {
       "$uid": {
         ".read": "auth != null && $uid === auth.uid",

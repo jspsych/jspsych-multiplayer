@@ -51,8 +51,8 @@ export async function createRealBackend(options: {
   const auth = getAuth(app);
   // Per-tab persistence: two tabs on one origin would otherwise share one anonymous uid, silently
   // collapsing them into a single participant under uid-as-key mode. The design never relies on the
-  // uid surviving a full page reload (the reconnect re-push is a same-connection blip), so per-tab is
-  // free. Only meaningful for an app WE own — a caller-injected app owns its own persistence.
+  // uid surviving a full page reload (recovering from a network blip happens within one page), so
+  // per-tab is free. Only meaningful for an app WE own — a caller-injected app owns its own persistence.
   await setPersistence(auth, browserSessionPersistence);
   return new RealBackend(getDatabase(app), auth, true, app);
 }

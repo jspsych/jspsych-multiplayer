@@ -4,7 +4,7 @@ A synchronized group timer for multiplayer jsPsych experiments, built on the mul
 
 Like [`plugin-multiplayer-chat`](../plugin-multiplayer-chat), it is built on the multiplayer API's real-time **`subscribe`** primitive: the trial stays open, re-resolves the consensus start whenever a new (lower) timestamp arrives, and re-renders the clock on a ~100 ms tick, ending when its own derived time reaches `duration`.
 
-> **Status:** built against the jsPsych multiplayer API from [jsPsych#3694](https://github.com/jspsych/jsPsych/pull/3694), which is not yet released. The plugin codes against a local interface mirroring that API (`src/multiplayer-api.ts`) and reaches `jsPsych.multiplayer` with one cast. Preview builds that exposed these methods on `jsPsych.pluginAPI` predate the current contract and are not supported. Tests run against an in-memory mock, so no live group session is needed to develop it.
+> **Status:** requires the jsPsych multiplayer API from [jsPsych#3694](https://github.com/jspsych/jsPsych/pull/3694), which is not yet in a jsPsych release. On a jsPsych without `jsPsych.multiplayer`, the trial throws an error saying so.
 
 ## Prerequisites
 
@@ -19,7 +19,7 @@ await jsPsych.run(timeline);
 ## Parameters
 
 | Parameter    | Type        | Default       | Description                                                                                                                                                                                              |
-| ------------ | ----------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ------------ | ----------- | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `duration`   | integer     | _(required)_  | Total length of the timer in milliseconds. Must be positive. Both modes end here. Throws if missing or non-positive.                                                                                     |
 | `name`       | string      | _(required)_  | Namespaces the group-session key this countdown stores its start under (`countdown_<name>_startedAt`). Must be identical across clients yet unique per countdown in a timeline. Throws if missing/empty. |
 | `mode`       | string      | `"countdown"` | `"countdown"` displays time remaining and ticks toward `0:00`; `"countup"` displays time elapsed and ticks up toward `duration`. Same consensus start either way — only the displayed value differs.     |
@@ -28,17 +28,18 @@ await jsPsych.run(timeline);
 | `format`     | function    | `null`        | Formats the millisecond value into the displayed string: `(ms) => string`. `null` uses the built-in `M:SS` formatter (ceil for countdown, floor for count-up).                                           |
 | `save_group` | boolean     | `false`       | Store the full group-session snapshot in the `group` data field at trial end. Off by default (mostly timestamps, low value here).                                                                        |
 
-> **Why `name` is required.** The key must be *identical across clients* (so they resolve the same consensus start) yet *distinct from any other countdown* (or a later countdown silently reuses this one's timestamp and ends instantly). No default can satisfy both. In a loop, pass a function so each iteration gets a fresh name — see the loop example below.
+> **Why `name` is required.** The key must be _identical across clients_ (so they resolve the same consensus start) yet _distinct from any other countdown_ (or a later countdown silently reuses this one's timestamp and ends instantly). No default can satisfy both. In a loop, pass a function so each iteration gets a fresh name — see the loop example below.
 
 ## Data Generated
 
-| Name                 | Type    | Description                                                                                              |
-| -------------------- | ------- | ------------------------------------------------------------------------------------------------------- |
-| `started_at`         | integer | The resolved canonical (minimum-across-slots) start timestamp the display was derived from.             |
-| `own_started_at`     | integer | This client's own pushed start timestamp; its gap vs. `started_at` estimates this client's entry skew.  |
-| `displayed_duration` | integer | How long the timer was actually on screen for this client, in ms (≤ `duration` for late joiners).       |
-| `mode`               | string  | Which mode ran: `"countdown"` or `"countup"`.                                                            |
-| `group`              | object  | Full group-session snapshot at trial end. Only stored when `save_group` is true.                        |
+| Name                 | Type    | Description                                                                                                                                                         |
+| -------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `started_at`         | integer | The resolved canonical (minimum-across-slots) start timestamp the display was derived from.                                                                         |
+| `own_started_at`     | integer | This client's own pushed start timestamp; its gap vs. `started_at` estimates this client's entry skew.                                                              |
+| `displayed_duration` | integer | How long the timer was actually on screen for this client, in ms (≤ `duration` for late joiners).                                                                   |
+| `mode`               | string  | Which mode ran: `"countdown"` or `"countup"`.                                                                                                                       |
+| `connection_lost`    | boolean | True if this client's connection was lost for good during the countdown. The countdown still runs to the end locally, from the start time it had already agreed on. |
+| `group`              | object  | Full group-session snapshot at trial end (frozen). Only stored when `save_group` is true.                                                                           |
 
 ## How the consensus start works
 
@@ -50,9 +51,9 @@ Because `push` replaces the whole slot, the plugin writes the timestamp with `up
 
 This plugin is **not a barrier** — ends are synchronized only within clock skew + network latency. A few honest caveats:
 
-- **Clock skew, and its direction.** Each client renders `remaining = startedAt + duration − Date.now()` against its **own** clock, so no consensus rule can make displays agree better than pairwise clock skew — it only decides *whose* skew becomes the reference. Min is maximally sensitive to the single worst-*behind* clock: if one client's clock is grossly behind, its timestamp becomes the min, *that* client sees a normal countdown, and **everyone else ends early** (their derived time clamps to 0). Behind a ready/sync barrier with normal machines the real-world spread is milliseconds. Failure direction is "ends early," arguably the right direction for "time's up."
+- **Clock skew, and its direction.** Each client renders `remaining = startedAt + duration − Date.now()` against its **own** clock, so no consensus rule can make displays agree better than pairwise clock skew — it only decides _whose_ skew becomes the reference. Min is maximally sensitive to the single worst-_behind_ clock: if one client's clock is grossly behind, its timestamp becomes the min, _that_ client sees a normal countdown, and **everyone else ends early** (their derived time clamps to 0). Behind a ready/sync barrier with normal machines the real-world spread is milliseconds. Failure direction is "ends early," arguably the right direction for "time's up."
 - **Convergence is monotone, not smooth.** A lower timestamp arriving mid-trial is a visible downward step in the displayed time — remaining time may tick down slightly as the group finishes converging. Run this trial behind a ready/sync barrier so convergence is already complete when it starts.
-- **Assumes slots outlive members.** "Min can only decrease" relies on slots persisting after a member disconnects — true for both current adapters (JATOS group-session data and the local adapter's localStorage). An adapter that pruned slots on leave would make remaining jump *up* when the earliest pusher drops.
+- **Assumes slots outlive members.** "Min can only decrease" relies on slots persisting after a member disconnects, which the multiplayer adapters guarantee: they report departures through presence rather than by deleting data. An adapter that pruned slots on leave would make remaining jump _up_ when the earliest pusher drops.
 
 The clamp to `[0, duration]` is the v1 mitigation for all of the above: displays stay sane and the failure mode is "ends early" rather than "runs negative / overshoots."
 
@@ -62,7 +63,12 @@ Because ends are only synchronized within skew + latency, follow the countdown w
 
 ```js
 const timeline = [
-  { type: jsPsychMultiplayerCountdown, name: "draw_phase", duration: 60000, stimulus: "Time left to draw:" },
+  {
+    type: jsPsychMultiplayerCountdown,
+    name: "draw_phase",
+    duration: 60000,
+    stimulus: "Time left to draw:",
+  },
   { type: jsPsychMultiplayerReady }, // wait for everyone before scoring
 ];
 ```
@@ -104,7 +110,9 @@ const roundTimer = {
 };
 const loop = {
   timeline: [roundTimer /* … the round … */],
-  on_timeline_finish: () => { round++; },
+  on_timeline_finish: () => {
+    round++;
+  },
   loop_function: () => round < 5,
 };
 ```
@@ -113,7 +121,7 @@ const loop = {
 
 ## Rendering your own display (the exported core)
 
-The flagship use case renders the timer *during another trial* (e.g. a shared drawing canvas). For that, the pure consensus core is exposed as statics on the default export, so demo-side code can render its own synced display from the same logic:
+The flagship use case renders the timer _during another trial_ (e.g. a shared drawing canvas). For that, the pure consensus core is exposed as statics on the default export, so demo-side code can render its own synced display from the same logic:
 
 ```js
 const key = jsPsychMultiplayerCountdown.startedAtKey("draw_phase");

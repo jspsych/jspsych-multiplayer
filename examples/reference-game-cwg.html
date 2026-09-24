@@ -4,7 +4,7 @@
     <title>Reference Game — Clark & Wilkes-Gibbs 1986 replication (full-board) — jsPsych multiplayer</title>
     <!-- jsPsych core MUST carry the multiplayer API (jsPsych#3694). SHA-pinned to the #3694 preview
          build (see examples/README.md "Running it" to re-pin). -->
-    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@9eec555f5e55f09b64b40cd8278d0518396f195f/packages/jspsych/dist/index.browser.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@a6e05be017bcadf6ca208ed2fc0ac79e438c9626/packages/jspsych/dist/index.browser.min.js"></script>
     <script src="https://unpkg.com/@jspsych/plugin-survey-text"></script>
     <script src="https://unpkg.com/@jspsych/plugin-html-keyboard-response"></script>
     <script src="https://unpkg.com/@jspsych/plugin-preload"></script>
@@ -18,7 +18,7 @@
     <script src="tangrams.js"></script>
     <link
       rel="stylesheet"
-      href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@9eec555f5e55f09b64b40cd8278d0518396f195f/packages/jspsych/css/jspsych.css"
+      href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@a6e05be017bcadf6ca208ed2fc0ac79e438c9626/packages/jspsych/css/jspsych.css"
     />
   </head>
 
@@ -42,8 +42,9 @@
     //   • After each trial, feedback reveals the correct order to both (original: mismatches reported).
     //
     // The other departure is not a design choice: `round_timeout` (180s) has no counterpart in the
-    // original, which ran untimed. It exists so a disconnected or absent partner cannot hang the trial
-    // forever. Rounds it ends are recorded as `ended_by: "timeout"` with a null assignment — filter on
+    // original, which ran untimed. A partner who leaves ends the round through presence
+    // (`ended_by: "participant_left"`); the timeout covers a partner who stays connected but never
+    // acts. Rounds it ends are recorded as `ended_by: "timeout"` with a null assignment — filter on
     // that when analysing. Watch it in piloting: trial 1 of a 12-figure board is the longest in the
     // study, and a cap that truncates it would bite exactly where the effect is largest.
     //
@@ -86,6 +87,7 @@
     let myName = "";
     let myRole;
     let partnerId;
+    let partnerGone = false; // set when a round ends because the partner left or the connection was lost
 
     const nameTrial = {
       type: jsPsychSurveyText,
@@ -97,11 +99,15 @@
 
     const lobbyTrial = {
       type: jsPsychMultiplayerSync,
+      // A lobby counts who is here, so someone leaving shouldn't end the wait
+      participants: [],
       push_data: () => ({ name: myName, joinedAt: Date.now() }),
       message: `<p>Waiting for ${MIN_PLAYERS} players to join…</p>
                 <p>Open this page in another tab (keep the <code>?mp_session=</code> in the URL) to add a player.</p>`,
-      wait_for: (group) =>
-        Object.values(group).filter((entry) => entry && entry.name).length >= MIN_PLAYERS,
+      // Count connected players who published a name; slots stay after a player leaves.
+      wait_for: (group, presence) =>
+        Object.keys(group).filter((id) => group[id]?.name && presence[id] === "connected").length >=
+        MIN_PLAYERS,
     };
 
     const roleTrial = {
@@ -109,9 +115,14 @@
       roles: ["director", "matcher"],
       strategy: "random",
       overflow_role: "spectator",
-      ready: (group) =>
+      // The plugin has already dropped participants who left. Requiring everyone remaining to be
+      // connected keeps leftover slots from earlier members (which start out `away`) out of the
+      // pairing until they turn `left` and drop out.
+      ready: (group, presence) =>
         Object.keys(group).length >= MIN_PLAYERS &&
-        Object.values(group).every((entry) => entry && entry.joinedAt != null),
+        Object.keys(group).every(
+          (id) => presence[id] === "connected" && group[id]?.joinedAt != null,
+        ),
       save_group: true,
       message: "<p>Pairing you with your partner…</p>",
       on_finish: () => {
@@ -157,7 +168,11 @@
       // order, revision behavior. The core word-count DV doesn't need it, but it's ~free and matches
       // the Hawkins file.
       save_interaction_history: true,
-      round_timeout: 180000, // NOT in the original — bounds the round if the partner leaves (see header)
+      round_timeout: 180000, // NOT in the original — bounds a round whose partner stays connected but idle (see header)
+      // A partner who leaves ends the round at once (end_on_participant_left); skip the rest.
+      on_finish: (data) => {
+        if (data.partner_left || data.connection_lost) partnerGone = true;
+      },
       prompt: (role) =>
         role === "director"
           ? "<p><strong>You are the Director.</strong> Describe your tangrams in badge order (1, 2, 3, …) so your partner can arrange theirs the same way. You can talk back and forth as much as you need.</p>"
@@ -165,7 +180,8 @@
     };
 
     const gameLoop = {
-      timeline: [gameRound],
+      // Stop playing rounds once the partner is gone
+      timeline: [{ timeline: [gameRound], conditional_function: () => !partnerGone }],
       timeline_variables: SCHEDULE,
       conditional_function: () => myRole === "director" || myRole === "matcher",
     };
@@ -178,7 +194,10 @@
           .filter({ trial_type: "multiplayer-reference-game", ended_by: "submit" });
         const played = completed.count();
         const total = completed.select("n_correct").sum();
-        return `<h2>Game complete!</h2>
+        const ending = partnerGone
+          ? "<p>The game ended early because your partner left or the connection was lost.</p>"
+          : "";
+        return `<h2>Game complete!</h2>${ending}
                 <p>Together you scored <strong>${total} / ${played * N}</strong> across ${played} trial${
           played === 1 ? "" : "s"
         }.</p>

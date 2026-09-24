@@ -1,12 +1,14 @@
-import { JsPsych, JsPsychPlugin, ParameterType, TrialType } from "jspsych";
+import {
+  GroupSessionData,
+  JsPsych,
+  JsPsychPlugin,
+  ParameterType,
+  PresenceData,
+  TrialType,
+} from "jspsych";
 
 import { version } from "../package.json";
-import {
-  MultiplayerApiLike,
-  isMultiplayerCancelledError,
-  isMultiplayerTimeoutError,
-  resolveMultiplayerApi,
-} from "./multiplayer-api";
+import { getMultiplayer, isMultiplayerError, remainingParticipants } from "./multiplayer";
 import { makeReadiness } from "./readiness";
 import { AssignOptions, assignRoles } from "./roles";
 import {
@@ -37,7 +39,10 @@ const info = <const>{
      * is still a valid default/value; do NOT "fix" this to OBJECT.
      */
     strategy: { type: ParameterType.FUNCTION, default: "join_order" },
-    /** Wait for EXACTLY this many participants before computing (fail-loud). `null` trusts an upstream barrier. */
+    /**
+     * Wait for EXACTLY this many participants before computing (fail-loud). Participants who have
+     * left the session don't count and aren't assigned. `null` trusts an upstream barrier.
+     */
     group_size: { type: ParameterType.INT, default: null },
     /** Round index, for `rotate` and per-round `random`. Increment each re-run. */
     round: { type: ParameterType.INT, default: 0 },
@@ -49,7 +54,11 @@ const info = <const>{
     rank_by: { type: ParameterType.FUNCTION, default: null },
     /** `(entry, id, ctx) => string`. The role IS a value each participant carries. FUNCTION: see `strategy`. */
     role_from: { type: ParameterType.FUNCTION, default: null },
-    /** `(snapshot) => boolean`. Override the readiness gate; REQUIRED when `strategy` is a custom function. */
+    /**
+     * `(snapshot, presence) => boolean`. Override the readiness gate; REQUIRED when `strategy` is a
+     * custom function. `snapshot` excludes participants who have left. Both arguments are frozen, so
+     * don't modify them.
+     */
     ready: { type: ParameterType.FUNCTION, default: null },
     /** Role for participants beyond the declared slots. Applies whenever the participant count exceeds the declared slots (capped or not); without it, overflow throws. */
     overflow_role: { type: ParameterType.STRING, default: null },
@@ -67,6 +76,13 @@ const info = <const>{
     timeout: { type: ParameterType.INT, default: 30000 },
     /** Hook run on timeout. The trial always ends with `role: null, timed_out: true` regardless. */
     on_timeout: { type: ParameterType.FUNCTION, default: null },
+    /**
+     * Participants the assignment depends on. If one of them leaves the session before the group is
+     * ready, the trial ends with `role: null, partner_left: true`. Null (the default) means every
+     * other participant who is connected when this participant arrives. Pass `[]` to ignore
+     * departures.
+     */
+    participants: { type: ParameterType.COMPLEX, default: null },
     /** Shown while waiting. */
     message: { type: ParameterType.HTML_STRING, default: "<p>Assigning roles…</p>" },
   },
@@ -79,6 +95,12 @@ const info = <const>{
     assigned_self: { type: ParameterType.BOOL },
     /** `true` if readiness was not reached before `timeout`. */
     timed_out: { type: ParameterType.BOOL },
+    /** `true` if the trial ended unassigned because a participant in `participants` left the session. */
+    partner_left: { type: ParameterType.BOOL },
+    /** The ID of the participant who left, when `partner_left` is true; otherwise null. */
+    left_participant: { type: ParameterType.STRING },
+    /** `true` if the trial ended unassigned because this participant's connection was lost for good. */
+    connection_lost: { type: ParameterType.BOOL },
     /** The full snapshot assigned over — only present when `save_group: true`. */
     group: { type: ParameterType.OBJECT },
   },
@@ -88,6 +110,18 @@ const info = <const>{
 };
 
 type Info = typeof info;
+
+/** The group without participants who have left the session. */
+function withoutLeft(group: GroupSessionData, presence: PresenceData): GroupSessionData {
+  return Object.fromEntries(Object.entries(group).filter(([id]) => presence[id] !== "left"));
+}
+
+interface Unassigned {
+  timed_out?: boolean;
+  partner_left?: boolean;
+  left_participant?: string | null;
+  connection_lost?: boolean;
+}
 
 /**
  * **plugin-multiplayer-role**
@@ -125,9 +159,9 @@ class MultiplayerRolePlugin implements JsPsychPlugin<Info> {
   constructor(private jsPsych: JsPsych) {}
 
   trial(display_element: HTMLElement, trial: TrialType<Info>, on_load?: () => void) {
-    const api = resolveMultiplayerApi(this.jsPsych);
+    const multiplayer = getMultiplayer(this.jsPsych);
 
-    const me = api.participantId;
+    const me = multiplayer.participantId;
     if (me == null) {
       throw new Error(
         "plugin-multiplayer-role: no participantId — the multiplayer adapter must be connected " +
@@ -164,9 +198,9 @@ class MultiplayerRolePlugin implements JsPsychPlugin<Info> {
     // demand. The merge is only top-level, though, so the two keys we do write still have to be
     // folded forward by hand from this client's current entry: `joinedAt` is written ONCE (first-seen,
     // never re-stamped) so the join-order base stays stable across rounds, and `rounds` is rebuilt
-    // from the previous rounds map so a later round never clobbers an earlier round's score. (Rests
-    // on the adapter being read-back consistent for this client's own writes.)
-    const prev = api.get(me) ?? {};
+    // from the previous rounds map so a later round never clobbers an earlier round's score. The
+    // session shows this client's own writes at once, so `get(me)` is always current.
+    const prev = multiplayer.get(me) ?? {};
     const payload: Record<string, unknown> = {
       joinedAt: (prev.joinedAt as number | undefined) ?? Date.now(),
       rounds: {
@@ -190,24 +224,37 @@ class MultiplayerRolePlugin implements JsPsychPlugin<Info> {
       seed: trial.seed ?? undefined,
     });
 
+    // The presence the group was ready under, so the assignment covers exactly who was counted
+    let readyPresence: PresenceData = {};
+    const ready = (group: GroupSessionData, presence: PresenceData) => {
+      const members = withoutLeft(group, presence);
+      // Each participant computes the result on its own, so wait until everyone counted is
+      // connected: then every view agrees on the group, and a leftover slot that is only `away`
+      // can't be included before it turns `left`.
+      if (!Object.keys(members).every((id) => presence[id] === "connected")) return false;
+      const met = isReady(members, presence);
+      if (met) readyPresence = presence;
+      return met;
+    };
+
     // Write our payload, then wait for readiness. The two-argument `.then` is deliberate: the
-    // rejection handler catches ONLY the update/wait chain's rejection and routes it to the soft,
-    // fail-loud timeout path — but only when that rejection is a genuine MultiplayerTimeoutError.
-    // A throw from assignRoles is a different animal — readiness has already certified the group
-    // complete, so a throw there means the assignment CONFIG is wrong (overflow with no
-    // overflow_role, role_from returning an undeclared role, a custom strategy that throws). Those
-    // must NOT be relabelled as a timeout; they propagate out of the returned promise so jsPsych
-    // halts the trial loudly. We assign over the RESOLVED snapshot, never a fresh getAll(), which
-    // would reopen the time-of-check gap.
-    // `trial.timeout` goes through as-is: core reads null, negative and non-finite values as "no
-    // timeout", which is exactly what this plugin documents `null` to mean, so there is nothing left
-    // to normalize here. (0 still times out at once.)
-    return api
+    // rejection handler catches ONLY the update/wait chain's rejection. A throw from assignRoles is a
+    // different animal — readiness has already certified the group complete, so a throw there means
+    // the assignment CONFIG is wrong (overflow with no overflow_role, role_from returning an
+    // undeclared role, a custom strategy that throws). Those propagate out of the returned promise
+    // so jsPsych halts the trial loudly. We assign over the RESOLVED snapshot, never a fresh
+    // getAll(), which would reopen the time-of-check gap. `trial.timeout` goes through as-is: core
+    // reads null, negative and non-finite values as "no timeout". (0 still times out at once.)
+    return multiplayer
       .update(payload)
-      .then(() => api.wait(isReady, trial.timeout))
+      .then(() => {
+        const participants =
+          (trial.participants as string[] | null) ?? remainingParticipants(multiplayer);
+        return multiplayer.wait(ready, { timeout: trial.timeout, participants });
+      })
       .then(
         (group) => {
-          const roleMap = assignRoles(group, {
+          const roleMap = assignRoles(withoutLeft(group, readyPresence), {
             roles: trial.roles as AssignOptions["roles"],
             strategy: trial.strategy,
             seed: trial.seed ?? undefined,
@@ -224,36 +271,55 @@ class MultiplayerRolePlugin implements JsPsychPlugin<Info> {
             role_map: roleMap,
             // assigned_self is false only when an assignment ran but this participant is absent from the
             // agreed map — i.e. a custom strategy treated them as a spectator. (Overflow participants ARE
-            // in the map, with overflow_role, so they read true.) It distinguishes that from a timeout,
-            // where role_map is null too.
+            // in the map, with overflow_role, so they read true.) It distinguishes that from the
+            // unassigned paths, where role_map is null too.
             assigned_self: mine != null,
             timed_out: false,
+            partner_left: false,
+            left_participant: null,
+            connection_lost: false,
             ...(trial.save_group ? { group } : {}),
           });
         },
         (error) => {
           // A cancelled wait is neither a timeout nor a failure: jsPsych cancels pending waits when
-          // the experiment ends or is aborted (disconnect(), abortExperiment(), the end of
-          // jsPsych.run()), so this trial is already being torn down. Return quietly — no
-          // on_timeout, no finishTrial, no `timed_out: true` record, nothing logged.
-          if (isMultiplayerCancelledError(error)) return;
-          // A genuine timeout only — the name-based match lives in isMultiplayerTimeoutError
-          // (multiplayer-api.ts); the class itself isn't importable here.
-          if (!isMultiplayerTimeoutError(error)) {
-            // Not a timeout — a failed write or an adapter/backend error. Surface it loudly instead
-            // of mislabeling it a timeout.
+          // the experiment ends or is aborted, so this trial is already being torn down. Return
+          // quietly — no on_timeout, no finishTrial, nothing logged. Errors are matched on their
+          // NAME, not `instanceof`, which fails across two loaded copies of jspsych.
+          if (isMultiplayerError(error, "MultiplayerCancelledError")) return;
+          let outcome: Unassigned;
+          if (isMultiplayerError(error, "MultiplayerTimeoutError")) {
+            outcome = { timed_out: true };
+          } else if (isMultiplayerError(error, "MultiplayerParticipantLeftError")) {
+            outcome = { partner_left: true, left_participant: error.participantId ?? null };
+          } else if (isMultiplayerError(error, "MultiplayerConnectionClosedError")) {
+            outcome = { connection_lost: true };
+          } else {
+            // A failed write or an adapter/backend error. Surface it loudly.
             throw error;
           }
-          return this.handleTimeout(trial);
+          // Accessors throw routinely while data is still arriving, so those errors are only worth
+          // reporting when the group never became ready — one may be the reason why.
+          const lastError = isReady.lastError();
+          if (lastError !== undefined) {
+            console.error(
+              "plugin-multiplayer-role: the group never became ready; the readiness check last threw",
+              lastError,
+            );
+          }
+          return this.endUnassigned(trial, outcome);
         },
       );
   }
 
-  /** Readiness never reached within `timeout` (a genuine MultiplayerTimeoutError). Fail loud, don't hang. */
-  private handleTimeout(trial: TrialType<Info>) {
+  /**
+   * The group never became ready: `timeout` elapsed, a participant left, or the connection was lost.
+   * Fail loud, don't hang.
+   */
+  private endUnassigned(trial: TrialType<Info>, outcome: Unassigned) {
     setMyAssignment(undefined); // clear any stale assignment so getMyRole() reads as undefined
     try {
-      if (trial.on_timeout) trial.on_timeout(this.jsPsych);
+      if (outcome.timed_out && trial.on_timeout) trial.on_timeout(this.jsPsych);
     } catch (err) {
       // A throwing hook must NOT skip finishTrial below — that would reintroduce the exact hang the
       // timeout exists to prevent. Swallow it (after logging) so the trial still ends.
@@ -261,7 +327,15 @@ class MultiplayerRolePlugin implements JsPsychPlugin<Info> {
     }
     // ALWAYS end the trial ourselves, even if on_timeout ran — a hook that forgets to end the trial
     // would reintroduce the exact hang the timeout exists to prevent.
-    this.jsPsych.finishTrial({ role: null, role_map: null, assigned_self: false, timed_out: true });
+    this.jsPsych.finishTrial({
+      role: null,
+      role_map: null,
+      assigned_self: false,
+      timed_out: outcome.timed_out ?? false,
+      partner_left: outcome.partner_left ?? false,
+      left_participant: outcome.left_participant ?? null,
+      connection_lost: outcome.connection_lost ?? false,
+    });
   }
 }
 

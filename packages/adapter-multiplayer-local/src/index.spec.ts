@@ -1,6 +1,7 @@
+import { AdapterConnectOptions, initJsPsych, MultiplayerConnection } from "jspsych";
+
 import LocalAdapter, { LocalAdapterOptions } from "./index";
-import { SlotStorage } from "./local-store";
-import { GroupSessionData } from "./multiplayer-adapter";
+import { SlotStorage, writePresence } from "./local-store";
 import { ChangeSignal } from "./signal";
 
 /** In-memory Storage double shared by "tabs" of the same browser. */
@@ -24,31 +25,31 @@ class MemoryStorage implements SlotStorage {
 }
 
 /**
- * In-memory cross-tab bus with real BroadcastChannel semantics: a `post()` reaches every OTHER tab's
- * handler but never the poster's own (the writing tab self-notifies separately in the adapter).
+ * In-memory cross-tab bus with real BroadcastChannel semantics: a `post()` reaches every OTHER
+ * signal's handlers but never the poster's own.
  */
 class Bus {
   private signals = new Set<BusSignal>();
-  newSignal(): ChangeSignal {
+  newSignal(): BusSignal {
     const sig = new BusSignal(this.signals);
     this.signals.add(sig);
     return sig;
   }
 }
 class BusSignal implements ChangeSignal {
-  private handler: (() => void) | null = null;
+  handlers = new Set<() => void>();
+  closed = false;
   constructor(private peers: Set<BusSignal>) {}
   post(): void {
-    // Only peers with a live handler (i.e. currently connected) receive the ping.
-    for (const s of this.peers) if (s !== this && s.handler) s.handler();
+    for (const s of this.peers) if (s !== this) for (const h of [...s.handlers]) h();
   }
-  onChange(handler: () => void): void {
-    this.handler = handler;
+  onChange(handler: () => void): () => void {
+    this.handlers.add(handler);
+    return () => this.handlers.delete(handler);
   }
   close(): void {
-    // Drop only the handler, not membership — a reconnect re-registers via onChange. This mirrors
-    // the real adapter, which rebuilds a fresh signal on connect() after disconnect() closed the old.
-    this.handler = null;
+    this.closed = true;
+    this.handlers.clear();
   }
 }
 
@@ -61,161 +62,232 @@ function makeBrowser() {
       sessionId: "sess",
       storage,
       signal: bus.newSignal(),
+      heartbeatIntervalMs: 1000,
+      presenceTimeoutMs: 3000,
       ...opts,
     });
   return { storage, bus, openTab };
 }
 
-/** Let queued microtasks (the adapter's self-notify fan-out) run. */
-const flush = () => new Promise<void>((resolve) => queueMicrotask(resolve));
+function connectOptions(): AdapterConnectOptions & {
+  onChange: jest.Mock;
+  onStatus: jest.Mock;
+} {
+  return { signal: new AbortController().signal, onChange: jest.fn(), onStatus: jest.fn() };
+}
 
-describe("LocalAdapter", () => {
-  test("push() before connect() rejects", async () => {
+const open: MultiplayerConnection[] = [];
+
+/** Connect a tab and remember the connection so afterEach can close it. */
+async function connect(adapter: LocalAdapter, options = connectOptions()) {
+  const connection = await adapter.connect(options);
+  open.push(connection);
+  return { connection, options };
+}
+
+afterEach(async () => {
+  await Promise.all(open.splice(0).map((c) => c.disconnect()));
+  jest.useRealTimers();
+  jest.restoreAllMocks();
+});
+
+describe("LocalAdapter connections", () => {
+  test("each connect() returns a new connection with the adapter's participantId", async () => {
     const { openTab } = makeBrowser();
-    const a = openTab();
-    await expect(a.push({ x: 1 })).rejects.toThrow(/connect/);
+    const adapter = openTab({ participantId: "alice" });
+    const { connection: first } = await connect(adapter);
+    const { connection: second } = await connect(adapter);
+    expect(first).not.toBe(second);
+    expect(first.participantId).toBe("alice");
+    expect(second.participantId).toBe("alice");
   });
 
-  test("push writes a slot readable via get/getAll (REPLACE semantics)", async () => {
+  test("connect() rejects when its signal is already aborted", async () => {
     const { openTab } = makeBrowser();
-    const a = openTab({ participantId: "alice" });
-    await a.connect();
+    const options = { ...connectOptions(), signal: AbortSignal.abort() };
+    await expect(openTab().connect(options)).rejects.toThrow(/cancelled/);
+  });
+
+  test("push writes a slot every tab can read (REPLACE semantics)", async () => {
+    const { openTab } = makeBrowser();
+    const { connection: a } = await connect(openTab({ participantId: "alice" }));
+    const { connection: b } = await connect(openTab({ participantId: "bob" }));
     await a.push({ a: 1, b: 2 });
-    expect(a.get("alice")).toEqual({ a: 1, b: 2 });
     await a.push({ c: 3 });
-    expect(a.get("alice")).toEqual({ c: 3 }); // replaced, not merged
-    expect(a.getAll()).toEqual({ alice: { c: 3 } });
+    expect(b.getAll()).toEqual({ alice: { c: 3 } });
   });
 
-  test("push self-notifies own subscribers — on a microtask, not synchronously", async () => {
+  test("a push calls onChange in the other tabs", async () => {
     const { openTab } = makeBrowser();
-    const a = openTab({ participantId: "alice" });
-    await a.connect();
-    const seen: GroupSessionData[] = [];
-    a.subscribe((data) => seen.push(data));
-
-    const pushed = a.push({ hi: true }); // don't await — check before microtasks run
-    expect(seen).toHaveLength(0); // not delivered synchronously
-    await flush();
-    expect(seen).toEqual([{ alice: { hi: true } }]);
-    await pushed;
-  });
-
-  test("a subscriber that pushes again does not recurse and sees a written store", async () => {
-    const { openTab } = makeBrowser();
-    const a = openTab({ participantId: "alice" });
-    await a.connect();
-
-    let calls = 0;
-    const observed: (Record<string, unknown> | undefined)[] = [];
-    a.subscribe((data) => {
-      calls++;
-      observed.push(data.alice);
-      if (calls === 1) {
-        // React to the first update by pushing again — must not recurse into the current fan-out.
-        void a.push({ step: 2 });
-      }
-    });
-
-    await a.push({ step: 1 });
-    await flush(); // first fan-out
-    await flush(); // fan-out triggered by the reentrant push
-    expect(calls).toBe(2);
-    expect(observed).toEqual([{ step: 1 }, { step: 2 }]);
-  });
-
-  test("cross-tab: one tab's push notifies another tab's subscriber", async () => {
-    const { openTab } = makeBrowser();
-    const alice = openTab({ participantId: "alice" });
-    const bob = openTab({ participantId: "bob" });
-    await alice.connect();
-    await bob.connect();
-
-    const bobSaw: GroupSessionData[] = [];
-    bob.subscribe((data) => bobSaw.push(data));
-
-    await alice.push({ msg: "hello" });
-    await flush();
-    expect(bobSaw.at(-1)).toEqual({ alice: { msg: "hello" } });
-    // and bob reads alice's slot directly
-    expect(bob.get("alice")).toEqual({ msg: "hello" });
+    const { connection: a } = await connect(openTab());
+    const { options: other } = await connect(openTab());
+    other.onChange.mockClear();
+    await a.push({ x: 1 });
+    expect(other.onChange).toHaveBeenCalled();
   });
 
   test("session namespacing isolates separate runs", async () => {
-    const storage = new MemoryStorage();
-    const bus = new Bus();
-    const run1 = new LocalAdapter({
-      sessionId: "r1",
-      storage,
-      signal: bus.newSignal(),
+    const { openTab } = makeBrowser();
+    const { connection: a } = await connect(openTab({ participantId: "alice", sessionId: "s1" }));
+    const { connection: b } = await connect(openTab({ participantId: "bob", sessionId: "s2" }));
+    await a.push({ run: 1 });
+    expect(b.getAll()).toEqual({});
+    expect(b.connectedParticipants()).toEqual(["bob"]);
+  });
+
+  test("push() rejects (catchably) when storage.setItem throws (e.g. quota exceeded)", async () => {
+    const { storage, bus } = makeBrowser();
+    const connection = await new LocalAdapter({
+      sessionId: "sess",
       participantId: "alice",
-    });
-    const run2 = new LocalAdapter({
-      sessionId: "r2",
-      storage,
       signal: bus.newSignal(),
-      participantId: "bob",
+      storage: {
+        get length() {
+          return storage.length;
+        },
+        key: (i) => storage.key(i),
+        getItem: (k) => storage.getItem(k),
+        setItem: (k, v) => {
+          // Let the presence heartbeat through; fail slot writes, as a full store would
+          if (k.startsWith("mp:")) {
+            const err = new Error("QuotaExceededError");
+            err.name = "QuotaExceededError";
+            throw err;
+          }
+          storage.setItem(k, v);
+        },
+        removeItem: (k) => storage.removeItem(k),
+      },
+    }).connect(connectOptions());
+    open.push(connection);
+    await expect(connection.push({ x: 1 })).rejects.toThrow(/quota/i);
+  });
+
+  test("push() after disconnect() rejects", async () => {
+    const { openTab } = makeBrowser();
+    const { connection } = await connect(openTab());
+    await connection.disconnect();
+    await expect(connection.push({ x: 1 })).rejects.toThrow(/disconnect/);
+  });
+
+  test("disconnect() keeps the data slot but removes the tab from connectedParticipants()", async () => {
+    const { openTab } = makeBrowser();
+    const { connection: a } = await connect(openTab({ participantId: "alice" }));
+    const { connection: b, options: bOptions } = await connect(openTab({ participantId: "bob" }));
+    await a.push({ answer: 1 });
+    expect(b.connectedParticipants()).toEqual(["alice", "bob"]);
+
+    bOptions.onChange.mockClear();
+    await a.disconnect();
+    expect(b.connectedParticipants()).toEqual(["bob"]);
+    expect(b.getAll()).toEqual({ alice: { answer: 1 } });
+    expect(bOptions.onChange).toHaveBeenCalled();
+  });
+
+  test("no callbacks fire after disconnect()", async () => {
+    jest.useFakeTimers();
+    const { openTab } = makeBrowser();
+    const { connection: a, options } = await connect(openTab());
+    const { connection: b } = await connect(openTab());
+    await a.disconnect();
+    options.onChange.mockClear();
+
+    await b.push({ x: 1 });
+    await b.disconnect();
+    jest.advanceTimersByTime(10000);
+    expect(options.onChange).not.toHaveBeenCalled();
+  });
+
+  test("an injected signal is never closed and keeps no handlers from closed connections", async () => {
+    const { storage, bus } = makeBrowser();
+    const signal = bus.newSignal();
+    const adapter = new LocalAdapter({ sessionId: "sess", storage, signal });
+    const { connection: first } = await connect(adapter);
+    await first.disconnect();
+    const { connection: second } = await connect(adapter);
+    expect(signal.handlers.size).toBe(1);
+    await second.disconnect();
+    expect(signal.handlers.size).toBe(0);
+    expect(signal.closed).toBe(false);
+  });
+});
+
+describe("LocalAdapter presence", () => {
+  test("a tab whose heartbeat stops drops out after the presence timeout", async () => {
+    jest.useFakeTimers();
+    const { storage, openTab } = makeBrowser();
+    const { connection, options } = await connect(openTab({ participantId: "alice" }));
+    // A crashed tab: its presence key stays behind but is never refreshed
+    writePresence(storage, "mp", "sess", "crashed", Date.now());
+    options.onChange.mockClear();
+
+    jest.advanceTimersByTime(1000);
+    expect(connection.connectedParticipants()).toEqual(["alice", "crashed"]);
+
+    jest.advanceTimersByTime(3000);
+    expect(connection.connectedParticipants()).toEqual(["alice"]);
+    expect(options.onChange).toHaveBeenCalled();
+  });
+
+  test("the heartbeat keeps a live tab present indefinitely", async () => {
+    jest.useFakeTimers();
+    const { openTab } = makeBrowser();
+    const { connection: a } = await connect(openTab({ participantId: "alice" }));
+    await connect(openTab({ participantId: "bob" }));
+    jest.advanceTimersByTime(60000);
+    expect(a.connectedParticipants()).toEqual(["alice", "bob"]);
+  });
+
+  test("pagehide removes the tab's presence at once, and a bfcache pageshow restores it", async () => {
+    const { openTab } = makeBrowser();
+    const { connection: a } = await connect(openTab({ participantId: "alice" }));
+    const { connection: b } = await connect(openTab({ participantId: "bob" }));
+
+    // Both tabs share this jsdom window, so close the other tab before firing page events
+    await b.disconnect();
+    window.dispatchEvent(new Event("pagehide"));
+    expect(a.connectedParticipants()).toEqual([]);
+
+    const pageshow = new Event("pageshow") as PageTransitionEvent;
+    Object.defineProperty(pageshow, "persisted", { value: true });
+    window.dispatchEvent(pageshow);
+    expect(a.connectedParticipants()).toEqual(["alice"]);
+  });
+
+  test("presenceTimeoutMs is never shorter than the heartbeat interval", async () => {
+    jest.useFakeTimers();
+    const { openTab } = makeBrowser();
+    const { connection } = await connect(
+      openTab({ participantId: "alice", heartbeatIntervalMs: 5000, presenceTimeoutMs: 10 }),
+    );
+    jest.advanceTimersByTime(4999);
+    expect(connection.connectedParticipants()).toEqual(["alice"]);
+  });
+});
+
+describe("LocalAdapter with jsPsych.multiplayer", () => {
+  test("two tabs share data and presence through real sessions", async () => {
+    const { openTab } = makeBrowser();
+    const a = initJsPsych();
+    const b = initJsPsych();
+    await a.multiplayer.connect(openTab({ participantId: "alice" }));
+    await b.multiplayer.connect(openTab({ participantId: "bob" }));
+
+    const waiting = a.multiplayer.wait((data) => data.bob?.ready === true, {
+      participants: ["bob"],
     });
-    await run1.connect();
-    await run2.connect();
+    await b.multiplayer.update({ ready: true });
+    expect((await waiting).bob).toEqual({ ready: true });
+    expect(a.multiplayer.presence()).toEqual({ alice: "connected", bob: "connected" });
 
-    await run1.push({ from: "r1" });
-    await run2.push({ from: "r2" });
-
-    expect(run1.getAll()).toEqual({ alice: { from: "r1" } });
-    expect(run2.getAll()).toEqual({ bob: { from: "r2" } });
+    await b.multiplayer.disconnect();
+    expect(a.multiplayer.presence().bob).toBe("away");
+    expect(a.multiplayer.get("bob")).toEqual({ ready: true });
+    await a.multiplayer.disconnect();
   });
+});
 
-  test("disconnect removes own slot and other tabs see it gone", async () => {
-    const { openTab } = makeBrowser();
-    const alice = openTab({ participantId: "alice" });
-    const bob = openTab({ participantId: "bob" });
-    await alice.connect();
-    await bob.connect();
-    await alice.push({ here: true });
-    await bob.push({ here: true });
-
-    const bobSaw: GroupSessionData[] = [];
-    bob.subscribe((data) => bobSaw.push(data));
-
-    await alice.disconnect();
-    await flush();
-    expect(bob.getAll()).toEqual({ bob: { here: true } });
-    expect(bobSaw.at(-1)).toEqual({ bob: { here: true } });
-  });
-
-  test("reconnect after disconnect resumes cross-tab updates", async () => {
-    const { openTab } = makeBrowser();
-    const alice = openTab({ participantId: "alice" });
-    const bob = openTab({ participantId: "bob" });
-    await alice.connect();
-    await bob.connect();
-
-    await bob.disconnect();
-    await bob.connect(); // reconnect — must re-register for cross-tab signals
-
-    const bobSaw: GroupSessionData[] = [];
-    bob.subscribe((data) => bobSaw.push(data));
-    await alice.push({ msg: "again" });
-    await flush();
-    expect(bobSaw.at(-1)).toEqual({ alice: { msg: "again" } });
-  });
-
-  test("unsubscribe stops further updates", async () => {
-    const { openTab } = makeBrowser();
-    const a = openTab({ participantId: "alice" });
-    await a.connect();
-    const seen: GroupSessionData[] = [];
-    const unsub = a.subscribe((data) => seen.push(data));
-
-    await a.push({ n: 1 });
-    await flush();
-    unsub();
-    await a.push({ n: 2 });
-    await flush();
-    expect(seen).toHaveLength(1);
-  });
-
+describe("LocalAdapter configuration", () => {
   test("distinct tabs get distinct random participant ids by default", () => {
     const { openTab } = makeBrowser();
     const a = openTab();
@@ -224,75 +296,22 @@ describe("LocalAdapter", () => {
     expect(a.participantId).not.toBe(b.participantId);
   });
 
-  test("push() rejects (catchably) when storage.setItem throws (e.g. quota exceeded)", async () => {
-    const { storage, bus } = makeBrowser();
-    // A storage double whose writes fail synchronously, as a real QuotaExceededError does.
-    const throwingStorage: SlotStorage = {
-      get length() {
-        return storage.length;
-      },
-      key: (i) => storage.key(i),
-      getItem: (k) => storage.getItem(k),
-      setItem: () => {
-        const err = new Error("QuotaExceededError");
-        err.name = "QuotaExceededError";
-        throw err;
-      },
-      removeItem: (k) => storage.removeItem(k),
-    };
-    const a = new LocalAdapter({
-      sessionId: "sess",
-      storage: throwingStorage,
-      signal: bus.newSignal(),
-      participantId: "alice",
-    });
-    await a.connect();
-    // The synchronous setItem throw must surface through the returned promise, not escape past
-    // .catch() as a synchronous throw from a Promise-returning method.
-    await expect(a.push({ x: 1 })).rejects.toThrow(/quota/i);
+  test("persistParticipant reuses the id stored for this tab and session", () => {
+    const { openTab } = makeBrowser();
+    sessionStorage.clear();
+    const first = openTab({ persistParticipant: true });
+    const second = openTab({ persistParticipant: true });
+    expect(second.participantId).toBe(first.participantId);
+    sessionStorage.clear();
   });
 
   test("constructor rejects a sessionId containing ':'", () => {
-    const { storage, bus } = makeBrowser();
-    expect(
-      () =>
-        new LocalAdapter({
-          sessionId: "a:b",
-          storage,
-          signal: bus.newSignal(),
-          participantId: "p",
-        }),
-    ).toThrow(/sessionId must not contain ":"/);
+    const { openTab } = makeBrowser();
+    expect(() => openTab({ sessionId: "a:b" })).toThrow(/sessionId must not contain ":"/);
   });
 
   test("constructor rejects a participantId containing ':'", () => {
-    const { storage, bus } = makeBrowser();
-    expect(
-      () =>
-        new LocalAdapter({
-          sessionId: "sess",
-          storage,
-          signal: bus.newSignal(),
-          participantId: "a:b",
-        }),
-    ).toThrow(/participantId must not contain ":"/);
-  });
-
-  test("a throwing subscriber does not break the fan-out to others", async () => {
     const { openTab } = makeBrowser();
-    const a = openTab({ participantId: "alice" });
-    await a.connect();
-    const consoleError = jest.spyOn(console, "error").mockImplementation(() => {});
-    const good: GroupSessionData[] = [];
-    a.subscribe(() => {
-      throw new Error("boom");
-    });
-    a.subscribe((data) => good.push(data));
-
-    await a.push({ ok: 1 });
-    await flush();
-    expect(good).toEqual([{ alice: { ok: 1 } }]);
-    expect(consoleError).toHaveBeenCalled();
-    consoleError.mockRestore();
+    expect(() => openTab({ participantId: "a:b" })).toThrow(/participantId must not contain ":"/);
   });
 });

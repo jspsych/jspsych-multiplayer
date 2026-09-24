@@ -27,6 +27,8 @@ without touching experiment logic.**
 | Cost | free | server hosting | free tier, then usage-based |
 | Participant recruitment | n/a | built into JATOS | bring your own |
 | Suitable for real data collection | **no** | yes | yes |
+| Detects a closed tab | immediately | when JATOS closes the channel | when Firebase notices the drop |
+| Detects a crashed tab or lost network | after 70 s without a heartbeat | when JATOS's heartbeat fails | when Firebase notices the drop |
 | Use it for | development, tutorials, demos | labs already running JATOS | labs that want cross-device without administering a server |
 
 ## `adapter-multiplayer-local`
@@ -45,10 +47,14 @@ tutorials use it. Develop your entire game here, then swap the constructor.
 Two options matter in practice:
 
 - `persistParticipant: true` — keep this tab's participant ID in `sessionStorage`, so a
-  refresh rejoins as the same participant rather than abandoning a ghost slot. Almost
-  always what you want while developing.
+  refresh rejoins as the same participant. Almost always what you want while developing.
 - The session is identified by the `?mp_session=` URL parameter. A tab without one mints a
   fresh session, which is why joining means **copying the full URL** into the second tab.
+
+Each tab writes a heartbeat every 2 seconds. A tab that closes normally drops out at once.
+A tab that crashes drops out once its heartbeat is 70 seconds old (`presenceTimeoutMs`);
+the timeout is long because browsers run timers in background tabs as rarely as once a
+minute, and a waiting background tab must not look disconnected.
 
 ## `adapter-multiplayer-jatos`
 
@@ -70,9 +76,18 @@ jatos.onLoad(async () => {
 });
 ```
 
+Presence comes from the group members JATOS reports as having an open channel. When this
+participant's own channel drops, jatos.js reopens it; if it stays down for longer than
+`closeAfterReconnectingMs` (30 seconds by default), the adapter treats the connection as
+lost for good. jatos.js supports one group channel per page, so the adapter allows one
+connection at a time.
+
 ## `adapter-multiplayer-firebase`
 
-Backs the group session with the Firebase Realtime Database.
+Backs the group session with the Firebase Realtime Database. Each participant keeps a
+presence entry that Firebase removes on the server when their connection drops, so a
+participant who closes the tab or loses the network is noticed without any code in the page.
+Their data slot stays.
 
 Choose this for real cross-device data collection with essentially no backend to
 administer: create a Firebase project, enable the Realtime Database, paste the config into
@@ -83,14 +98,18 @@ Two things to plan for:
 
 - **The config is public.** A Firebase web config is not a secret — it is in the page
   source of every experiment. The security rules are what protect the data, so deploy the
-  session-locked rules from the package rather than leaving the database open.
+  session-locked rules from the package rather than leaving the database open. The rules
+  cover three nodes: the data slots, `mp-sessions-presence` (who is connected), and
+  `mp-sessions-memberships` (session bindings). Rules written for an earlier version of the
+  adapter lack the presence node and must be updated.
 - **Recruitment and data export are yours to arrange.** Unlike JATOS, Firebase gives you
   the shared-state backend and nothing else.
 
 ## Writing your own
 
-The adapter contract is deliberately small — connect, push, get, getAll, subscribe,
-disconnect — so a new backend (a WebSocket server, a lab's existing infrastructure) is a
+The adapter contract is deliberately small — `connect()` returns a connection with
+`getAll`, `connectedParticipants`, `push`, and `disconnect`, and the connection reports
+changes through two callbacks — so a new backend (a WebSocket server, a lab's existing infrastructure) is a
 couple of hundred lines and slots in without any experiment changing. See the
 [`jsPsych.multiplayer` reference](/reference/multiplayer-api) for the shape each method
 must satisfy.

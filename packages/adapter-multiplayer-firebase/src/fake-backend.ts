@@ -8,8 +8,9 @@
  *  - a shared `FakeRtdb` lets multiple backends (i.e. multiple simulated participants) see each
  *    other's writes through one session listener.
  *
- * Test-only helpers (not part of the interface): `setConnected`, `simulateBlip`, and the `denyReads`
- * / `neverSnapshot` construction flags for the connect() failure paths.
+ * Test-only helpers (not part of the interface): `setConnected`, `simulateBlip`, `FakeRtdb.get` /
+ * `cancelListeners`, and the `denyReads` / `neverSnapshot` construction flags for the connect()
+ * failure paths.
  */
 
 import { FirebaseBackend, RawSessionSnapshot, Unsubscribe } from "./firebase-backend";
@@ -33,6 +34,24 @@ export class FakeRtdb {
   remove(path: string): void {
     this.data.delete(path);
     this.fire(path);
+  }
+
+  /** The raw string stored at `path`, if any. */
+  get(path: string): string | undefined {
+    return this.data.get(path);
+  }
+
+  /**
+   * Cancel every live listener on `path` (or every listener, if omitted), as RTDB does when read
+   * access is revoked: the listener's cancel callback fires and it never fires again.
+   */
+  cancelListeners(path?: string, error = new Error("permission_denied")): void {
+    for (const listener of [...this.listeners]) {
+      if (path === undefined || listener.path === path) {
+        this.listeners.delete(listener);
+        listener.onError(error);
+      }
+    }
   }
 
   /** Immediate children of a session node: `{ childKey: value }`, or null if none. */
@@ -187,9 +206,9 @@ export class FakeBackend implements FirebaseBackend {
   }
 
   /**
-   * Simulate a transient network blip: the server fires our armed onDisconnect (removing the slot,
-   * one-shot), the client goes offline, then reconnects. The adapter's reconnect handler should
-   * re-arm and re-push in response.
+   * Simulate a transient network blip: the server fires our armed onDisconnect (removing our
+   * presence node, one-shot), the client goes offline, then reconnects. The adapter's reconnect
+   * handler should re-arm and re-write presence in response.
    */
   simulateBlip(): void {
     for (const path of this.armed) this.rtdb.remove(path);

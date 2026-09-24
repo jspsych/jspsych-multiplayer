@@ -10,7 +10,7 @@
  * behave differently between the two adapters.
  */
 
-import { GroupSessionData } from "./multiplayer-adapter";
+import type { GroupSessionData } from "jspsych";
 
 /** The minimal slice of the Web Storage API this module needs (a subset of `Storage`). */
 export interface SlotStorage {
@@ -101,7 +101,7 @@ export function writeSlot(
   storage.setItem(slotKey(keyPrefix, sessionId, participantId), JSON.stringify(data));
 }
 
-/** Remove one participant's slot (used on disconnect so a closed tab doesn't linger as a ghost). */
+/** Remove one participant's slot. */
 export function removeSlot(
   storage: SlotStorage,
   keyPrefix: string,
@@ -109,6 +109,60 @@ export function removeSlot(
   participantId: string,
 ): void {
   storage.removeItem(slotKey(keyPrefix, sessionId, participantId));
+}
+
+/**
+ * Prefix of every presence key in one session: `mp-presence:<sessionId>:`. It deliberately sits
+ * outside the slot prefix (`mp:<sessionId>:`), because readAllSlots treats every key under that
+ * prefix as a participant's slot.
+ */
+export function presencePrefix(keyPrefix: string, sessionId: string): string {
+  return `${keyPrefix}-presence:${sessionId}:`;
+}
+
+/** Record that a participant's tab is alive right now. */
+export function writePresence(
+  storage: SlotStorage,
+  keyPrefix: string,
+  sessionId: string,
+  participantId: string,
+  now: number,
+): void {
+  storage.setItem(presencePrefix(keyPrefix, sessionId) + participantId, String(now));
+}
+
+/** Remove a participant's presence key, as their tab closes. */
+export function removePresence(
+  storage: SlotStorage,
+  keyPrefix: string,
+  sessionId: string,
+  participantId: string,
+): void {
+  storage.removeItem(presencePrefix(keyPrefix, sessionId) + participantId);
+}
+
+/**
+ * The participants whose presence key was refreshed within `timeoutMs` of `now`, sorted so callers
+ * can compare two results as strings.
+ */
+export function readPresent(
+  storage: SlotStorage,
+  keyPrefix: string,
+  sessionId: string,
+  now: number,
+  timeoutMs: number,
+): string[] {
+  const prefix = presencePrefix(keyPrefix, sessionId);
+  const present: string[] = [];
+  for (let i = 0; i < storage.length; i++) {
+    const key = storage.key(i);
+    if (key === null || !key.startsWith(prefix)) continue;
+    const beat = Number(storage.getItem(key));
+    if (Number.isFinite(beat) && now - beat <= timeoutMs) {
+      present.push(key.slice(prefix.length));
+    }
+  }
+  return present.sort();
 }
 
 /**
