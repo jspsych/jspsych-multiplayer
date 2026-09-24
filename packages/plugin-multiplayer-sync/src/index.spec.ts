@@ -8,8 +8,9 @@ import MultiplayerSyncPlugin from ".";
  * A jsPsych stand-in whose `multiplayer` is a real session on an in-memory hub, so the plugin runs
  * against the actual core (frozen snapshots, presence, errors) while `finishTrial` is captured.
  */
-async function setup(connect?: ConnectOptions) {
+async function setup(connect?: ConnectOptions, existing: GroupSessionData = {}) {
   const hub = new MemoryHub();
+  hub.data = existing;
   const me = await hub.join("p1", { connect });
   const finished: Array<Record<string, any>> = [];
   const jsPsych = {
@@ -163,6 +164,20 @@ describe("multiplayer-sync plugin", () => {
       connection_lost: false,
     });
     expect(finished[0].wait_error).toMatch(/left/);
+  });
+
+  it("doesn't depend on leftover slots from members who left before this one joined", async () => {
+    // Leftover slots start out `away` and become `left` after the dropout timeout
+    const { plugin, finished, multiplayer } = await setup(
+      { dropoutTimeout: 10 },
+      { ghost: { ready: true } },
+    );
+    expect(multiplayer.presence().ghost).toBe("away");
+
+    await plugin.trial(display(), { ...defaults, wait_for: () => false, timeout: 60 } as never);
+
+    expect(multiplayer.presence().ghost).toBe("left");
+    expect(finished[0]).toMatchObject({ partner_left: false, timed_out: true });
   });
 
   it("ignores departures when participants is []", async () => {

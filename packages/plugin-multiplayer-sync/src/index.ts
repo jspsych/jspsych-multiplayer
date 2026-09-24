@@ -55,7 +55,7 @@ const info = <const>{
     /**
      * Participants the barrier depends on. If one of them leaves the session before `wait_for` is
      * satisfied, the trial ends with `partner_left: true`. Null (the default) means every other
-     * participant who hasn't already left when the wait starts. Pass `[]` to ignore departures.
+     * participant who is connected when the wait starts. Pass `[]` to ignore departures.
      */
     participants: {
       // An array of participant IDs, or null; COMPLEX because array parameters can't default to null

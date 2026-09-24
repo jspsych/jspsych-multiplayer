@@ -79,7 +79,7 @@ const info = <const>{
     /**
      * Participants the assignment depends on. If one of them leaves the session before the group is
      * ready, the trial ends with `role: null, partner_left: true`. Null (the default) means every
-     * other participant who hasn't already left when this participant arrives. Pass `[]` to ignore
+     * other participant who is connected when this participant arrives. Pass `[]` to ignore
      * departures.
      */
     participants: { type: ParameterType.COMPLEX, default: null },

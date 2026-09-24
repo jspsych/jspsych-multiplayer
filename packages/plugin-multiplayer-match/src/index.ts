@@ -77,7 +77,7 @@ const info = <const>{
     /**
      * Participants the match depends on. If one of them leaves the session before the group is
      * ready, the trial ends unmatched with `partner_left: true`. Null (the default) means every other
-     * participant who hasn't already left when this participant arrives. Pass `[]` to ignore
+     * participant who is connected when this participant arrives. Pass `[]` to ignore
      * departures.
      */
     participants: { type: ParameterType.COMPLEX, default: null },

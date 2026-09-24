@@ -35,11 +35,16 @@ export function isMultiplayerError(
   return e instanceof Error && e.name === name;
 }
 
-/** The other participants who haven't left the session, as of now. */
+/**
+ * The other participants who are connected right now. Participants who are only
+ * `away` are left out: leftover slots from members who left earlier start out
+ * `away` and become `left` a few seconds later, which would otherwise end a
+ * gate that starts right after joining.
+ */
 export function remainingParticipants(multiplayer: Multiplayer): string[] {
   const presence = multiplayer.presence();
   return Object.keys(presence).filter(
-    (id) => id !== multiplayer.participantId && presence[id] !== "left",
+    (id) => id !== multiplayer.participantId && presence[id] === "connected",
   );
 }
 

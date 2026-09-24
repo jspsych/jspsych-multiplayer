@@ -73,7 +73,7 @@ const info = <const>{
     /**
      * Participants the board depends on. If one of them leaves the session before `group_size`
      * reporters arrive, the board is shown from whoever reported, flagged `partner_left: true`. Null
-     * (the default) means every other participant who hasn't already left when this participant
+     * (the default) means every other participant who is connected when this participant
      * reports. Pass `[]` to ignore departures.
      */
     participants: { type: ParameterType.COMPLEX, default: null },

@@ -72,7 +72,7 @@ const info = <const>{
     /**
      * Participants the barrier depends on. If one of them leaves the session before the group has
      * chosen, the trial proceeds with whoever chose so far, flagged `partner_left: true`. Null (the
-     * default) means every other participant who hasn't already left when this participant
+     * default) means every other participant who is connected when this participant
      * chooses. Pass `[]` to ignore departures.
      */
     participants: { type: ParameterType.COMPLEX, default: null },
