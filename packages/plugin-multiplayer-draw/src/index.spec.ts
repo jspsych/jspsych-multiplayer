@@ -6,35 +6,51 @@ import { GroupSessionData, MultiplayerApiLike, Unsubscribe } from "./multiplayer
 import MultiplayerDrawPlugin from ".";
 
 // ---------------------------------------------------------------------------------------------------
-// Mock multiplayer API — same shape/semantics as plugin-multiplayer-chat's mock (push REPLACES the
-// slot; subscribe replays on registration). See that package's index.spec.ts for the rationale.
+// Mock multiplayer API — same shape/semantics as plugin-multiplayer-chat's mock, following the
+// jsPsych#3694 contract:
+//   - `push` REPLACES this participant's slot; `update` shallow-merges onto this client's LAST
+//     SUCCESSFUL WRITE (falling back to the current slot before the first write) and pushes that.
+//   - every read (`get`, `getAll`, each subscriber argument) hands back a JSON deep copy, and a
+//     write STORES a copy. Storing the pushed object by reference would make
+//     `getAll().me.draw_strokes` literally the plugin's live `ownStrokes` array, so a test could
+//     "see" points that were never actually flushed — exactly the regression these tests exist for.
+//   - `subscribe` replays the current snapshot on registration, as core does.
+//   - `pushAs(id, data)` simulates a peer's push (also replace), firing subscribers.
 // ---------------------------------------------------------------------------------------------------
+const jsonCopy = <T>(value: T): T => JSON.parse(JSON.stringify(value));
+
 class MockApi implements MultiplayerApiLike {
   session: GroupSessionData = {};
-  failNextPush = false;
+  /** When true, the next write rejects without touching the session. */
+  failNextWrite = false;
   private subs = new Set<(g: GroupSessionData) => void>();
+  /** This client's last successful write — the merge base `update()` uses, per the core contract. */
+  private lastWrite: Record<string, unknown> | null = null;
 
   constructor(public participantId: string) {}
 
   get(id: string) {
-    return this.session[id];
+    const slot = this.session[id];
+    return slot === undefined ? undefined : jsonCopy(slot);
   }
 
   getAll() {
-    return this.session;
+    return jsonCopy(this.session);
   }
 
   async push(data: Record<string, unknown>) {
-    if (this.failNextPush) {
-      this.failNextPush = false;
+    if (this.failNextWrite) {
+      this.failNextWrite = false;
       throw new Error("network down");
     }
-    this.session[this.participantId] = data;
+    this.lastWrite = jsonCopy(data);
+    this.session[this.participantId] = jsonCopy(data);
     this.fire();
   }
 
-  update(data: Record<string, unknown>) {
-    return this.push({ ...(this.session[this.participantId] ?? {}), ...data });
+  async update(data: Record<string, unknown>) {
+    const base = this.lastWrite ?? this.session[this.participantId] ?? {};
+    await this.push({ ...base, ...data });
   }
 
   subscribe(cb: (g: GroupSessionData) => void): Unsubscribe {
@@ -44,7 +60,7 @@ class MockApi implements MultiplayerApiLike {
   }
 
   pushAs(id: string, data: Record<string, unknown>) {
-    this.session[id] = data;
+    this.session[id] = jsonCopy(data);
     this.fire();
   }
 
@@ -53,21 +69,34 @@ class MockApi implements MultiplayerApiLike {
   }
 
   private fire() {
-    for (const cb of [...this.subs]) cb(this.getAll());
+    for (const cb of [...this.subs]) cb(this.getAll()); // a fresh copy per subscriber, like core
   }
 }
 
+/**
+ * jsPsych double. `pluginAPI.setTimeout` is a real `setTimeout` that also records its handle, and
+ * `clearAllTimeouts` drops every recorded one — the same registry jsPsych keeps, so
+ * `abortTrialTimers()` reproduces what `abortExperiment()` does to a trial's timers.
+ */
 function makeJsPsych(api: MockApi) {
   const finished: Array<Record<string, any>> = [];
+  const timeouts: Array<ReturnType<typeof setTimeout>> = [];
   const jsPsych = {
     multiplayer: api,
     finishTrial: (data: Record<string, any>) => finished.push(data),
-    // Passthrough double for the pluginAPI timer registry the plugin now schedules through.
     pluginAPI: {
-      setTimeout: (cb: () => void, ms: number) => setTimeout(cb, ms),
+      setTimeout: (cb: () => void, ms: number) => {
+        const handle = setTimeout(cb, ms);
+        timeouts.push(handle);
+        return handle as unknown as number;
+      },
+      clearAllTimeouts: () => {
+        for (const handle of timeouts) clearTimeout(handle);
+        timeouts.length = 0;
+      },
     },
   };
-  return { jsPsych, finished };
+  return { jsPsych, finished, abortTrialTimers: () => jsPsych.pluginAPI.clearAllTimeouts() };
 }
 
 const display = () => {
@@ -697,6 +726,39 @@ describe("multiplayer-draw plugin", () => {
     }
   });
 
+  it("the stroke push ticking is registered through pluginAPI, so an abort mid-stroke stops it", async () => {
+    // Regression guard: a raw setInterval survives `abortExperiment()` (which clears pluginAPI
+    // timers and cancels multiplayer subscriptions). Aborting mid-stroke never runs `end()`, and
+    // the canvas is gone so no pointerup ever arrives to clear the timer — the interval would keep
+    // calling api.update() forever, against a finished experiment. Every tick must sit in jsPsych's
+    // registry, including the ones scheduled by earlier ticks.
+    jest.useFakeTimers();
+    try {
+      const api = new MockApi("me");
+      const { jsPsych, finished, abortTrialTimers } = makeJsPsych(api);
+      const el = display();
+
+      new MultiplayerDrawPlugin(jsPsych as never).trial(el, { ...base } as never);
+
+      const canvas = canvasOf(el);
+      canvas.dispatchEvent(pointerEvent("pointerdown", 10, 10));
+      canvas.dispatchEvent(pointerEvent("pointermove", 50, 50));
+      // No pointerup — the stroke is still active, so the push tick is running.
+      jest.advanceTimersByTime(60);
+      expect((api.getAll().me.draw_strokes as any[]).length).toBe(1); // a tick did push
+
+      const updateSpy = jest.spyOn(api, "update");
+      abortTrialTimers(); // what abortExperiment() does to this trial's timers
+
+      expect(jest.getTimerCount()).toBe(0); // nothing of ours is still scheduled
+      jest.advanceTimersByTime(10_000);
+      expect(updateSpy).not.toHaveBeenCalled(); // no pushes against a finished experiment
+      expect(finished).toHaveLength(0);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it("a throwing end_when does not propagate into the adapter's notify loop or kill the trial", async () => {
     const api = new MockApi("me");
     const { jsPsych, finished } = makeJsPsych(api);
@@ -732,7 +794,7 @@ describe("multiplayer-draw plugin", () => {
 
   it("shows a connection-trouble note on a failed push, and the next tick's push self-heals", async () => {
     const api = new MockApi("me");
-    api.failNextPush = true;
+    api.failNextWrite = true;
     const { jsPsych } = makeJsPsych(api);
     const el = display();
 

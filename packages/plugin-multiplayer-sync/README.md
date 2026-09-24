@@ -4,7 +4,7 @@ A synchronization-barrier plugin for multiplayer jsPsych experiments, built on t
 
 This replaces the awkward idioms previously needed for synchronization points — a `call-function` trial with `async`/`done`, or an `html-keyboard-response` trial with `choices: "NO_KEYS"`, an `on_start` that awaits `jsPsych.multiplayer.wait()`, and a manual `jsPsych.finishTrial()`.
 
-> **Status:** built against the jsPsych multiplayer API from [jsPsych#3694](https://github.com/jspsych/jsPsych/pull/3694), which is not yet released. The plugin codes against a local interface mirroring that API (`src/multiplayer-api.ts`) and reaches the real object with one cast — the single seam to re-verify once #3694 lands. Tests run against an in-memory mock, so no live group session is needed.
+> **Status:** built against the jsPsych multiplayer API from [jsPsych#3694](https://github.com/jspsych/jsPsych/pull/3694), which is not yet released. The plugin codes against a local interface mirroring that API (`src/multiplayer-api.ts`) and reaches `jsPsych.multiplayer` with one cast, since the published types don't carry it yet. That module is the only supported location: earlier preview builds that exposed these methods on `jsPsych.pluginAPI` predate the current contract and are no longer resolved. Tests run against an in-memory mock, so no live group session is needed.
 
 ## Prerequisites
 
@@ -18,23 +18,25 @@ await jsPsych.run(timeline);
 
 ## Parameters
 
-| Parameter      | Type                    | Default                               | Description                                                                                                                                                                       |
-| -------------- | ----------------------- | ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Parameter      | Type                    | Default                               | Description                                                                                                                                                                                  |
+| -------------- | ----------------------- | ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `wait_for`     | function                | _undefined_ (required)                | Predicate `(group) => boolean` evaluated against the full group session on every update. The trial ends when it returns true. Same condition you would pass to `jsPsych.multiplayer.wait()`. |
-| `push_data`    | object \| function      | `null`                                | Data pushed into the group session when the trial starts, before waiting. `null` waits without pushing. May be a function returning the object, e.g. `() => ({ offer })`.          |
-| `message`      | HTML string \| function | `"<p>Waiting for other players…</p>"` | Shown while waiting.                                                                                                                                                              |
-| `timeout`      | integer                 | `null`                                | Max time to wait, in ms. On elapse the trial ends with `timed_out: true` and `on_timeout` is called. `null` waits indefinitely.                                                    |
-| `on_timeout`   | function                | `null`                                | Called if `timeout` elapses before `wait_for` is satisfied.                                                                                                                       |
-| `minimum_wait` | integer                 | `0`                                   | Minimum time, in ms, to keep the message on screen so it doesn't flash by — applies whether the trial ends because the condition is met or because the timeout elapses.            |
+| `push_data`    | object \| function      | `null`                                | Data pushed into the group session when the trial starts, before waiting. `null` waits without pushing. May be a function returning the object, e.g. `() => ({ offer })`.                    |
+| `message`      | HTML string \| function | `"<p>Waiting for other players…</p>"` | Shown while waiting.                                                                                                                                                                         |
+| `timeout`      | integer                 | `null`                                | Max time to wait, in ms. On elapse the trial ends with `timed_out: true` and `on_timeout` is called. `null` — or any non-positive value — waits indefinitely.                                |
+| `on_timeout`   | function                | `null`                                | Called if `timeout` elapses before `wait_for` is satisfied.                                                                                                                                  |
+| `minimum_wait` | integer                 | `0`                                   | Minimum time, in ms, to keep the message on screen so it doesn't flash by — applies whether the trial ends because the condition is met or because the timeout elapses.                      |
 
 ## Data Generated
 
-| Name        | Type    | Description                                                                                                                                     |
-| ----------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `group`     | object  | The full group session snapshot at the moment the condition was met (or the timeout fired). Read peers / assign roles from here in `on_finish`. |
-| `wait_time` | integer | Time spent waiting, in ms, from trial start until the trial ended.                                                                             |
-| `timed_out` | boolean | True if the trial ended because `timeout` elapsed rather than because `wait_for` was met.                                                       |
+| Name         | Type           | Description                                                                                                                                                                                                            |
+| ------------ | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `group`      | object         | The full group session snapshot at the moment the condition was met (or the timeout fired). Read peers / assign roles from here in `on_finish`.                                                                        |
+| `wait_time`  | integer        | Time spent waiting, in ms, from trial start until the trial ended.                                                                                                                                                     |
+| `timed_out`  | boolean        | True if the trial ended because `timeout` elapsed rather than because `wait_for` was met.                                                                                                                              |
 | `wait_error` | string \| null | The timeout error message when `timeout` elapsed; `null` when the condition was satisfied. A non-timeout `wait()` failure (a throwing `wait_for`, an adapter error) is not recorded here — it fails the trial instead. |
+
+If the experiment ends or aborts while the barrier is holding (`jsPsych.abortExperiment()`, or the end of `jsPsych.run()`), jsPsych cancels the pending wait. That is neither a timeout nor a failure: the trial stops quietly, `on_timeout` does not fire, and no data is recorded.
 
 ## Writing robust `wait_for` predicates
 

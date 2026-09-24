@@ -4,6 +4,7 @@ import { version } from "../package.json";
 import {
   GroupSessionData,
   MultiplayerApiLike,
+  isMultiplayerCancelledError,
   isMultiplayerTimeoutError,
   resolveMultiplayerApi,
 } from "./multiplayer-api";
@@ -102,7 +103,8 @@ type Info = typeof info;
  *
  * Requires a connected multiplayer adapter — call `await jsPsych.multiplayer.connect(adapter)` before
  * `jsPsych.run()`. The resolved group session is stored in the trial's `group` data so peer reads
- * and role assignment can happen in a normal `on_finish`.
+ * and role assignment can happen in a normal `on_finish`. If the experiment ends or aborts while the
+ * barrier is holding, the wait is cancelled and the trial stops quietly, recording nothing.
  *
  * @author Hannah Tsukamoto
  * @see {@link https://github.com/jspsych/jspsych-multiplayer/tree/main/packages/plugin-multiplayer-sync multiplayer-sync plugin documentation}
@@ -167,7 +169,9 @@ class MultiplayerSyncPlugin implements JsPsychPlugin<Info> {
       await api.push(trial.push_data as Record<string, unknown>);
     }
 
-    // Only a positive timeout bounds the wait; null/0/negative means wait indefinitely.
+    // Only a positive timeout bounds the wait; null/0/negative means wait indefinitely. Core now
+    // reads null and negative values as "no timeout" itself, but it still treats 0 as "time out
+    // immediately", so this plugin's documented "non-positive waits indefinitely" needs 0 mapped.
     const timeout =
       typeof trial.timeout === "number" && trial.timeout > 0 ? trial.timeout : undefined;
 
@@ -178,6 +182,10 @@ class MultiplayerSyncPlugin implements JsPsychPlugin<Info> {
 
       finish(group, false, null);
     } catch (e) {
+      // A cancelled wait (abortExperiment, disconnect, or the end of jsPsych.run) means the trial is
+      // being torn down: jsPsych has already moved on, so stop quietly — no on_timeout, no
+      // finishTrial into a trial that no longer exists, and nothing recorded as a failure.
+      if (isMultiplayerCancelledError(e)) return;
       // #3694 exports a typed MultiplayerTimeoutError so a genuine timeout can be told apart from a
       // throwing `wait_for` predicate or another wait() failure. The name-based match lives in
       // isMultiplayerTimeoutError (multiplayer-api.ts) — the class itself isn't importable here.

@@ -51,6 +51,27 @@ describe("FirebaseAdapter — connect", () => {
     backend.rtdb.set(slot("peer"), JSON.stringify({ hello: "world" }));
     expect(adapter.getAll()).toEqual({});
   });
+
+  it("releases the app and listener when arming onDisconnect fails, and stays retryable", async () => {
+    const backend = new FakeBackend();
+    jest
+      .spyOn(backend, "onDisconnectRemove")
+      .mockRejectedValueOnce(new Error("onDisconnect denied"));
+    const adapter = makeAdapter(backend);
+
+    await expect(adapter.connect()).rejects.toThrow(/onDisconnect denied/);
+
+    // Nothing may survive a failed connect: no listener, and an owned app is released
+    expect(backend.rtdb.listenerCount()).toBe(0);
+    expect(backend.goOfflineCalls).toBe(1);
+    // The adapter must not look connected, or the retry below would be a silent no-op
+    await expect(adapter.push({ x: 1 })).rejects.toThrow(/before connect\(\)/);
+
+    await adapter.connect();
+    expect(backend.rtdb.listenerCount()).toBe(1);
+    await adapter.push({ x: 1 });
+    expect(adapter.get("me")).toEqual({ x: 1 });
+  });
 });
 
 describe("FirebaseAdapter — push / read", () => {

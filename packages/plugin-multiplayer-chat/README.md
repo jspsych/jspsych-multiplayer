@@ -4,7 +4,7 @@ A real-time chat-room plugin for multiplayer jsPsych experiments, built on the m
 
 It is the first plugin built on the multiplayer API's real-time **`subscribe`** primitive, as opposed to the barrier-based **push → wait** pattern of [`plugin-multiplayer-sync`](../plugin-multiplayer-sync). Use sync when you need to block until a condition holds; use chat when participants need to exchange messages continuously.
 
-> **Status:** built against the jsPsych multiplayer API from [jsPsych#3694](https://github.com/jspsych/jsPsych/pull/3694), which is not yet released. The plugin codes against a local interface mirroring that API (`src/multiplayer-api.ts`) and reaches the real object with one cast — the single seam to re-verify once #3694 lands. Tests run against an in-memory mock, so no live group session is needed to develop it.
+> **Status:** built against the jsPsych multiplayer API from [jsPsych#3694](https://github.com/jspsych/jsPsych/pull/3694), which is not yet released. The plugin codes against a local interface mirroring that API (`src/multiplayer-api.ts`) and reaches `jsPsych.multiplayer` with one cast. Preview builds that exposed these methods on `jsPsych.pluginAPI` predate the current contract and are not supported. Tests run against an in-memory mock, so no live group session is needed to develop it.
 
 ## Prerequisites
 
@@ -46,7 +46,7 @@ await jsPsych.run(timeline);
 
 ## How messages are stored
 
-The multiplayer API's `push` **replaces** a participant's slot (it does not merge). A participant therefore owns one slot, so chat history is modeled as an append-only array each participant keeps under `data_key`; the rendered transcript is the merge of every participant's array, ordered by `(timestamp, senderId, seq)` and de-duplicated by message id. When you send, the plugin reads your own slot first and pushes it back with only the chat key changed, so any other data you've pushed (e.g. a role assigned by `plugin-multiplayer-role`) is preserved.
+The multiplayer API's `push` **replaces** a participant's slot (it does not merge). A participant therefore owns one slot, so chat history is modeled as an append-only array each participant keeps under `data_key`; the rendered transcript is the merge of every participant's array, ordered by `(timestamp, senderId, seq)` and de-duplicated by message id. Your own array is kept **locally** for the life of the trial — seeded once from your slot at trial start, then appended to — and written back with `update()`, which merges only the chat key into your slot. So any other data you've pushed (e.g. a role assigned by `plugin-multiplayer-role`) is preserved, and two sends in quick succession can't lose the first: nothing is re-derived from a read of the session, which may not yet reflect a write the backend has already confirmed.
 
 Ordering uses each sender's own clock, which is not synchronized across clients, so strict global order across senders is best-effort. The sort is timestamp-first (`seq` only breaks ties), so even a single sender's messages keep their order only as long as that sender's local clock is monotonic during the trial — a clock that jumps backwards (e.g. an NTP adjustment mid-chat) can reorder them.
 

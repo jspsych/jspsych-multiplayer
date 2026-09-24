@@ -4,6 +4,7 @@ import { version } from "../package.json";
 import {
   GroupSessionData,
   MultiplayerApiLike,
+  isMultiplayerCancelledError,
   isMultiplayerTimeoutError,
   resolveMultiplayerApi,
 } from "./multiplayer-api";
@@ -47,9 +48,10 @@ const info = <const>{
     },
     /**
      * Extra fields merged into the record this participant pushes alongside `ready: true` (for
-     * example a display name). May be a function returning the object. Because pushes are
-     * overwrite-per-participant, this record REPLACES anything this participant pushed earlier — so
-     * anything that must survive the check-in belongs here. Leave null to push only `{ ready: true }`.
+     * example a display name). May be a function returning the object. Because `push` replaces this
+     * participant's slot rather than merging into it, this record REPLACES anything this participant
+     * pushed earlier — so anything that must survive the check-in belongs here. Leave null to push
+     * only `{ ready: true }`.
      */
     push_data: {
       type: ParameterType.OBJECT,
@@ -105,7 +107,8 @@ const info = <const>{
     /**
      * The `MultiplayerTimeoutError` message when `timeout` elapsed; null when everyone was ready.
      * A non-timeout `wait()` rejection (an adapter/backend failure) is NOT captured here — it
-     * propagates and fails the trial instead of being recorded as a timeout.
+     * propagates and fails the trial instead of being recorded as a timeout. A wait CANCELLED by
+     * the experiment ending or aborting produces no record at all: the trial stops quietly.
      */
     wait_error: {
       type: ParameterType.STRING,
@@ -219,16 +222,21 @@ class MultiplayerReadyPlugin implements JsPsychPlugin<Info> {
       }
     };
 
-    // A single record REPLACES this participant's group-session entry (overwrite-per-participant),
-    // so push the ready flag together with any carry-forward `push_data` in one shot. Spreading a
-    // null push_data is a no-op, leaving just `{ ready: true }`.
+    // `push` REPLACES this participant's slot rather than merging into it, so the ready flag and any
+    // carry-forward `push_data` go in as ONE record. That replacement is the point here (see the
+    // `push_data` parameter doc and the README): a check-in should define this participant's entry,
+    // not accrete onto whatever an earlier trial left there — which is why this stays `push` and not
+    // `update`. Spreading a null push_data is a no-op, leaving just `{ ready: true }`.
     const readyRecord = { ...(trial.push_data as Record<string, unknown> | null), ready: true };
 
     // Push BEFORE the wait try/catch: a push failure is an infrastructure error, not a timeout, and
     // must surface loudly (rejecting the trial) rather than being relabeled as `timed_out: true`.
     await api.push(readyRecord);
 
-    // Only a positive timeout bounds the wait; null/0/negative means wait indefinitely.
+    // Core already reads null, negative and non-finite timeouts as "no timeout", but it still times
+    // out IMMEDIATELY at 0 — and this plugin documents any non-positive value as "wait indefinitely"
+    // (see the `timeout` parameter doc above and the README). So keep normalizing here: only a
+    // positive timeout is handed to wait(), and everything else becomes an unbounded wait.
     const timeout =
       typeof trial.timeout === "number" && trial.timeout > 0 ? trial.timeout : undefined;
 
@@ -240,6 +248,11 @@ class MultiplayerReadyPlugin implements JsPsychPlugin<Info> {
       await holdMinimumWait();
       finish(group, false, null);
     } catch (e) {
+      // A cancelled wait is neither a timeout nor a failure: jsPsych cancels pending waits when the
+      // experiment ends or is aborted (disconnect(), abortExperiment(), the end of jsPsych.run()),
+      // so the trial is already being torn down. Return quietly — no on_timeout, no finishTrial, no
+      // error — instead of writing a bogus `timed_out: true` record or rejecting into a dead trial.
+      if (isMultiplayerCancelledError(e)) return;
       // #3694 exports a typed MultiplayerTimeoutError so a genuine timeout can be told apart from
       // another wait() failure (e.g. an adapter/backend error). The name-based match lives in
       // isMultiplayerTimeoutError (multiplayer-api.ts) — the class itself isn't importable here.

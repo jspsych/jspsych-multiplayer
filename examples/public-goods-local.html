@@ -6,7 +6,7 @@
          Until it merges, load the PR's preview build from jsDelivr instead of the published `jspsych`.
          This URL is pinned to #3694 commit eddf2f6 (preview SHA 151ab52) — see examples/README.md
          "Running it" for how to find/re-pin the current preview link. -->
-    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@151ab520542a8e48bcc4d5b21c74cdffae8b48c6/packages/jspsych/dist/index.browser.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@9eec555f5e55f09b64b40cd8278d0518396f195f/packages/jspsych/dist/index.browser.min.js"></script>
     <script src="https://unpkg.com/@jspsych/plugin-html-button-response"></script>
     <script src="https://unpkg.com/@jspsych/plugin-html-keyboard-response"></script>
     <!-- The multiplayer packages. These resolve once the sibling packages are built in this repo;
@@ -17,7 +17,7 @@
     <script src="../packages/plugin-multiplayer-countdown/dist/index.browser.min.js"></script>
     <link
       rel="stylesheet"
-      href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@151ab520542a8e48bcc4d5b21c74cdffae8b48c6/packages/jspsych/css/jspsych.css"
+      href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@9eec555f5e55f09b64b40cd8278d0518396f195f/packages/jspsych/css/jspsych.css"
     />
   </head>
 
@@ -103,9 +103,9 @@
       trial_duration: CONTRIB_MS,
       response_ends_trial: true,
       on_load: () => {
-        // Register this client's start (read own slot → spread → push, keep-if-present) exactly as the
-        // countdown plugin does, so a refresh resumes the same deadline and we never clobber the
-        // `status` the lobby pushed. push is fire-and-forget; the timer falls back to our own start
+        // Register this client's start (keep-if-present) exactly as the countdown plugin does, so a
+        // refresh resumes the same deadline. `update` merges just this key, leaving the `status` the
+        // lobby wrote intact. The write is fire-and-forget; the timer falls back to our own start
         // until (possibly lower) peer timestamps arrive.
         const me = jsPsych.multiplayer.participantId;
         const mine = jsPsych.multiplayer.get(me) ?? {};

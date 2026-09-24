@@ -64,10 +64,15 @@ The API lives on its own module, alongside `jsPsych.data`:
 const jsPsych = initJsPsych();
 
 // Register the backend once, before the timeline runs.
-await jsPsych.multiplayer.connect(new jsPsychAdapterMultiplayerLocal());
+async function runExperiment() {
+  await jsPsych.multiplayer.connect(new jsPsychAdapterMultiplayerLocal());
+  await jsPsych.run(timeline);
+}
 
-jsPsych.run(timeline);
+runExperiment();
 ```
+
+(Top-level `await` needs `<script type="module">`; the `async` wrapper works in any script.)
 
 Once connected, `jsPsych.multiplayer` offers:
 
@@ -79,9 +84,9 @@ Once connected, `jsPsych.multiplayer` offers:
 | `get(participantId)` | Read one participant's slot. |
 | `getAll()` | Snapshot of the whole group session. |
 | `subscribe(cb)` | Live updates; returns an unsubscribe function. Replays current state on registration. |
-| `cancelAllSubscriptions()` | Release every active subscription. Not called automatically — see the reference. |
+| `cancelAllSubscriptions()` | Release every active subscription and cancel pending `wait()`s. jsPsych calls it at the end of the experiment and on `abortExperiment()`; a trial still releases its own handles. |
 | `wait(condition, timeout?)` | Promise that resolves once a predicate over the group session holds. |
-| `participantId` | The calling client's stable ID within the session. |
+| `participantId` | The calling client's stable ID within the session. `null` until `connect()` resolves. |
 | `disconnect()` | Leave the session. |
 
 Most experiments never call these directly — the plugins do. `push()` followed by `wait()`

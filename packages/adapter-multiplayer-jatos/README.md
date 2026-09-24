@@ -2,7 +2,7 @@
 
 A multiplayer **adapter** that backs the jsPsych multiplayer API with [JATOS](https://www.jatos.org/) group studies. It implements the `MultiplayerAdapter` contract — `connect` / `push` / `getAll` / `get` / `subscribe` / `disconnect` — over JATOS's group session and WebSocket channel, so multiplayer plugins (e.g. `@jspsych-multiplayer/plugin-multiplayer-sync`, `@jspsych-multiplayer/plugin-multiplayer-role`) run unchanged on JATOS.
 
-> **Status:** built against the multiplayer adapter contract from [jsPsych#3694](https://github.com/jspsych/jsPsych/pull/3694), which is not yet released. The adapter implements a local interface mirroring `MultiplayerAdapter` (`src/multiplayer-adapter.ts`) copied verbatim from that PR — the single seam to re-verify once #3694 lands. Tests run against an in-memory mock of the `jatos` global, so no live JATOS server is needed.
+> **Status:** built against the multiplayer adapter contract from [jsPsych#3694](https://github.com/jspsych/jsPsych/pull/3694), which is not yet released. The adapter implements a local interface mirroring `MultiplayerAdapter` (`src/multiplayer-adapter.ts`), kept in sync with that PR — the single seam to re-verify once #3694 lands. Tests run against an in-memory mock of the `jatos` global, so no live JATOS server is needed.
 
 ## Prerequisites
 

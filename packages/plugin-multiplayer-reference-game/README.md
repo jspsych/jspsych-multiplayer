@@ -6,7 +6,7 @@ Two players are paired as a fixed **director** and **matcher**. Both see the sam
 
 **One plugin, both classic conditions.** The published "sequential" (one target, a single click) and "unconstrained" (all N objects are ordered targets, reproduce the whole board) conditions are the _same task_ with two parameters turned differently — `stimuli` length (objects on screen) and `targets` length (number of targets). `targets.length === 1` collapses the assign-to-slots mechanic to one click; `targets.length === stimuli.length` is the full-board match; anything between also works.
 
-> **Status:** built against the jsPsych multiplayer API from [jsPsych#3694](https://github.com/jspsych/jsPsych/pull/3694), which is not yet released. The plugin codes against a local interface mirroring that API (`src/multiplayer-api.ts`) and reaches the real object with one cast — the single seam to re-verify once #3694 lands. Tests run against an in-memory mock, so no live group session is needed to develop it.
+> **Status:** built against the jsPsych multiplayer API from [jsPsych#3694](https://github.com/jspsych/jsPsych/pull/3694), which is not yet released. The plugin codes against a local interface mirroring that API (`src/multiplayer-api.ts`) and reaches `jsPsych.multiplayer` with one cast. Preview builds that exposed these methods on `jsPsych.pluginAPI` predate the current contract and are not supported. Tests run against an in-memory mock, so no live group session is needed to develop it.
 
 ## Prerequisites
 
@@ -123,7 +123,7 @@ Only `stimuli`, `targets`, and `role` are required; everything else has a sensib
 
 ## How it works (correctness notes)
 
-The multiplayer API's `push` **replaces** a participant's slot (it does not merge — see `plugin-multiplayer-chat`'s README for the same crux). This plugin therefore reads its own slot and pushes it back whole, preserving `joinedAt` and earlier data, and **namespaces each round's data under `data_key[round]`** so successive round-trials in one timeline never clobber each other.
+The multiplayer API's `push` **replaces** a participant's slot (it does not merge — see `plugin-multiplayer-chat`'s README for the same crux). This plugin therefore writes with **`update`**, which merges just the one key it owns into the slot, so `joinedAt` and anything another trial wrote survive untouched — and it **namespaces each round's data under `data_key[round]`** so successive round-trials in one timeline never clobber each other. Your own chat messages are kept in a local array for the life of the trial (seeded once from your slot at trial start) rather than re-read per send, so two sends in quick succession can't lose the first to a session read that doesn't yet reflect a confirmed write.
 
 Like the chat room, the trial stays open and re-renders on every group-session update. The **matcher's submitted assignment is the shared trigger**: the director's subscription watches for it, and both clients then score (identically, from the same data), reveal the answer, and end within `feedback_duration` of the submission — no extra barrier needed. The matcher's pre-submit action log stays **local** until submit; only the final assignment is ever pushed.
 

@@ -3,6 +3,7 @@ import { JsPsych, JsPsychPlugin, ParameterType, TrialType } from "jspsych";
 import { version } from "../package.json";
 import {
   MultiplayerApiLike,
+  isMultiplayerCancelledError,
   isMultiplayerTimeoutError,
   resolveMultiplayerApi,
 } from "./multiplayer-api";
@@ -57,8 +58,9 @@ const info = <const>{
     /** Include the full group snapshot in the trial data. Off by default to avoid bloat. */
     save_group: { type: ParameterType.BOOL, default: false },
     /**
-     * Milliseconds to wait for readiness before giving up; `wait()` REJECTS on expiry. `null` waits
-     * forever (discouraged). 30 s suits "compose after a sync lobby" (only data propagation remains);
+     * Milliseconds to wait for readiness before giving up; `wait()` REJECTS on expiry. `null` — like
+     * any negative or non-finite value — waits forever (discouraged), while `0` gives up at once.
+     * 30 s suits "compose after a sync lobby" (only data propagation remains);
      * if this trial self-gates arrivals (`group_size` set), raise it substantially or keep arrival
      * waiting in an upstream `plugin-multiplayer-sync` barrier.
      */
@@ -94,7 +96,7 @@ type Info = typeof info;
  * independently computes the same role map from the shared group-session snapshot, with no
  * coordinator and no extra round-trip.
  *
- * The trial runs as a short barrier: it pushes this client's round-scoped data, waits (via the
+ * The trial runs as a short barrier: it writes this client's round-scoped data, waits (via the
  * multiplayer API's `wait`) until the group is ready per the chosen strategy, computes
  * the map over the resolved snapshot, exposes the role to downstream trials through the accessor
  * store, and saves the assignment to the data record. On timeout it fails loud (`role: null,
@@ -156,16 +158,16 @@ class MultiplayerRolePlugin implements JsPsychPlugin<Info> {
       );
     }
 
-    // ROUND-SCOPED push: read this client's own prior entry first, then merge. The push REPLACES this
-    // client's whole entry (overwrite-per-participant adapter semantics), so `prev` is spread first —
-    // every top-level key pushed by earlier trials (e.g. a `cond` field that `role_from`/`rank_by`
-    // reads) must survive this trial's push. `joinedAt` is written ONCE (first-seen, never re-stamped)
-    // so the join-order base stays stable across rounds; per-round data is namespaced under
-    // `rounds[round]` so a later round never clobbers `joinedAt` or an earlier round's score. (Rests
+    // ROUND-SCOPED write: `update()` shallow-merges these two keys into this client's slot, so every
+    // OTHER top-level key written by earlier trials (e.g. a `cond` field that `role_from`/`rank_by`
+    // reads) survives untouched — no need to spread the whole prior entry as a plain `push()` would
+    // demand. The merge is only top-level, though, so the two keys we do write still have to be
+    // folded forward by hand from this client's current entry: `joinedAt` is written ONCE (first-seen,
+    // never re-stamped) so the join-order base stays stable across rounds, and `rounds` is rebuilt
+    // from the previous rounds map so a later round never clobbers an earlier round's score. (Rests
     // on the adapter being read-back consistent for this client's own writes.)
     const prev = api.get(me) ?? {};
     const payload: Record<string, unknown> = {
-      ...prev,
       joinedAt: (prev.joinedAt as number | undefined) ?? Date.now(),
       rounds: {
         ...((prev.rounds as Record<string, unknown>) ?? {}),
@@ -188,8 +190,8 @@ class MultiplayerRolePlugin implements JsPsychPlugin<Info> {
       seed: trial.seed ?? undefined,
     });
 
-    // Push our payload, then wait for readiness. The two-argument `.then` is deliberate: the
-    // rejection handler catches ONLY the push/wait chain's rejection and routes it to the soft,
+    // Write our payload, then wait for readiness. The two-argument `.then` is deliberate: the
+    // rejection handler catches ONLY the update/wait chain's rejection and routes it to the soft,
     // fail-loud timeout path — but only when that rejection is a genuine MultiplayerTimeoutError.
     // A throw from assignRoles is a different animal — readiness has already certified the group
     // complete, so a throw there means the assignment CONFIG is wrong (overflow with no
@@ -197,9 +199,12 @@ class MultiplayerRolePlugin implements JsPsychPlugin<Info> {
     // must NOT be relabelled as a timeout; they propagate out of the returned promise so jsPsych
     // halts the trial loudly. We assign over the RESOLVED snapshot, never a fresh getAll(), which
     // would reopen the time-of-check gap.
+    // `trial.timeout` goes through as-is: core reads null, negative and non-finite values as "no
+    // timeout", which is exactly what this plugin documents `null` to mean, so there is nothing left
+    // to normalize here. (0 still times out at once.)
     return api
-      .push(payload)
-      .then(() => api.wait(isReady, trial.timeout ?? undefined))
+      .update(payload)
+      .then(() => api.wait(isReady, trial.timeout))
       .then(
         (group) => {
           const roleMap = assignRoles(group, {
@@ -227,10 +232,15 @@ class MultiplayerRolePlugin implements JsPsychPlugin<Info> {
           });
         },
         (error) => {
+          // A cancelled wait is neither a timeout nor a failure: jsPsych cancels pending waits when
+          // the experiment ends or is aborted (disconnect(), abortExperiment(), the end of
+          // jsPsych.run()), so this trial is already being torn down. Return quietly — no
+          // on_timeout, no finishTrial, no `timed_out: true` record, nothing logged.
+          if (isMultiplayerCancelledError(error)) return;
           // A genuine timeout only — the name-based match lives in isMultiplayerTimeoutError
           // (multiplayer-api.ts); the class itself isn't importable here.
           if (!isMultiplayerTimeoutError(error)) {
-            // Not a timeout — a push failure or an adapter/backend error. Surface it loudly instead
+            // Not a timeout — a failed write or an adapter/backend error. Surface it loudly instead
             // of mislabeling it a timeout.
             throw error;
           }
