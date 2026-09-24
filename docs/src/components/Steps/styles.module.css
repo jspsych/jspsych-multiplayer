@@ -35,7 +35,11 @@
   width: 1.75rem;
 }
 
-.stepTitle {
+/* Both the `title` prop and a Markdown heading written inside the step. */
+.stepTitle,
+.stepBody > h2,
+.stepBody > h3,
+.stepBody > h4 {
   font-size: 1.15rem;
   margin: 0.15rem 0 0.75rem;
 }
