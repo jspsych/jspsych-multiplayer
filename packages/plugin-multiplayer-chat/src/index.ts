@@ -1,13 +1,14 @@
-import { JsPsych, JsPsychPlugin, ParameterType, TrialType } from "jspsych";
+import {
+  GroupSessionData,
+  JsPsych,
+  JsPsychPlugin,
+  ParameterType,
+  PresenceData,
+  TrialType,
+} from "jspsych";
 
 import { version } from "../package.json";
 import { ChatMessage, appendOwnMessage, mergeMessages } from "./chat-core";
-import {
-  GroupSessionData,
-  MultiplayerApiLike,
-  Unsubscribe,
-  resolveMultiplayerApi,
-} from "./multiplayer-api";
 
 const info = <const>{
   name: "multiplayer-chat",
@@ -46,18 +47,21 @@ const info = <const>{
       default: null,
     },
     /**
-     * Predicate `(group) => boolean` evaluated against the full group session on every update; the
-     * trial ends as soon as it returns true. Useful for "end when everyone is done" — e.g. have each
-     * client push a `chat_done` flag and test `(g) => Object.values(g).every((p) => p.chat_done)`.
+     * Predicate `(group, presence) => boolean` evaluated on every update; the trial ends as soon as
+     * it returns true. Useful for "end when everyone is done" — e.g. have each client write a
+     * `chat_done` flag and test
+     * `(g, presence) => Object.keys(g).every((id) => g[id].chat_done || presence[id] === "left")`.
+     * Both arguments are frozen snapshots; don't modify them.
      */
     end_when: {
       type: ParameterType.FUNCTION,
       default: null,
     },
     /**
-     * Maps a senderId to the display name shown on their messages: `(senderId, group) => string`.
-     * Defaults to "You" for this participant and the raw senderId for everyone else. Lets role
-     * output drive names, e.g. `(id) => jsPsychMultiplayerRole.participantsByRole()[id] ?? id`.
+     * Maps a senderId to the display name shown on their messages:
+     * `(senderId, group, presence) => string`. Defaults to "You" for this participant and the raw
+     * senderId for everyone else. Lets role output drive names, e.g.
+     * `(id) => jsPsychMultiplayerRole.participantsByRole()[id] ?? id`.
      */
     sender_label: {
       type: ParameterType.FUNCTION,
@@ -68,10 +72,21 @@ const info = <const>{
       type: ParameterType.INT,
       default: null,
     },
-    /** Show the list of participants currently present in the group session. */
+    /**
+     * Show the list of participants in the group session. Participants whose connection dropped
+     * are marked "(away)", and those who have left the study are marked "(left)".
+     */
     show_roster: {
       type: ParameterType.BOOL,
       default: false,
+    },
+    /**
+     * End the trial when a participant who was connected when it started leaves the study
+     * (their presence becomes `left`). The trial then ends with `ended_by: "participant_left"`.
+     */
+    end_on_participant_left: {
+      type: ParameterType.BOOL,
+      default: true,
     },
   },
   data: {
@@ -96,9 +111,27 @@ const info = <const>{
       type: ParameterType.INT,
       default: undefined,
     },
-    /** What ended the trial: `"duration"`, `"button"`, or `"condition"`. */
+    /**
+     * What ended the trial: `"duration"`, `"button"`, `"condition"`, `"participant_left"`, or
+     * `"connection_lost"`.
+     */
     ended_by: {
       type: ParameterType.STRING,
+      default: undefined,
+    },
+    /** True if the trial ended because another participant left the study. */
+    partner_left: {
+      type: ParameterType.BOOL,
+      default: undefined,
+    },
+    /** The participant whose departure ended the trial, or null. */
+    left_participant: {
+      type: ParameterType.STRING,
+      default: undefined,
+    },
+    /** True if the trial ended because this participant's connection was lost for good. */
+    connection_lost: {
+      type: ParameterType.BOOL,
       default: undefined,
     },
   },
@@ -107,7 +140,7 @@ const info = <const>{
 };
 
 type Info = typeof info;
-type EndReason = "duration" | "button" | "condition";
+type EndReason = "duration" | "button" | "condition" | "participant_left" | "connection_lost";
 
 /**
  * **multiplayer-chat**
@@ -119,8 +152,10 @@ type EndReason = "duration" | "button" | "condition";
  * real-time `subscribe` primitive.
  *
  * The trial ends on any configured condition: a `duration` timeout, an `end_button_label` click, or
- * an `end_when` predicate over the group session becoming true. The transcript this client saw is
- * stored in the trial data.
+ * an `end_when` predicate over the group session becoming true. It also ends when another
+ * participant leaves the study (unless `end_on_participant_left` is false) or when this
+ * participant's connection is lost for good. The transcript this client saw is stored in the trial
+ * data.
  *
  * Requires a connected multiplayer adapter — call `await jsPsych.multiplayer.connect(adapter)` before
  * `jsPsych.run()`.
@@ -137,7 +172,13 @@ class MultiplayerChatPlugin implements JsPsychPlugin<Info> {
   // against `finishTrial()`, so an async `trial` that resolves after setup would end the trial
   // immediately. A sync `trial` makes jsPsych fire `on_load` itself and wait for `finishTrial()`.
   trial(display_element: HTMLElement, trial: TrialType<Info>) {
-    const api = resolveMultiplayerApi(this.jsPsych);
+    const api = this.jsPsych.multiplayer;
+    if (!api) {
+      throw new Error(
+        "multiplayer-chat: this version of jsPsych has no multiplayer module (jsPsych.multiplayer). " +
+          "Use a jsPsych release that includes it.",
+      );
+    }
     const me = api.participantId;
     if (me == null) {
       throw new Error(
@@ -245,38 +286,49 @@ class MultiplayerChatPlugin implements JsPsychPlugin<Info> {
     if (endButton && trial.end_button_label != null) endButton.textContent = trial.end_button_label;
 
     const start = performance.now();
-    // THIS client's own messages, kept locally and appended to — the same pattern as
-    // `plugin-multiplayer-draw`'s `ownStrokes`. Seeded ONCE from whatever is already in our slot
-    // (e.g. after a reload); never re-derived from `api.get(me)` afterwards. `get()` reads the
-    // adapter's cache, which may not yet reflect a write it has already confirmed, so rebuilding the
-    // array per send can silently drop the previous message when two sends land in quick succession.
-    // Core's `update()` coalescing does NOT save us: the array is built before `update()` is called.
-    let ownMessages: ChatMessage[] = readOwnMessages();
+    // Participants connected when the trial starts; if one of them leaves, the trial can end.
+    const initialPresence = api.presence();
+    const presentAtStart = Object.keys(initialPresence).filter(
+      (id) => id !== me && initialPresence[id] === "connected",
+    );
     // This participant's own outgoing sequence counter, seeded past the HIGHEST seq already in our
     // slot (e.g. after a reload) so ids stay unique. Seeding from the array length would collide
     // with an existing message if the array ever carried a seq gap.
-    let nextSeq = ownMessages.reduce((max, m) => Math.max(max, m.seq), -1) + 1;
+    let nextSeq = readOwnMessages().reduce((max, m) => Math.max(max, m.seq), -1) + 1;
     let ended = false;
-    let unsubscribe: Unsubscribe | null = null;
+    // The latest snapshot delivered to the subscriber. end() reads from it rather than calling
+    // api.getAll(), which throws once disconnect() has detached the session.
+    let lastGroup: GroupSessionData = api.getAll();
+    // Aborted when the trial ends, which removes the subscription.
+    const controller = new AbortController();
     // `number`, not ReturnType<typeof setTimeout>: pluginAPI.setTimeout returns a numeric handle.
     let timer: number | null = null;
 
+    /**
+     * This participant's messages, read from their own slot. Writes show up in reads at once, so
+     * the slot always holds every message sent so far, including any whose write failed (those go
+     * out again with the next write).
+     */
     function readOwnMessages(): ChatMessage[] {
       const merged = mergeMessages({ [me]: api.get(me) ?? {} }, dataKey);
       return merged.filter((m) => m.senderId === me);
     }
 
-    function senderLabel(senderId: string, group: GroupSessionData): string {
+    function senderLabel(
+      senderId: string,
+      group: GroupSessionData,
+      presence: PresenceData,
+    ): string {
       if (typeof trial.sender_label === "function") {
-        return String(trial.sender_label(senderId, group));
+        return String(trial.sender_label(senderId, group, presence));
       }
       return senderId === me ? "You" : senderId;
     }
 
     // --- Rendering ----------------------------------------------------------------------------
     // Rebuild the transcript from scratch on each update. This is idempotent (keyed by message id
-    // via mergeMessages) so a subscribe replay that re-delivers seen messages changes nothing.
-    function render(group: GroupSessionData) {
+    // via mergeMessages), so a notification that re-delivers seen messages changes nothing.
+    function render(group: GroupSessionData, presence: PresenceData) {
       const transcript = mergeMessages(group, dataKey);
       const pinnedToBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 4;
 
@@ -288,7 +340,7 @@ class MultiplayerChatPlugin implements JsPsychPlugin<Info> {
 
           const who = document.createElement("span");
           who.className = "jspsych-multiplayer-chat-sender";
-          who.textContent = senderLabel(m.senderId, group); // textContent — never innerHTML
+          who.textContent = senderLabel(m.senderId, group, presence); // textContent — never innerHTML
 
           const body = document.createElement("span");
           body.className = "jspsych-multiplayer-chat-text";
@@ -300,8 +352,14 @@ class MultiplayerChatPlugin implements JsPsychPlugin<Info> {
       );
 
       if (roster) {
-        const names = Object.keys(group).map((id) => senderLabel(id, group));
-        roster.textContent = names.length ? `Present: ${names.join(", ")}` : "";
+        // This participant first, then everyone else in the session
+        const ids = [...new Set([me, ...Object.keys(group), ...Object.keys(presence)])];
+        const names = ids.map((id) => {
+          const status = id === me ? "connected" : presence[id];
+          const suffix = status === "away" ? " (away)" : status === "left" ? " (left)" : "";
+          return senderLabel(id, group, presence) + suffix;
+        });
+        roster.textContent = names.length ? `Participants: ${names.join(", ")}` : "";
       }
 
       // Keep the newest message visible unless the user has scrolled up to read history.
@@ -309,22 +367,24 @@ class MultiplayerChatPlugin implements JsPsychPlugin<Info> {
     }
 
     // --- Ending -------------------------------------------------------------------------------
-    const end = (reason: EndReason) => {
+    const end = (reason: EndReason, leftParticipant: string | null = null) => {
       if (ended) return; // guard against a second trigger (e.g. timer racing a button)
       ended = true;
-      unsubscribe?.();
+      controller.abort();
       if (timer != null) clearTimeout(timer);
       form.removeEventListener("submit", onSubmit);
       endButton?.removeEventListener("click", onEndClick);
 
-      const group = api.getAll();
-      const transcript = mergeMessages(group, dataKey);
+      const transcript = mergeMessages(lastGroup, dataKey);
       this.jsPsych.finishTrial({
         transcript,
         message_count: transcript.length,
         messages_sent: transcript.filter((m) => m.senderId === me).length,
         chat_time: Math.round(performance.now() - start),
         ended_by: reason,
+        partner_left: reason === "participant_left",
+        left_participant: leftParticipant,
+        connection_lost: reason === "connection_lost",
       });
     };
 
@@ -339,36 +399,29 @@ class MultiplayerChatPlugin implements JsPsychPlugin<Info> {
       }
       input.value = "";
 
-      // Append to the LOCAL array rather than re-reading our slot: the adapter's cache can lag a
-      // confirmed write, so a get-then-rebuild here would drop the previous message. The write below
-      // goes through `update`, which merges only the chat key into the slot (leaving any
-      // role/offer/… intact) rather than replacing it.
-      ownMessages = appendOwnMessage(ownMessages, text, me, nextSeq++, Date.now());
-
-      // Optimistic render: show our own message immediately instead of waiting for the adapter to
-      // echo the push back through subscribe, rendering the same local array we just appended to.
-      // The echo (or a replay) is harmless because render is idempotent — mergeMessages
-      // de-duplicates by message id.
-      render({ ...api.getAll(), [me]: { ...(api.get(me) ?? {}), [dataKey]: ownMessages } });
-
-      // Best-effort send: a failed write shows an inline note rather than crashing the trial (unlike
-      // sync, where a push failure is fatal — here sending is recoverable). Self-healing, like draw:
-      // the array carries the whole history, so the NEXT send resends anything a failed write lost.
+      // `update` merges only the chat key into the slot (leaving any role/offer/… intact) and
+      // notifies the subscriber synchronously, which renders the new message. A failed write stays
+      // in our slot and goes out with the next one, so no message is lost.
       // Do NOT roll nextSeq back on failure — a reused seq would forge a duplicate id that
       // mergeMessages' dedup silently drops. A skipped seq is harmless; a reused one loses data.
-      api.update({ [dataKey]: ownMessages }).catch(() => {
-        showSendError();
-      });
+      try {
+        const messages = appendOwnMessage(readOwnMessages(), text, me, nextSeq++, Date.now());
+        api.update({ [dataKey]: messages }).catch(showSendError);
+      } catch (error) {
+        showSendError(error);
+      }
     };
 
-    function showSendError() {
+    function showSendError(error: unknown) {
       let note = display_element.querySelector(".jspsych-multiplayer-chat-error") as HTMLElement;
       if (!note) {
         note = document.createElement("div");
         note.className = "jspsych-multiplayer-chat-error";
         form.after(note);
       }
-      note.textContent = "Couldn't send — please try again.";
+      note.textContent = isConnectionClosed(error)
+        ? "The connection was lost, so messages can no longer be sent."
+        : "Couldn't send — please try again.";
     }
 
     const onEndClick = () => end("button");
@@ -377,34 +430,49 @@ class MultiplayerChatPlugin implements JsPsychPlugin<Info> {
     form.addEventListener("submit", onSubmit);
     endButton?.addEventListener("click", onEndClick);
 
-    // Seed from existing history, then subscribe. `subscribe` replays the current snapshot on
-    // registration, so the seed is belt-and-suspenders — harmless because render is idempotent.
-    render(api.getAll());
-    if (typeof trial.end_when === "function" && trial.end_when(api.getAll())) {
-      end("condition");
-      return;
-    }
+    // subscribe() calls back at once with the current state, so this also renders the existing
+    // history and checks end_when before the trial is visible.
+    api.subscribe(
+      (group, presence) => {
+        if (ended) return;
+        lastGroup = group;
+        // The session calls subscribers one last time when it closes, with our own presence "left"
+        if (presence[me] === "left") {
+          end("connection_lost");
+          return;
+        }
+        try {
+          render(group, presence);
+        } catch {
+          // A bad render frame must not tear down the subscription or the trial.
+        }
+        let shouldEnd = false;
+        try {
+          shouldEnd =
+            typeof trial.end_when === "function" && Boolean(trial.end_when(group, presence));
+        } catch {
+          // A throwing end_when predicate must not propagate into the session's notify loop.
+        }
+        if (shouldEnd) {
+          end("condition");
+          return;
+        }
+        if (trial.end_on_participant_left) {
+          const gone = presentAtStart.find((id) => presence[id] === "left");
+          if (gone !== undefined) end("participant_left", gone);
+        }
+      },
+      { signal: controller.signal },
+    );
 
-    unsubscribe = api.subscribe((group) => {
-      if (ended) return;
-      try {
-        render(group);
-      } catch {
-        // A bad render frame must not tear down the subscription or the trial.
-      }
-      let shouldEnd = false;
-      try {
-        shouldEnd = typeof trial.end_when === "function" && Boolean(trial.end_when(group));
-      } catch {
-        // A throwing end_when predicate must not propagate into the adapter's notify loop.
-      }
-      if (shouldEnd) end("condition");
-    });
-
-    if (hasDuration) {
+    if (hasDuration && !ended) {
       timer = this.jsPsych.pluginAPI.setTimeout(() => end("duration"), trial.duration as number);
     }
   }
+}
+
+function isConnectionClosed(error: unknown): boolean {
+  return (error as { name?: unknown } | null)?.name === "MultiplayerConnectionClosedError";
 }
 
 /** Escape a string for safe interpolation into a double-quoted HTML attribute. */
