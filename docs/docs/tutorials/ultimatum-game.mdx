@@ -95,6 +95,14 @@ const localAdapter = new jsPsychAdapterMultiplayerLocal({ persistParticipant: tr
 
 // ...timeline definitions...
 
+const reloadedScreen = {
+  type: jsPsychHtmlButtonResponse,
+  stimulus:
+    "<p>You reloaded the page, so you can't rejoin this game.</p>" +
+    "<p>Thank you for taking part.</p>",
+  choices: ["Finish"],
+};
+
 jsPsych.multiplayer.connect(localAdapter).then(() => {
   if (jsPsych.multiplayer.previousInstance) {
     jsPsych.run([reloadedScreen]);
@@ -112,8 +120,7 @@ Three things to note:
   refreshed tab keeps its ID.
 - **A refreshed tab can't rejoin.** It restarted the experiment, so the other player sees it
   as `left`. On the refreshed page, `jsPsych.multiplayer.previousInstance` is set, and the
-  page shows `reloadedScreen`, a single button-response trial saying the participant can't
-  rejoin, instead of starting the game over. See
+  page shows `reloadedScreen` instead of starting the game over. See
   [Rejoining](/guides/handling-dropouts#rejoining).
 
 This is the only backend-specific code in the whole file. Everything after this point runs
