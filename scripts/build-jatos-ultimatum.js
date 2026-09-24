@@ -17,6 +17,7 @@ import {
   buildAssetsAndMetadata,
   multiplayerAsset,
   nodeModulesAsset,
+  jspsychCoreRewrites,
   printPre3694Caveat,
   rewriteAssetPaths,
   zipStudy,
@@ -46,8 +47,6 @@ const assets = [
 
 // ── Path rewrites in the HTML ─────────────────────────────────────────────────
 const pathRewrites = {
-  "https://unpkg.com/jspsych/css/jspsych.css": "jspsych.css",
-  "https://unpkg.com/jspsych": "jspsych.js",
   "https://unpkg.com/@jspsych/plugin-html-button-response": "plugin-html-button-response.js",
   "https://unpkg.com/@jspsych/plugin-html-keyboard-response": "plugin-html-keyboard-response.js",
   "../packages/adapter-multiplayer-jatos/dist/index.browser.min.js": "jatos-adapter.js",
@@ -81,10 +80,11 @@ const { distDir, assetsDir, jasFileName } = buildAssetsAndMetadata({
   },
 });
 
-const html = rewriteAssetPaths(
-  readFileSync(resolve(root, "examples/ultimatum-game-jatos.html"), "utf8"),
-  pathRewrites,
-);
+const sourceHtml = readFileSync(resolve(root, "examples/ultimatum-game-jatos.html"), "utf8");
+const html = rewriteAssetPaths(sourceHtml, {
+  ...jspsychCoreRewrites(sourceHtml),
+  ...pathRewrites,
+});
 writeFileSync(resolve(assetsDir, "index.html"), html);
 console.log(`  wrote   index.html`);
 
