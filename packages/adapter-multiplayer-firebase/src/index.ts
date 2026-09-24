@@ -1,13 +1,21 @@
 import type { FirebaseOptions } from "firebase/app";
 import type { Database } from "firebase/database";
+import type {
+  AdapterConnectOptions,
+  GroupSessionData,
+  MultiplayerAdapter,
+  MultiplayerConnection,
+} from "jspsych";
 
 import { FirebaseBackend, RawSessionSnapshot, Unsubscribe } from "./firebase-backend";
-import { GroupSessionData, MultiplayerAdapter } from "./multiplayer-adapter";
 import { createRealBackend } from "./real-backend";
 
 const SESSION_PARAM = "mp_session";
 const DEFAULT_PATH_PREFIX = "mp-sessions";
 const DEFAULT_CONNECT_TIMEOUT_MS = 20000;
+
+/** The value written to a presence node. Only its existence matters. */
+const PRESENT = "1";
 
 /**
  * Characters that must not appear in an id/session/prefix. RTDB forbids `. # $ [ ] /` in keys; we
@@ -18,7 +26,7 @@ const DEFAULT_CONNECT_TIMEOUT_MS = 20000;
 const FORBIDDEN_KEY_CHARS = /[.#$[\]/:]/;
 
 export interface FirebaseAdapterOptions {
-  /** A Firebase app config object (the adapter initializes + owns a dedicated app). */
+  /** A Firebase app config object (the adapter initializes + owns a dedicated app per connection). */
   firebaseConfig?: FirebaseOptions;
   /** An already-initialized RTDB `Database` instance (the caller owns the app + auth). */
   database?: Database;
@@ -33,10 +41,9 @@ export interface FirebaseAdapterOptions {
    *  `useUidAsParticipantId`). Rejected if combined with `useUidAsParticipantId`. */
   participantId?: string;
   /**
-   * Adopt the anonymous-auth uid as this participant's id during `connect()` (uid-as-key mode), which
-   * enables the strict uid-as-slot-key security rules. The id is a fresh placeholder until `connect()`
-   * resolves, then becomes the uid — never read/cache `participantId` before connecting in this mode.
-   * Incompatible with a supplied `participantId` (constructing with both throws). Default `false`.
+   * Use the anonymous-auth uid as this participant's id (uid-as-key mode), which enables the strict
+   * uid-as-slot-key security rules. Incompatible with a supplied `participantId` (constructing with
+   * both throws). Default `false`.
    */
   useUidAsParticipantId?: boolean;
   /**
@@ -52,8 +59,6 @@ export interface FirebaseAdapterOptions {
 
   /** RTDB path namespace. Defaults to `"mp-sessions"`. */
   pathPrefix?: string;
-  /** Whether to server-remove our slot on disconnect via `onDisconnect().remove()`. Default `true`. */
-  removeOnDisconnect?: boolean;
   /** Timeout (ms) for the await-first-snapshot step of `connect()`. Default `20000`. */
   connectTimeoutMs?: number;
 
@@ -70,41 +75,14 @@ export interface FirebaseAdapterOptions {
  *   await jsPsych.multiplayer.connect(new FirebaseAdapter({ firebaseConfig }));
  *   await jsPsych.run(timeline);
  *
- * The contract's `getAll()`/`get()` are synchronous but every Firebase read is async, so the adapter
- * keeps an in-memory MIRROR of the session node, kept live by a single `onValue` listener, and answers
- * reads from it. `connect()` does not resolve until the first snapshot lands. Each participant's slot
- * is stored JSON-encoded as a string, so pushed payloads round-trip exactly over RTDB's JSON coercion.
+ * The adapter holds configuration only. Each `connect()` opens a new connection with its own
+ * Firebase app (or the injected database), listeners, and mirrors, so reconnecting with the same
+ * adapter object never shares state with an earlier connection.
  *
  * @author Hannah Tsukamoto
  */
 export default class FirebaseAdapter implements MultiplayerAdapter {
-  /** Contract-`readonly`. In uid-as-key mode it is reassigned ONCE, during connect(), before the
-   *  connect() promise resolves — never mutated while anything can observe it. */
-  participantId: string;
-
-  private readonly sessionId: string;
-  private readonly pathPrefix: string;
-  private readonly removeOnDisconnect: boolean;
-  private readonly connectTimeoutMs: number;
-  private readonly useUid: boolean;
-  private readonly sessionBinding: boolean;
-  private readonly backendFactory: () => Promise<FirebaseBackend>;
-
-  private backend: FirebaseBackend | null = null;
-  private connected = false;
-  /** In-flight connect(), cached so concurrent calls share one attempt instead of double-joining. */
-  private connectPromise: Promise<void> | null = null;
-  private readonly mirror: GroupSessionData = {};
-  /** Last payload we pushed, re-sent after a reconnect so a transient blip can't erase us. */
-  private lastOwnDataJson: string | null = null;
-  /** Whether we've seen `.info/connected` go true at least once (so the FIRST true isn't a "reconnect"). */
-  private hadFirstConnection = false;
-
-  private unsubscribeSession: Unsubscribe | null = null;
-  private unsubscribeConnected: Unsubscribe | null = null;
-
-  private readonly subscribers = new Set<(data: GroupSessionData) => void>();
-  private notifyScheduled = false;
+  private readonly config: ConnectionConfig;
 
   constructor(options: FirebaseAdapterOptions = {}) {
     if (options.useUidAsParticipantId && options.participantId !== undefined) {
@@ -114,85 +92,115 @@ export default class FirebaseAdapter implements MultiplayerAdapter {
       );
     }
 
-    this.useUid = options.useUidAsParticipantId ?? false;
-    this.sessionBinding = options.sessionBinding ?? this.useUid;
-    this.pathPrefix = options.pathPrefix ?? DEFAULT_PATH_PREFIX;
-    this.sessionId = options.sessionId ?? resolveSessionId();
-    // In uid mode this placeholder is replaced with the real uid during connect().
-    this.participantId = options.participantId ?? generateId();
-    this.removeOnDisconnect = options.removeOnDisconnect ?? true;
-    this.connectTimeoutMs = options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS;
+    const useUid = options.useUidAsParticipantId ?? false;
+    const pathPrefix = options.pathPrefix ?? DEFAULT_PATH_PREFIX;
+    const sessionId = options.sessionId ?? resolveSessionId();
+    // Minted once, so every connection made with this adapter reuses the same id. In uid mode the
+    // id comes from sign-in instead.
+    const participantId = useUid ? null : (options.participantId ?? generateId());
 
-    validateKey("pathPrefix", this.pathPrefix);
-    validateKey("sessionId", this.sessionId);
-    // A locally-minted or user-supplied id is validated now; a uid adopted in connect() is validated there.
-    if (!this.useUid) validateKey("participantId", this.participantId);
+    validateKey("pathPrefix", pathPrefix);
+    validateKey("sessionId", sessionId);
+    if (participantId !== null) validateKey("participantId", participantId);
 
     const injected = options.backend;
-    if (injected) {
-      this.backendFactory = () => Promise.resolve(injected);
-    } else {
-      // Build the real backend on connect() (not construction) so a reconnect after disconnect()
-      // gets a fresh app — goOffline() tears the old one down. Unit tests inject a fake and never
-      // reach this path, so the firebase SDK is never loaded under test.
-      this.backendFactory = () =>
-        createRealBackend({
-          firebaseConfig: options.firebaseConfig,
-          database: options.database,
-        });
-    }
+    this.config = {
+      sessionId,
+      pathPrefix,
+      participantId,
+      sessionBinding: options.sessionBinding ?? useUid,
+      connectTimeoutMs: options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS,
+      // Build the real backend per connection (not at construction) so each connection gets a fresh
+      // app — goOffline() tears the old one down. Unit tests inject a fake and never reach this
+      // path, so the firebase SDK is never loaded under test.
+      backendFactory: injected
+        ? () => Promise.resolve(injected)
+        : () =>
+            createRealBackend({
+              firebaseConfig: options.firebaseConfig,
+              database: options.database,
+            }),
+    };
   }
 
-  async connect(): Promise<void> {
-    if (this.connected) return;
-    // Re-entrancy guard (matching JatosAdapter): a second connect() while the first is in flight
-    // must share that attempt, not run a parallel one — a parallel run would sign in twice, register
-    // a second session listener (leaking the first), and double-arm onDisconnect.
-    if (this.connectPromise) return this.connectPromise;
-    this.connectPromise = this.doConnect().finally(() => {
-      this.connectPromise = null;
-    });
-    return this.connectPromise;
-  }
-
-  private async doConnect(): Promise<void> {
+  async connect(options: AdapterConnectOptions): Promise<MultiplayerConnection> {
+    const connection = new FirebaseConnection(this.config, options);
     try {
-      await this.openConnection();
+      await connection.open();
     } catch (err) {
-      // A failed connect() means the caller treats this adapter as unconnected and never calls
-      // disconnect(), so nothing else would release what we opened: the session listener, the
-      // .info/connected handler, and an owned app would all leak, and a retry would find
-      // `connected`/`backend` still set and resolve against a half-open connection.
-      this.abandonConnection();
+      // A failed connect() hands the caller nothing to disconnect, so release everything here
+      await connection.disconnect();
       throw err;
     }
+    return connection;
   }
+}
 
-  /** Release everything openConnection() may have opened, back to the pre-connect state. */
-  private abandonConnection(): void {
-    this.unsubscribeSession?.();
-    this.unsubscribeConnected?.();
-    this.unsubscribeSession = null;
-    this.unsubscribeConnected = null;
-    this.subscribers.clear();
-    for (const id of Object.keys(this.mirror)) delete this.mirror[id];
-    this.lastOwnDataJson = null;
-    this.hadFirstConnection = false;
-    this.connected = false;
-    const backend = this.backend;
-    this.backend = null;
-    // goOffline() is app-global — only safe when the backend owns the app (never on an injected one).
-    if (backend?.ownsApp) backend.goOffline();
-  }
+interface ConnectionConfig {
+  sessionId: string;
+  pathPrefix: string;
+  /** Null in uid-as-key mode, where the id is the auth uid. */
+  participantId: string | null;
+  sessionBinding: boolean;
+  connectTimeoutMs: number;
+  backendFactory: () => Promise<FirebaseBackend>;
+}
 
-  private async openConnection(): Promise<void> {
-    const backend = await this.backendFactory();
+type OwnStatus = "connected" | "reconnecting" | "closed";
+
+/**
+ * One open connection to a Firebase session. The core's reads are synchronous but every Firebase read
+ * is async, so the connection keeps in-memory mirrors of the session node (everyone's data) and the
+ * presence node (who is connected), each kept live by one `onValue` listener.
+ */
+class FirebaseConnection implements MultiplayerConnection {
+  participantId = "";
+
+  private backend: FirebaseBackend | null = null;
+  private mirror: GroupSessionData = {};
+  private present = new Set<string>();
+
+  /** Set by disconnect(); after it, no callback reaches the core. */
+  private closed = false;
+  /** Whether open() has finished; before then, failures reject connect() instead. */
+  private opened = false;
+  /** A listener failure that arrived after the first snapshots but before open() finished. */
+  private openError: Error | null = null;
+  /** Whether our presence node may exist, so disconnect() knows to remove it. */
+  private presenceWritten = false;
+  /** Whether `.info/connected` has been true at least once since connecting. */
+  private hadFirstConnection = false;
+  private status: OwnStatus = "connected";
+
+  private readonly unsubscribes: Unsubscribe[] = [];
+
+  constructor(
+    private readonly config: ConnectionConfig,
+    private readonly options: AdapterConnectOptions,
+  ) {}
+
+  /** Connect, sign in, bind the session, load both nodes, and announce our presence. */
+  async open(): Promise<void> {
+    const { signal } = this.options;
+    const check = () => {
+      if (this.openError) throw this.openError;
+      if (signal.aborted || this.closed) {
+        throw new Error("FirebaseAdapter: connect() was cancelled.");
+      }
+    };
+    check();
+
+    const backend = await this.config.backendFactory();
     this.backend = backend;
+    check();
 
     const uid = await backend.signIn();
-    if (this.useUid) {
+    check();
+    if (this.config.participantId === null) {
+      validateKey("participantId (auth uid)", uid);
       this.participantId = uid;
-      validateKey("participantId (auth uid)", this.participantId);
+    } else {
+      this.participantId = this.config.participantId;
     }
 
     // Session binding: claim (or re-assert) this uid's membership BEFORE the session listener
@@ -200,209 +208,232 @@ export default class FirebaseAdapter implements MultiplayerAdapter {
     // matching membership record. The record is first-write-wins server-side (`.validate` makes it
     // immutable), so re-asserting the SAME session on a rejoin succeeds and claiming a DIFFERENT
     // one is denied. Never removed on disconnect: the binding IS the security property.
-    if (this.sessionBinding) {
+    if (this.config.sessionBinding) {
       try {
-        await backend.set(this.membershipPath(uid), this.sessionId);
+        await backend.set(this.membershipPath(uid), this.config.sessionId);
       } catch (err) {
         throw new Error(
           "FirebaseAdapter: registering session membership failed — either this client's anonymous " +
-            `identity is already bound to a different session (rejoining "${this.sessionId}" from a ` +
-            "browser profile that first joined another session; use a fresh tab/profile or clear " +
-            "site data), or the security rules are missing the memberships block (see the README's " +
-            `recommended rules). Underlying error: ${
+            `identity is already bound to a different session (rejoining "${this.config.sessionId}" ` +
+            "from a browser profile that first joined another session; use a fresh tab/profile or " +
+            "clear site data), or the security rules are missing the memberships block (see the " +
+            `README's recommended rules). Underlying error: ${
               err instanceof Error ? err.message : String(err)
             }`,
         );
       }
+      check();
     }
 
-    // Register the session listener and wait for the first snapshot before resolving, so a plugin
-    // never reads an empty mirror. Both failure paths (rules denial via the cancel callback, and a
-    // silent hang) must settle the promise or the whole experiment stalls.
-    await new Promise<void>((resolve, reject) => {
+    await this.loadNodes(backend);
+    check();
+
+    // Arm the server-side removal before writing, so a drop between the two can't leave a ghost
+    this.presenceWritten = true;
+    await backend.onDisconnectRemove(this.presencePath());
+    check();
+    await backend.set(this.presencePath(), PRESENT);
+    check();
+
+    this.unsubscribes.push(
+      backend.onConnectedChange((isConnected) => {
+        void this.handleConnectionChange(isConnected);
+      }),
+    );
+    check();
+    this.opened = true;
+  }
+
+  /**
+   * Attach the session and presence listeners and wait until both have delivered a first snapshot,
+   * so the core never reads an empty mirror. A rules denial, a silent hang, and an abort all settle
+   * the wait; connect()'s cleanup then removes whatever listeners were attached.
+   */
+  private loadNodes(backend: FirebaseBackend): Promise<void> {
+    const { signal } = this.options;
+    return new Promise<void>((resolve, reject) => {
       let settled = false;
+      let sessionLoaded = false;
+      let presenceLoaded = false;
+
       const finish = (fn: () => void) => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
+        signal.removeEventListener("abort", onAbort);
         fn();
       };
-      // On any failure, tear the session listener down before rejecting: connect() rejected means
-      // the caller treats this adapter as unconnected, so a still-live listener would keep mutating
-      // the mirror (and firing fan-outs) behind their back. A synchronously-cancelled listener (a
-      // rules denial in the real SDK) is already dead, so the unsubscribe is a harmless no-op there.
-      const fail = (error: Error) =>
-        finish(() => {
-          this.unsubscribeSession?.();
-          this.unsubscribeSession = null;
-          reject(error);
-        });
+      const fail = (error: Error) => finish(() => reject(error));
+      const onAbort = () => fail(new Error("FirebaseAdapter: connect() was cancelled."));
+      const maybeResolve = () => {
+        if (sessionLoaded && presenceLoaded) finish(resolve);
+      };
 
       const timer = setTimeout(() => {
         fail(
           new Error(
-            `FirebaseAdapter: connect() timed out after ${this.connectTimeoutMs}ms waiting for the ` +
-              "first session snapshot. Check the database URL, network, and that your security " +
-              "rules grant read access to this session (see the README rules recipe).",
+            `FirebaseAdapter: connect() timed out after ${this.config.connectTimeoutMs}ms waiting ` +
+              "for the first session snapshot. Check the database URL, network, and that your " +
+              "security rules grant read access to this session (see the README rules recipe).",
           ),
         );
-      }, this.connectTimeoutMs);
+      }, this.config.connectTimeoutMs);
+      signal.addEventListener("abort", onAbort, { once: true });
 
-      this.unsubscribeSession = backend.onValue(
-        this.sessionPath(),
-        (snapshot) => {
-          this.applySnapshot(snapshot);
-          finish(resolve);
-          // After the first snapshot, subsequent updates just refresh the mirror + fan out.
-          this.scheduleNotify();
-        },
-        (error) => {
-          fail(
-            new Error(
-              "FirebaseAdapter: the session listener was cancelled — this is almost always a " +
-                "security-rules denial. Grant read access to this session (see the README rules " +
-                `recipe). Underlying error: ${error.message}`,
-            ),
-          );
-        },
+      // A cancelled listener means we can no longer see the session. Before the first snapshots it
+      // rejects connect(); once connected, it closes the connection.
+      const onListenerError = (node: string) => (error: Error) => {
+        const wrapped = new Error(
+          `FirebaseAdapter: the ${node} listener was cancelled — this is almost always a ` +
+            `security-rules denial. Grant read access to this session's ${node} node (see the ` +
+            `README rules recipe). Underlying error: ${error.message}`,
+        );
+        if (!settled) {
+          fail(wrapped);
+        } else if (!this.opened) {
+          this.openError = wrapped;
+        } else {
+          console.error(wrapped);
+          this.reportStatus("closed");
+        }
+      };
+
+      this.unsubscribes.push(
+        backend.onValue(
+          this.sessionPath(),
+          (snapshot) => {
+            if (this.closed) return;
+            this.mirror = decodeSession(snapshot);
+            sessionLoaded = true;
+            maybeResolve();
+            this.options.onChange();
+          },
+          onListenerError("session"),
+        ),
+      );
+      if (settled) return; // a synchronous denial already rejected
+      this.unsubscribes.push(
+        backend.onValue(
+          this.presenceRootPath(),
+          (snapshot) => {
+            if (this.closed) return;
+            this.present = new Set(Object.keys(snapshot ?? {}));
+            presenceLoaded = true;
+            maybeResolve();
+            this.options.onChange();
+          },
+          onListenerError("presence"),
+        ),
       );
     });
-
-    // Arm server-side ghost cleanup, then wire reconnect handling. `connected` flips only once
-    // everything is wired: if arming throws, connect() rejects, and an adapter that still looked
-    // connected would leak its listener and make a retry a silent no-op (see connect()'s guard).
-    if (this.removeOnDisconnect) {
-      await backend.onDisconnectRemove(this.slotPath());
-    }
-    this.unsubscribeConnected = backend.onConnectedChange((isConnected) => {
-      void this.handleConnectionChange(isConnected);
-    });
-
-    this.connected = true;
-  }
-
-  async push(data: Record<string, unknown>): Promise<void> {
-    if (!this.connected || !this.backend) {
-      throw new Error("FirebaseAdapter: push() called before connect(); call connect() first.");
-    }
-    // Encode once and keep the string: the caller still owns `data` and may mutate it afterwards,
-    // which would otherwise change what a reconnect re-pushes.
-    const encoded = JSON.stringify(data);
-    this.lastOwnDataJson = encoded;
-    // Store JSON-encoded so the payload survives RTDB's JSON coercion — raw, RTDB prunes empty
-    // arrays/objects and coerces arrays to objects; the string round-trips those unchanged. (`undefined`
-    // is still dropped, but JSON can't represent it either way.) The mirror updates from the echoed
-    // onValue, not here (RTDB fires the local listener optimistically, so our own getAll() reflects
-    // the write immediately after this resolves).
-    await this.backend.set(this.slotPath(), encoded);
   }
 
   getAll(): GroupSessionData {
-    const out: GroupSessionData = {};
-    for (const [id, record] of Object.entries(this.mirror)) {
-      out[id] = { ...record };
-    }
-    return out;
+    // The core copies what this returns, so the mirror can be handed over directly
+    return this.mirror;
   }
 
-  get(participantId: string): Record<string, unknown> | undefined {
-    const record = this.mirror[participantId];
-    return record ? { ...record } : undefined;
+  connectedParticipants(): string[] {
+    return [...this.present];
   }
 
-  subscribe(callback: (data: GroupSessionData) => void): Unsubscribe {
-    this.subscribers.add(callback);
-    return () => {
-      this.subscribers.delete(callback);
-    };
-  }
-
-  async disconnect(): Promise<void> {
-    if (!this.connected || !this.backend) return;
+  async push(data: Record<string, unknown>): Promise<void> {
     const backend = this.backend;
-
-    // Remove our slot first so peers re-read a snapshot without us; cancel the armed onDisconnect so
-    // it can't fire later against a reused connection.
-    try {
-      await backend.remove(this.slotPath());
-    } catch {
-      // Best-effort: a failed removal shouldn't block teardown (the onDisconnect hook is the backstop).
+    if (this.closed || !backend) {
+      throw new Error("FirebaseAdapter: push() called on a closed connection.");
     }
-    if (this.removeOnDisconnect) {
-      try {
-        await backend.cancelOnDisconnect(this.slotPath());
-      } catch {
-        // Best-effort.
-      }
-    }
-
-    this.unsubscribeSession?.();
-    this.unsubscribeConnected?.();
-    this.unsubscribeSession = null;
-    this.unsubscribeConnected = null;
-
-    // goOffline() is app-global — only safe when the backend owns the app (never on an injected one).
-    if (backend.ownsApp) backend.goOffline();
-
-    this.subscribers.clear();
-    for (const id of Object.keys(this.mirror)) delete this.mirror[id];
-    this.lastOwnDataJson = null;
-    this.hadFirstConnection = false;
-    this.connected = false;
-    this.backend = null;
+    // Store JSON-encoded so the payload survives RTDB's JSON coercion — raw, RTDB prunes empty
+    // arrays/objects and coerces arrays to objects; the string round-trips those unchanged. The
+    // mirror updates from the echoed onValue (RTDB fires the local listener optimistically).
+    await backend.set(this.slotPath(), JSON.stringify(data));
   }
 
   /**
-   * `.info/connected` handler. The first `true` is the initial connection (already handled by
-   * connect()). Every LATER `true` is a reconnect after a blip: the server may have fired our armed
-   * onDisconnect and deleted our slot, and RTDB won't re-send it — so we re-arm onDisconnect FIRST
-   * (it's one-shot; re-pushing before re-arming leaves a window where another drop orphans the slot),
-   * then re-push our last-known data.
+   * Close the connection: stop all callbacks, withdraw our presence, and release an owned app. The
+   * data slot stays, so peers keep this participant's last data; presence is what tells them the
+   * participant is gone. Safe to call more than once, and on a half-open connection.
+   */
+  async disconnect(): Promise<void> {
+    if (this.closed) return;
+    this.closed = true;
+    for (const unsubscribe of this.unsubscribes.splice(0)) unsubscribe();
+
+    const backend = this.backend;
+    this.backend = null;
+    if (!backend) return;
+
+    if (this.presenceWritten) {
+      try {
+        await backend.remove(this.presencePath());
+      } catch {
+        // Best-effort: the armed onDisconnect is the backstop
+      }
+      try {
+        // Cancel so the armed removal can't fire later against a reused app
+        await backend.cancelOnDisconnect(this.presencePath());
+      } catch {
+        // Best-effort
+      }
+    }
+    // goOffline() is app-global — only safe when the backend owns the app (never on an injected one)
+    if (backend.ownsApp) backend.goOffline();
+  }
+
+  /**
+   * `.info/connected` handler. The first `true` is the initial connection, which open() already
+   * handled. A later `false` means our channel dropped; the server then fires our armed onDisconnect
+   * and removes our presence node. The next `true` is the recovery: re-arm the one-shot removal
+   * FIRST (re-writing presence before re-arming leaves a window where another drop orphans it), then
+   * write presence again.
    */
   private async handleConnectionChange(isConnected: boolean): Promise<void> {
-    if (!isConnected) return;
+    if (this.closed) return;
+    if (!isConnected) {
+      if (this.hadFirstConnection) this.reportStatus("reconnecting");
+      return;
+    }
     if (!this.hadFirstConnection) {
       this.hadFirstConnection = true;
       return;
     }
-    if (!this.connected || !this.backend) return;
-    // Capture the backend across the awaits: a disconnect() during either await nulls
-    // `this.backend`, and continuing against the captured (torn-down) one must be abandoned rather
-    // than crashing or resurrecting the slot of an adapter the caller already disconnected.
     const backend = this.backend;
+    if (!backend) return;
     try {
-      if (this.removeOnDisconnect) {
-        await backend.onDisconnectRemove(this.slotPath());
-        if (this.backend !== backend) return;
-      }
-      if (this.lastOwnDataJson !== null) {
-        await backend.set(this.slotPath(), this.lastOwnDataJson);
-      }
+      await backend.onDisconnectRemove(this.presencePath());
+      if (this.closed) return;
+      await backend.set(this.presencePath(), PRESENT);
+      if (this.closed) return;
     } catch (err) {
-      console.error("FirebaseAdapter: failed to restore own slot after reconnect", err);
+      console.error("FirebaseAdapter: failed to restore presence after reconnecting", err);
     }
+    this.reportStatus("connected");
   }
 
-  /** Replace the mirror wholesale from a session snapshot, decoding each slot's JSON string. */
-  private applySnapshot(snapshot: RawSessionSnapshot | null): void {
-    for (const id of Object.keys(this.mirror)) delete this.mirror[id];
-    if (!snapshot) return;
-    for (const [id, raw] of Object.entries(snapshot)) {
-      if (typeof raw !== "string") continue; // defensive: our writes are always encoded strings
-      try {
-        this.mirror[id] = JSON.parse(raw) as Record<string, unknown>;
-      } catch {
-        // Skip a slot that isn't valid JSON rather than failing the whole snapshot.
-      }
-    }
+  private reportStatus(status: OwnStatus): void {
+    if (this.closed || this.status === "closed" || this.status === status) return;
+    this.status = status;
+    this.options.onStatus(status);
   }
 
   private sessionPath(): string {
-    return `${this.pathPrefix}/${this.sessionId}`;
+    return `${this.config.pathPrefix}/${this.config.sessionId}`;
   }
 
   private slotPath(): string {
-    return `${this.pathPrefix}/${this.sessionId}/${this.participantId}`;
+    return `${this.sessionPath()}/${this.participantId}`;
+  }
+
+  /**
+   * The presence node: a SIBLING namespace of the sessions node, so the per-session slot rules never
+   * govern it and it never shows up as a slot. Holds one child per connected participant, removed by
+   * the server when that participant's connection drops.
+   */
+  private presenceRootPath(): string {
+    return `${this.config.pathPrefix}-presence/${this.config.sessionId}`;
+  }
+
+  private presencePath(): string {
+    return `${this.presenceRootPath()}/${this.participantId}`;
   }
 
   /**
@@ -412,29 +443,23 @@ export default class FirebaseAdapter implements MultiplayerAdapter {
    * `=== $session`, so it must not be JSON-quoted.
    */
   private membershipPath(uid: string): string {
-    return `${this.pathPrefix}-memberships/${uid}`;
+    return `${this.config.pathPrefix}-memberships/${uid}`;
   }
+}
 
-  /**
-   * Fan a single coalesced update out to local subscribers on a microtask. Guarantees the callback
-   * never runs synchronously inside a listener/push, so a subscriber that pushes again enqueues
-   * another fan-out instead of recursing, and always sees a fully-applied mirror.
-   */
-  private scheduleNotify(): void {
-    if (this.notifyScheduled) return;
-    this.notifyScheduled = true;
-    queueMicrotask(() => {
-      this.notifyScheduled = false;
-      const data = this.getAll();
-      for (const cb of [...this.subscribers]) {
-        try {
-          cb(data);
-        } catch (err) {
-          console.error("FirebaseAdapter: a group-session subscriber threw", err);
-        }
-      }
-    });
+/** Decode a session snapshot: each slot is stored as a JSON string. */
+function decodeSession(snapshot: RawSessionSnapshot | null): GroupSessionData {
+  const out: GroupSessionData = {};
+  if (!snapshot) return out;
+  for (const [id, raw] of Object.entries(snapshot)) {
+    if (typeof raw !== "string") continue; // defensive: our writes are always encoded strings
+    try {
+      out[id] = JSON.parse(raw) as Record<string, unknown>;
+    } catch {
+      // Skip a slot that isn't valid JSON rather than failing the whole snapshot.
+    }
   }
+  return out;
 }
 
 /** Read `?mp_session=` from the URL; if absent, mint one and reflect it back so it can be shared. */
