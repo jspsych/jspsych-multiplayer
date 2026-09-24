@@ -6,7 +6,10 @@
          of the PR, pinned to one build. Switch back to https://unpkg.com/jspsych once it's released. -->
     <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@a6e05be017bcadf6ca208ed2fc0ac79e438c9626/packages/jspsych/dist/index.browser.min.js"></script>
     <script src="https://unpkg.com/@jspsych/plugin-html-keyboard-response"></script>
-    <!-- jatos.js is injected by JATOS at runtime; it is not available outside a JATOS study. -->
+    <!-- JATOS serves jatos.js from the study root, but the study page has to load it itself; it is
+         not injected automatically. Without this tag the `jatos` global is undefined and the adapter
+         can't connect. The path only resolves inside a JATOS study. -->
+    <script src="jatos.js"></script>
     <!-- Once this adapter package is published, load it from a CDN instead:
          <script src="https://unpkg.com/@jspsych-multiplayer/adapter-multiplayer-jatos"></script> -->
     <script src="../dist/index.browser.min.js"></script>
