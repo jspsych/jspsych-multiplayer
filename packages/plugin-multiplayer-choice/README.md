@@ -20,11 +20,10 @@ it owns the option UI and the "everyone has chosen" condition, and adds a reveal
 your own game: pass a `payoff` hook, or (the default) leave it off and derive payoffs from
 `choices_by_player` in `on_finish`.
 
-> **Status.** The pure core, the trial wrapper, and the tests are all implemented. The wrapper is
-> written against a local interface mirroring the jsPsych multiplayer API
-> ([jsPsych#3694](https://github.com/jspsych/jsPsych/pull/3694)); to actually run a trial you need
-> that API present at runtime plus a network adapter (e.g. JATOS group sessions) and several real
-> participants in the same group.
+> **Status.** Requires the jsPsych multiplayer API
+> ([jsPsych#3694](https://github.com/jspsych/jsPsych/pull/3694)), which is not yet in a jsPsych
+> release, plus a network adapter (e.g. JATOS group sessions) and several real participants in the
+> same group. On a jsPsych without `jsPsych.multiplayer`, the trial throws an error saying so.
 
 ## Loading
 
@@ -53,56 +52,73 @@ API adapter (e.g. JATOS group sessions).
 
 ## Parameters
 
-| Parameter          | Type          | Default                                            | Description                                                                                                                            |
-| ------------------ | ------------- | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `choices`          | string[]      | _undefined_ (required)                             | The options this participant can pick from — button contents (HTML allowed, experimenter-authored), like `html-button-response`. The clicked option's zero-based **index** is the value shared with the group. |
-| `prompt`           | HTML string   | `null`                                             | Question / instructions rendered above the option buttons.                                                                           |
-| `button_html`      | fn            | `null`                                             | `(choice, index) => html` producing each button's markup (jsPsych convention). Null uses a plain `jspsych-btn`.                       |
-| `data_key`         | string        | `"choice"`                                         | Session field this participant's choice is stored under. Namespacing avoids colliding with other pushed data and separates two choice trials. |
-| `expected_players` | int           | _undefined_ (required)                             | Group size, **including this participant**, that must choose before the barrier lifts. Set it to the exact expected count.            |
-| `waiting_message`  | HTML string   | `"<p>Waiting for the other players to choose…</p>"`| Shown after this participant chooses, while waiting for the rest of the group.                                                        |
-| `timeout`          | int           | `null`                                             | Milliseconds to wait for the group **after** choosing. On expiry the trial proceeds with whoever chose, flagged `timed_out: true`, and `on_timeout` fires. `null` waits indefinitely. Does not bound how long this participant takes to pick. |
-| `on_timeout`       | fn            | `null`                                             | `(waitError) => void` called if `timeout` elapses before the group has all chosen.                                                    |
-| `reveal`           | bool          | `true`                                             | Reveal the group's decision after the barrier. `false` ends the trial as soon as the group has chosen.                               |
-| `reveal_mode`      | string        | `"players"`                                        | `"players"` lists every player's choice, attributed. `"tally"` shows per-option counts + the plurality winner only — never who chose what. |
-| `reveal_prompt`    | HTML string   | `null`                                             | Heading rendered above the reveal.                                                                                                   |
-| `continue_label`   | string        | `"Continue"`                                       | Label of the button that ends the reveal. `null` hides it (then set `reveal_duration`, or the reveal can't advance — a warning fires). |
-| `reveal_duration`  | int           | `null`                                             | If set, auto-advance the reveal after this many milliseconds (races the continue button if both are set).                            |
-| `player_label`     | fn            | `null`                                             | `(participantId) => string` mapping an id to the name shown on the reveal list. `null` shows the raw participantId. Only used by `reveal_mode: "players"`. |
-| `payoff`           | fn            | `null`                                             | Optional `(choices, me) => number` computing this client's payoff from the collected `{ participantId: { index, label } }` map. Saved as `my_payoff` and shown on the reveal (both modes). `null` skips payoffs — derive them in `on_finish` instead. |
-| `record_choices_by_player` | bool  | `true`                                             | Whether to save the participant → choice map as `choices_by_player`. Set `false` for an anonymous poll (see **Anonymity**).           |
+| Parameter                  | Type          | Default                                             | Description                                                                                                                                                                                                                                                     |
+| -------------------------- | ------------- | --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `choices`                  | string[]      | _undefined_ (required)                              | The options this participant can pick from — button contents (HTML allowed, experimenter-authored), like `html-button-response`. The clicked option's zero-based **index** is the value shared with the group.                                                  |
+| `prompt`                   | HTML string   | `null`                                              | Question / instructions rendered above the option buttons.                                                                                                                                                                                                      |
+| `button_html`              | fn            | `null`                                              | `(choice, index) => html` producing each button's markup (jsPsych convention). Null uses a plain `jspsych-btn`.                                                                                                                                                 |
+| `data_key`                 | string        | `null`                                              | Session field this participant's choice is stored under. `null` generates `choice-1`, `choice-2`, … so every choice trial has its own key (see **Choice keys**).                                                                                                |
+| `expected_players`         | int           | _undefined_ (required)                              | Group size, **including this participant**, that must choose before the barrier lifts. Set it to the exact expected count.                                                                                                                                      |
+| `waiting_message`          | HTML string   | `"<p>Waiting for the other players to choose…</p>"` | Shown after this participant chooses, while waiting for the rest of the group.                                                                                                                                                                                  |
+| `timeout`                  | int           | `null`                                              | Milliseconds to wait for the group **after** choosing. On expiry the trial proceeds with whoever chose, flagged `timed_out: true`, and `on_timeout` fires. `null` waits indefinitely. Does not bound how long this participant takes to pick.                   |
+| `on_timeout`               | fn            | `null`                                              | `(waitError) => void` called if `timeout` elapses before the group has all chosen.                                                                                                                                                                              |
+| `participants`             | array \| null | `null`                                              | Participants the barrier depends on. If one leaves the session first, the trial proceeds with whoever chose, flagged `partner_left: true`. `null` means every other participant who hasn't already left when this participant chooses; `[]` ignores departures. |
+| `reveal`                   | bool          | `true`                                              | Reveal the group's decision after the barrier. `false` ends the trial as soon as the group has chosen.                                                                                                                                                          |
+| `reveal_mode`              | string        | `"players"`                                         | `"players"` lists every player's choice, attributed. `"tally"` shows per-option counts + the plurality winner only — never who chose what.                                                                                                                      |
+| `reveal_prompt`            | HTML string   | `null`                                              | Heading rendered above the reveal.                                                                                                                                                                                                                              |
+| `continue_label`           | string        | `"Continue"`                                        | Label of the button that ends the reveal. `null` hides it (then set `reveal_duration`, or the reveal can't advance — a warning fires).                                                                                                                          |
+| `reveal_duration`          | int           | `null`                                              | If set, auto-advance the reveal after this many milliseconds (races the continue button if both are set).                                                                                                                                                       |
+| `player_label`             | fn            | `null`                                              | `(participantId) => string` mapping an id to the name shown on the reveal list. `null` shows the raw participantId. Only used by `reveal_mode: "players"`.                                                                                                      |
+| `payoff`                   | fn            | `null`                                              | Optional `(choices, me) => number` computing this client's payoff from the collected `{ participantId: { index, label } }` map. Saved as `my_payoff` and shown on the reveal (both modes). `null` skips payoffs — derive them in `on_finish` instead.           |
+| `record_choices_by_player` | bool          | `true`                                              | Whether to save the participant → choice map as `choices_by_player`. Set `false` for an anonymous poll (see **Anonymity**).                                                                                                                                     |
 
 ## Data generated
 
-| Name                | Type   | Description                                                                          |
-| ------------------- | ------ | ----------------------------------------------------------------------------------- |
-| `choice`            | string | This participant's chosen option label.                                             |
-| `choice_index`      | int    | Zero-based index of this participant's chosen option.                               |
-| `rt`                | int    | Time from the options appearing to this participant clicking one, in ms.            |
-| `wait_time`         | int    | Time spent waiting for the rest of the group after choosing, in ms.                 |
+| Name                | Type   | Description                                                                                                                     |
+| ------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------- |
+| `choice`            | string | This participant's chosen option label.                                                                                         |
+| `choice_index`      | int    | Zero-based index of this participant's chosen option.                                                                           |
+| `rt`                | int    | Time from the options appearing to this participant clicking one, in ms.                                                        |
+| `wait_time`         | int    | Time spent waiting for the rest of the group after choosing, in ms.                                                             |
 | `choices_by_player` | object | Every player's choice at the barrier: `{ participantId: { index, label } }`. `null` when `record_choices_by_player` is `false`. |
-| `n_players`         | int    | Number of participants whose choice counted when the barrier resolved (or the timeout fired). |
-| `tally`             | object | The aggregate count at the barrier: one `{ index, label, count }` per option, in `choices` order. |
-| `winner`            | object | The plurality winner `{ index, label, count }`, or `null` on a tie or when no one chose. |
-| `is_tie`            | bool   | `true` when two or more options shared the top count, so there is no single winner. |
-| `tied_options`      | object | The options sharing the top count when `is_tie` is true (`choices` order); empty otherwise. |
-| `my_payoff`         | float  | This client's payoff from the `payoff` hook; `null` if no hook (or it threw/returned a non-number). |
-| `timed_out`         | bool   | `true` if the trial proceeded because `timeout` elapsed rather than because everyone had chosen. |
-| `wait_error`        | string | The `wait()` rejection message when the barrier ended without the full group; `null` otherwise. |
+| `n_players`         | int    | Number of participants whose choice counted when the barrier resolved (or the timeout fired).                                   |
+| `tally`             | object | The aggregate count at the barrier: one `{ index, label, count }` per option, in `choices` order.                               |
+| `winner`            | object | The plurality winner `{ index, label, count }`, or `null` on a tie or when no one chose.                                        |
+| `is_tie`            | bool   | `true` when two or more options shared the top count, so there is no single winner.                                             |
+| `tied_options`      | object | The options sharing the top count when `is_tie` is true (`choices` order); empty otherwise.                                     |
+| `my_payoff`         | float  | This client's payoff from the `payoff` hook; `null` if no hook (or it threw/returned a non-number).                             |
+| `data_key`          | string | The session field the choices were stored under (`data_key`, or the generated `choice-N`).                                      |
+| `timed_out`         | bool   | `true` if the trial proceeded because `timeout` elapsed rather than because everyone had chosen.                                |
+| `partner_left`      | bool   | `true` if the trial proceeded because a participant in `participants` left the session.                                         |
+| `left_participant`  | string | The ID of the participant who left, when `partner_left` is true; `null` otherwise.                                              |
+| `connection_lost`   | bool   | `true` if the trial proceeded because this participant's connection was lost for good.                                          |
+| `wait_error`        | string | The message of the error that ended the barrier without the full group; `null` otherwise.                                       |
 
 ## How the barrier works
 
-Each client pushes `{ index, label }` under `data_key` when it chooses. The barrier condition is
-"at least `expected_players` participants have a valid choice **within the option range**", checked
-over the shared snapshot on every update — the same deterministic-consensus idea the other
-multiplayer plugins use. A participant without a valid, in-range integer `index` under `data_key` is
-not counted as having chosen, so a stray push of other data — or a stale out-of-range pick left under
-a reused `data_key` — never trips the barrier early, and the barrier's count always agrees with the
-`tally`/`n_players` the trial records.
+Each client writes `{ index, label }` under `data_key` when it chooses, merged into its slot so other
+data survives. The barrier condition is "at least `expected_players` participants who haven't left
+the session have a valid choice **within the option range**", checked over the shared snapshot on
+every update — the same deterministic-consensus idea the other multiplayer plugins use. A participant
+without a valid, in-range integer `index` under `data_key` is not counted as having chosen, so a
+stray write of other data never trips the barrier early, and the barrier's count always agrees with
+the `tally`/`n_players` the trial records. The recorded outcome includes every choice made under
+`data_key`, including one from a participant who has since left.
 
-On `timeout` the trial does not hang: it proceeds with whoever has chosen so far, sets
-`timed_out: true`, and calls `on_timeout` — an experiment should decide (e.g. in `on_finish`) how to
-treat a non-responder.
+The trial does not hang when the group can't finish. It proceeds with whoever has chosen so far if
+`timeout` elapses (`timed_out: true`, and `on_timeout` is called), if a participant in `participants`
+leaves (`partner_left: true`), or if this participant's connection is lost (`connection_lost: true`).
+An experiment should decide (e.g. in `on_finish`) how to treat those cases.
+
+### Choice keys
+
+Each choice trial stores choices under its own `data_key`, so a choice left over from an earlier
+trial can never count toward a later one. By default the key is `choice-1` for the first choice
+trial this participant reaches, `choice-2` for the second, and so on. Participants have to pass the
+barriers in the same order, so the Nth choice trial gets the same key for everyone, however many
+other trials each participant saw. Set an explicit `data_key` for a choice trial that only some
+participants reach (for example inside a `conditional_function`); the default count also starts over
+if the page reloads. An explicit `data_key` is used as-is and doesn't advance the default count.
 
 ## Anonymous polls (tally mode)
 
@@ -172,9 +188,10 @@ The full decision map is saved in `choices_by_player` (unless disabled), the agg
 import MultiplayerChoice from "@jspsych-multiplayer/plugin-multiplayer-choice";
 
 // e.g. tally a public-goods round from a snapshot:
-const choices = MultiplayerChoice.collectChoices(group, "choice"); // { id: { index, label } }
+// (data.data_key holds the key the trial used, e.g. "choice-1")
+const choices = MultiplayerChoice.collectChoices(group, data.data_key); // { id: { index, label } }
 // or re-tally and resolve the winner yourself:
-const counts = MultiplayerChoice.tally(group, "choice", ["Red", "Green", "Blue"]);
+const counts = MultiplayerChoice.tally(group, data.data_key, ["Red", "Green", "Blue"]);
 const { winner, isTie } = MultiplayerChoice.plurality(counts);
 ```
 

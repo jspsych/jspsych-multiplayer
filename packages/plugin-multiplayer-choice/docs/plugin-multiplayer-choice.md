@@ -6,44 +6,44 @@ A simultaneous group decision: every participant picks one of the same options, 
 
 In addition to the [parameters available in all plugins](https://www.jspsych.org/latest/overview/plugins#parameters-available-in-all-plugins), this plugin accepts the following parameters. Parameters with a default value of undefined must be specified.
 
-| Parameter          | Type               | Default Value                                       | Description                                                                                                                        |
-| ------------------ | ------------------ | --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `choices`          | string[]           | _undefined_                                         | The options this participant can pick from (button contents, HTML allowed). The clicked option's zero-based index is shared with the group. |
-| `prompt`           | HTML string        | `null`                                              | Question / instructions above the buttons.                                                                                        |
-| `button_html`      | function           | `null`                                              | `(choice, index) => html` for each button (jsPsych convention). Null uses a plain `jspsych-btn`.                                  |
-| `data_key`         | string             | `"choice"`                                          | Session field this participant's choice is stored under.                                                                          |
-| `expected_players` | integer            | _undefined_                                         | Group size, including this participant, that must choose before the barrier lifts.                                               |
-| `waiting_message`  | HTML string        | `"<p>Waiting for the other players to choose…</p>"` | Shown after choosing, while waiting for the group.                                                                               |
-| `timeout`          | integer            | `null`                                              | Milliseconds to wait for the group after choosing; on expiry the trial proceeds partial with `timed_out: true`. Null waits forever. |
-| `on_timeout`       | function           | `null`                                              | `(waitError) => void` called if `timeout` elapses before everyone has chosen.                                                     |
-| `reveal`           | boolean            | `true`                                              | Reveal the group's decision after the barrier. `false` ends as soon as the group has chosen.                                     |
-| `reveal_mode`      | string             | `"players"`                                         | `"players"` lists every player's choice, attributed; `"tally"` shows per-option counts + the plurality winner only (anonymous poll). |
-| `reveal_prompt`    | HTML string        | `null`                                              | Heading above the reveal.                                                                                                         |
-| `continue_label`   | string             | `"Continue"`                                        | Button that ends the reveal. Null hides it (then set `reveal_duration`).                                                          |
-| `reveal_duration`  | integer            | `null`                                              | Auto-advance the reveal after this many ms.                                                                                       |
-| `player_label`     | function           | `null`                                              | `(participantId) => string` name shown on the reveal list (`"players"` mode only).                                                |
-| `payoff`           | function           | `null`                                              | Optional `(choices, me) => number` payoff for this client; saved as `my_payoff` and shown on the reveal (both modes).             |
-| `record_choices_by_player` | boolean    | `true`                                              | Whether to save the participant → choice map as `choices_by_player`. `false` keeps the recorded data anonymous (aggregate only).  |
+| Parameter                  | Type        | Default Value                                       | Description                                                                                                                                 |
+| -------------------------- | ----------- | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `choices`                  | string[]    | _undefined_                                         | The options this participant can pick from (button contents, HTML allowed). The clicked option's zero-based index is shared with the group. |
+| `prompt`                   | HTML string | `null`                                              | Question / instructions above the buttons.                                                                                                  |
+| `button_html`              | function    | `null`                                              | `(choice, index) => html` for each button (jsPsych convention). Null uses a plain `jspsych-btn`.                                            |
+| `data_key`                 | string      | `"choice"`                                          | Session field this participant's choice is stored under.                                                                                    |
+| `expected_players`         | integer     | _undefined_                                         | Group size, including this participant, that must choose before the barrier lifts.                                                          |
+| `waiting_message`          | HTML string | `"<p>Waiting for the other players to choose…</p>"` | Shown after choosing, while waiting for the group.                                                                                          |
+| `timeout`                  | integer     | `null`                                              | Milliseconds to wait for the group after choosing; on expiry the trial proceeds partial with `timed_out: true`. Null waits forever.         |
+| `on_timeout`               | function    | `null`                                              | `(waitError) => void` called if `timeout` elapses before everyone has chosen.                                                               |
+| `reveal`                   | boolean     | `true`                                              | Reveal the group's decision after the barrier. `false` ends as soon as the group has chosen.                                                |
+| `reveal_mode`              | string      | `"players"`                                         | `"players"` lists every player's choice, attributed; `"tally"` shows per-option counts + the plurality winner only (anonymous poll).        |
+| `reveal_prompt`            | HTML string | `null`                                              | Heading above the reveal.                                                                                                                   |
+| `continue_label`           | string      | `"Continue"`                                        | Button that ends the reveal. Null hides it (then set `reveal_duration`).                                                                    |
+| `reveal_duration`          | integer     | `null`                                              | Auto-advance the reveal after this many ms.                                                                                                 |
+| `player_label`             | function    | `null`                                              | `(participantId) => string` name shown on the reveal list (`"players"` mode only).                                                          |
+| `payoff`                   | function    | `null`                                              | Optional `(choices, me) => number` payoff for this client; saved as `my_payoff` and shown on the reveal (both modes).                       |
+| `record_choices_by_player` | boolean     | `true`                                              | Whether to save the participant → choice map as `choices_by_player`. `false` keeps the recorded data anonymous (aggregate only).            |
 
 ## Data Generated
 
 In addition to the [default data collected by all plugins](https://www.jspsych.org/latest/overview/plugins#data-collected-by-all-plugins), this plugin collects:
 
-| Name                | Type    | Value                                                                                 |
-| ------------------- | ------- | ------------------------------------------------------------------------------------- |
-| `choice`            | string  | This participant's chosen option label.                                               |
-| `choice_index`      | integer | Zero-based index of the chosen option.                                                |
-| `rt`                | integer | Time from the options appearing to the click, in ms.                                  |
-| `wait_time`         | integer | Time spent waiting for the group after choosing, in ms.                               |
+| Name                | Type    | Value                                                                                                                           |
+| ------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `choice`            | string  | This participant's chosen option label.                                                                                         |
+| `choice_index`      | integer | Zero-based index of the chosen option.                                                                                          |
+| `rt`                | integer | Time from the options appearing to the click, in ms.                                                                            |
+| `wait_time`         | integer | Time spent waiting for the group after choosing, in ms.                                                                         |
 | `choices_by_player` | object  | Every player's choice at the barrier: `{ participantId: { index, label } }`. `null` when `record_choices_by_player` is `false`. |
-| `n_players`         | integer | Number of participants whose choice counted when the barrier resolved (or timed out). |
-| `tally`             | object  | The aggregate count: one `{ index, label, count }` per option, in `choices` order.    |
-| `winner`            | object  | The plurality winner `{ index, label, count }`, or `null` on a tie / no picks.        |
-| `is_tie`            | boolean | `true` when two or more options shared the top count.                                 |
-| `tied_options`      | object  | The options sharing the top count when `is_tie` is true; empty otherwise.             |
-| `my_payoff`         | float   | This client's payoff from the `payoff` hook; `null` if no hook.                        |
-| `timed_out`         | boolean | `true` if the trial proceeded because `timeout` elapsed.                               |
-| `wait_error`        | string  | The `wait()` rejection message when the barrier ended without the full group; else `null`. |
+| `n_players`         | integer | Number of participants whose choice counted when the barrier resolved (or timed out).                                           |
+| `tally`             | object  | The aggregate count: one `{ index, label, count }` per option, in `choices` order.                                              |
+| `winner`            | object  | The plurality winner `{ index, label, count }`, or `null` on a tie / no picks.                                                  |
+| `is_tie`            | boolean | `true` when two or more options shared the top count.                                                                           |
+| `tied_options`      | object  | The options sharing the top count when `is_tie` is true; empty otherwise.                                                       |
+| `my_payoff`         | float   | This client's payoff from the `payoff` hook; `null` if no hook.                                                                 |
+| `timed_out`         | boolean | `true` if the trial proceeded because `timeout` elapsed.                                                                        |
+| `wait_error`        | string  | The `wait()` rejection message when the barrier ended without the full group; else `null`.                                      |
 
 ## Install
 
@@ -107,10 +107,7 @@ const contribute = {
   choices: ["0", "2", "5", "10"],
   expected_players: 4,
   on_finish: (data) => {
-    const pot = Object.values(data.choices_by_player).reduce(
-      (sum, c) => sum + Number(c.label),
-      0
-    );
+    const pot = Object.values(data.choices_by_player).reduce((sum, c) => sum + Number(c.label), 0);
     data.group_return = (pot * 1.6) / 4; // split the multiplied pot
   },
 };
