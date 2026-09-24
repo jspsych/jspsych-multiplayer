@@ -22,6 +22,9 @@ export class MemoryHub {
   data: GroupSessionData = {};
   connections = new Set<MemoryConnection>();
 
+  /** Participants with no jsPsych instance in the test who count as connected. See addPeer(). */
+  peers = new Set<string>();
+
   /** Tell every open connection that something changed. */
   broadcast() {
     for (const connection of [...this.connections]) {
@@ -31,10 +34,32 @@ export class MemoryHub {
 
   /**
    * Write a participant's slot directly, as if a participant with no jsPsych
-   * instance in the test had pushed it.
+   * instance in the test had pushed it. The participant isn't connected, so
+   * sessions see them as `away`, like a slot left over from an earlier member;
+   * use addPeer() for a participant who is present. Seeding the ID of a
+   * participant who has a session in the test has no visible effect, because
+   * that session owns its own slot.
    */
   seed(participantId: string, data: Record<string, unknown>) {
     this.data = { ...this.data, [participantId]: data };
+    this.broadcast();
+  }
+
+  /**
+   * Add a connected participant who has no jsPsych instance in the test, and
+   * optionally write their slot. removePeer() makes them drop out.
+   */
+  addPeer(participantId: string, data?: Record<string, unknown>) {
+    this.peers.add(participantId);
+    if (data) {
+      this.seed(participantId, data);
+    } else {
+      this.broadcast();
+    }
+  }
+
+  removePeer(participantId: string) {
+    this.peers.delete(participantId);
     this.broadcast();
   }
 
@@ -81,7 +106,8 @@ export class MemoryConnection implements MultiplayerConnection {
   }
 
   connectedParticipants() {
-    return [...this.hub.connections].filter((c) => c.online).map((c) => c.participantId);
+    const live = [...this.hub.connections].filter((c) => c.online).map((c) => c.participantId);
+    return [...live, ...this.hub.peers];
   }
 
   push(data: Record<string, unknown>) {

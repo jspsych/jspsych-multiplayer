@@ -22,7 +22,9 @@ an error saying so.
   participant who is connected when the wait starts (`null`), except in sync, where it defaults to
   `[]` (ignore departures) because sync is often used as a lobby. If one leaves, the trial ends the
   way a timeout would, and records `partner_left: true` and `left_participant`.
-  Counts, lobbies, and partitions ignore participants who have left.
+  Counts, lobbies, and partitions ignore participants who have left. match and role also wait until
+  every participant they count is connected, so clients agree on the group and a slot left over from
+  an earlier member is never matched or given a role.
 - **Lost connections** end the wait with `connection_lost: true` instead of failing the trial.
   Countdown keeps running locally and records `connection_lost`.
 - **One key per gate.** ready, choice, and scoreboard now tie each trial's writes to that trial:

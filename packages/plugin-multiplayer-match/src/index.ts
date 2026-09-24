@@ -209,7 +209,12 @@ class MultiplayerMatchPlugin implements JsPsychPlugin<Info> {
     // The presence the group was ready under, so the partition covers exactly who was counted
     let readyPresence: PresenceData = {};
     const ready = (group: GroupSessionData, presence: PresenceData) => {
-      const met = isReady(withoutLeft(group, presence), presence);
+      const members = withoutLeft(group, presence);
+      // Each participant computes the result on its own, so wait until everyone counted is
+      // connected: then every view agrees on the group, and a leftover slot that is only `away`
+      // can't be included before it turns `left`.
+      if (!Object.keys(members).every((id) => presence[id] === "connected")) return false;
+      const met = isReady(members, presence);
       if (met) readyPresence = presence;
       return met;
     };

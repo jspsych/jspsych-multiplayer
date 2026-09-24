@@ -20,7 +20,7 @@ async function setup(participantId = "a", connect?: ConnectOptions) {
   };
   const api = {
     seed: (id: string, data: Record<string, unknown>) =>
-      id === participantId ? void multiplayer.update(data) : hub.seed(id, data),
+      id === participantId ? void multiplayer.update(data) : hub.addPeer(id, data),
     get: (id: string) => multiplayer.get(id),
   };
   return { hub, me, multiplayer, jsPsych, finished, api };
@@ -313,7 +313,7 @@ describe("plugin-multiplayer-match — real jsPsych pipeline (startTimeline smok
   it("runs through jsPsych's parameter pipeline, records trial_type and the match", async () => {
     const hub = new MemoryHub();
     const { jsPsych } = await hub.join("p1");
-    hub.seed("p2", {});
+    hub.addPeer("p2", {});
 
     const { getData, expectFinished } = await startTimeline(
       [{ type: MultiplayerMatchPlugin, expected_players: 2, group_size: 2 }],
@@ -355,6 +355,23 @@ describe("plugin-multiplayer-match — departures", () => {
       match_map: null,
     });
     expect(on_timeout).not.toHaveBeenCalled();
+  });
+
+  it("waits out a leftover slot that is only away instead of matching it", async () => {
+    const { hub, api, jsPsych, finished } = await setup("a", { dropoutTimeout: 20 });
+    hub.seed("ghost", {}); // not connected, so `away` until it turns `left`
+
+    const done = new MultiplayerMatchPlugin(jsPsych as never).trial(display(), {
+      ...base,
+      ready: (s: GroupSessionData) => Object.keys(s).length >= 2,
+    } as never) as Promise<void>;
+    await sleep(5);
+    expect(finished).toHaveLength(0);
+
+    await sleep(40);
+    api.seed("b", {});
+    await done;
+    expect(Object.keys(finished[0].match_map).sort()).toEqual(["a", "b"]);
   });
 
   it("neither counts nor partitions participants who have left", async () => {

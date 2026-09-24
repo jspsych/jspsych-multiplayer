@@ -7,7 +7,7 @@ import MultiplayerRolePlugin from ".";
 /**
  * A jsPsych stand-in whose `multiplayer` is a real session on an in-memory hub, so the plugin runs
  * against the actual core (frozen snapshots, presence, errors) while `finishTrial` is captured.
- * `api.seed(id, data)` writes a participant's slot, as if they had written it.
+ * `api.seed(id, data)` writes a participant's slot as if they had written it, and marks them connected.
  */
 async function setup(participantId = "p1", connect?: ConnectOptions) {
   const hub = new MemoryHub();
@@ -20,7 +20,7 @@ async function setup(participantId = "p1", connect?: ConnectOptions) {
   };
   const api = {
     seed: (id: string, data: Record<string, unknown>) =>
-      id === participantId ? void multiplayer.update(data) : hub.seed(id, data),
+      id === participantId ? void multiplayer.update(data) : hub.addPeer(id, data),
     get: (id: string) => multiplayer.get(id),
   };
   return { hub, me, multiplayer, jsPsych, finished, api };
@@ -450,7 +450,7 @@ describe("plugin-multiplayer-role — real jsPsych pipeline (startTimeline smoke
     const hub = new MemoryHub();
     const { jsPsych } = await hub.join("p1");
     await jsPsych.multiplayer.update({ joinedAt: 100 });
-    hub.seed("p2", { joinedAt: 200 });
+    hub.addPeer("p2", { joinedAt: 200 });
 
     // jsPsych's parameter pipeline warns when a FUNCTION-typed parameter receives a string — the
     // documented, deliberate tradeoff of typing `strategy` as FUNCTION (see info.parameters). Capture
@@ -516,6 +516,26 @@ describe("plugin-multiplayer-role — departures", () => {
       timed_out: false,
     });
     expect(onTimeout).not.toHaveBeenCalled();
+  });
+
+  it("waits out a leftover slot that is only away instead of giving it a role", async () => {
+    const { hub, api, jsPsych, finished } = await setup("p1", { dropoutTimeout: 20 });
+    await jsPsych.multiplayer.update({ joinedAt: 100 });
+    hub.seed("ghost", { joinedAt: 1 }); // not connected, so `away` until it turns `left`
+
+    const done = new MultiplayerRolePlugin(jsPsych as never).trial(display(), {
+      ...trialBase,
+      group_size: null,
+      ready: (s: GroupSessionData) => Object.keys(s).length >= 2,
+    } as never) as Promise<void>;
+    await sleep(5);
+    expect(finished).toHaveLength(0);
+
+    await sleep(40);
+    api.seed("p2", { joinedAt: 200 });
+    await done;
+    expect(Object.keys(finished[0].role_map).sort()).toEqual(["p1", "p2"]);
+    expect(finished[0].role).toBe("a");
   });
 
   it("neither counts nor assigns participants who have left", async () => {
