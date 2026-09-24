@@ -16,7 +16,8 @@
     "prepare": "husky install",
     "changeset": "changeset",
     "changeset:version": "changeset version && npm install && npm run update-unpkg-links && npm run update-readme",
-    "changeset:publish": "npm run build && changeset publish"
+    "changeset:publish": "npm run build && changeset publish",
+    "vendor-jspsych": "node scripts/vendor-jspsych-preview.mjs"
   },
   "dependencies": {
     "gulp": "^5.0.0",
@@ -31,7 +32,7 @@
     "@jspsych/plugin-html-keyboard-response": "^2.1.0",
     "husky": "^7.0.1",
     "import-sort-style-module": "^6.0.0",
-    "jspsych": "8.2.3",
+    "jspsych": "file:vendor/jspsych",
     "lint-staged": "^17.2.0",
     "prettier": "^3.9.6",
     "prettier-plugin-import-sort": "^0.0.7"
@@ -52,5 +53,8 @@
     "projects": [
       "<rootDir>/packages/*/jest.config.cjs"
     ]
+  },
+  "overrides": {
+    "jspsych": "$jspsych"
   }
 }

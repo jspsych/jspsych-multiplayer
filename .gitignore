@@ -11,3 +11,6 @@ coverage/
 dist.zip
 .idea
 .claude/
+
+# The vendored jsPsych preview build (see scripts/vendor-jspsych-preview.mjs) ships its dist
+!/vendor/jspsych/dist/
