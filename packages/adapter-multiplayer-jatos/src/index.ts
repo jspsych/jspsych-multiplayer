@@ -1,6 +1,7 @@
 import type {
   AdapterConnectOptions,
   GroupSessionData,
+  GroupState,
   MultiplayerAdapter,
   MultiplayerConnection,
 } from "jspsych";
@@ -48,6 +49,18 @@ declare const jatos: {
   /** IDs of the group members whose group channel is currently open. */
   groupChannels?: Array<string | number>;
   /**
+   * IDs of the group's members, whether or not their channel is open. A member who leaves
+   * the group (not just drops their channel) is removed.
+   */
+  groupMembers?: Array<string | number>;
+  /** The batch's settings. `maxActiveMembers` is null when the batch sets no limit. */
+  batchProperties?: { maxActiveMembers?: number | null } | null;
+  /**
+   * Ask the server to fix the group, so no new members can join. jatos.js calls onSuccess
+   * once the server confirms. The server tells only this member, not the others.
+   */
+  setGroupFixed?(onSuccess?: () => void, onFail?: (err: unknown) => void): unknown;
+  /**
    * Join a group study and open the WebSocket channel. jatos.js keeps one set of
    * callbacks for the whole page, and each call replaces it. Current builds return a
    * promise that settles when the channel opens or fails to open; older builds return
@@ -78,6 +91,13 @@ export interface JatosAdapterOptions {
    * a participant who stays offline.
    */
   closeAfterReconnectingMs?: number | null;
+  /**
+   * Fix the JATOS group once it has the batch's `maxActiveMembers`, so a member who drops
+   * out mid-study counts as a dropout instead of freeing their place for a newcomer.
+   * Default `true`. Set `false` to decide when to seal yourself, with
+   * `jsPsych.multiplayer.sealGroup()`.
+   */
+  sealWhenFull?: boolean;
 }
 
 /** First and longest wait, in ms, before retrying a join that jatos.js refused. */
@@ -118,6 +138,7 @@ let activeConnection: JatosConnection | null = null;
 export default class JatosAdapter implements MultiplayerAdapter {
   private readonly connectTimeoutMs: number;
   private readonly closeAfterReconnectingMs: number | null;
+  private readonly sealWhenFull: boolean;
 
   constructor(options: JatosAdapterOptions = {}) {
     if (typeof jatos === "undefined") {
@@ -133,6 +154,7 @@ export default class JatosAdapter implements MultiplayerAdapter {
       typeof closeAfter === "number" && Number.isFinite(closeAfter) && closeAfter >= 0
         ? closeAfter
         : null;
+    this.sealWhenFull = options.sealWhenFull ?? true;
   }
 
   connect(options: AdapterConnectOptions): Promise<MultiplayerConnection> {
@@ -156,6 +178,7 @@ export default class JatosAdapter implements MultiplayerAdapter {
     const connection = new JatosConnection(participantId, options, {
       connectTimeoutMs: this.connectTimeoutMs,
       closeAfterReconnectingMs: this.closeAfterReconnectingMs,
+      sealWhenFull: this.sealWhenFull,
     });
     activeConnection = connection;
     // A closed connection may still be leaving the group or settling a cancelled join; the
@@ -178,6 +201,12 @@ class JatosConnection implements MultiplayerConnection {
    */
   private data: GroupSessionData = {};
   private channels: string[] = [];
+  private members: string[] = [];
+
+  /** True once the JATOS server confirmed it fixed the group. */
+  private fixed = false;
+  /** The setGroupFixed() request in flight, if any. */
+  private fixing: Promise<void> | null = null;
 
   /** Settles the pending connect() promise; null once it has settled. */
   private settleOpen: { resolve: () => void; reject: (error: Error) => void } | null = null;
@@ -204,6 +233,7 @@ class JatosConnection implements MultiplayerConnection {
     private readonly settings: {
       connectTimeoutMs: number;
       closeAfterReconnectingMs: number | null;
+      sealWhenFull: boolean;
     },
   ) {
     this.released = new Promise((resolve) => (this.resolveReleased = resolve));
@@ -353,6 +383,35 @@ class JatosConnection implements MultiplayerConnection {
     }
   }
 
+  group(): GroupState {
+    return { size: groupSize(), members: this.members, sealed: this.fixed };
+  }
+
+  /** Fix the JATOS group, waiting for a dropped channel to reopen first. */
+  sealGroup(): Promise<void> {
+    if (this.fixed) return Promise.resolve();
+    this.fixing ??= (async () => {
+      try {
+        await this.whenOpen(undefined);
+        if (typeof jatos.setGroupFixed !== "function") {
+          throw new Error("JatosAdapter: this jatos.js has no setGroupFixed().");
+        }
+        await new Promise<void>((resolve, reject) => {
+          jatos.setGroupFixed!(
+            () => resolve(),
+            (err) => reject(new Error(`JatosAdapter: couldn't fix the group — ${err}`)),
+          );
+        });
+        if (this.state === "closed") return;
+        this.fixed = true;
+        this.options.onChange();
+      } finally {
+        this.fixing = null;
+      }
+    })();
+    return this.fixing;
+  }
+
   disconnect(): Promise<void> {
     if (this.state !== "closed") {
       this.close(new Error("JatosAdapter: push failed because the connection was disconnected."));
@@ -389,6 +448,7 @@ class JatosConnection implements MultiplayerConnection {
       const settle = this.settleOpen;
       this.settleOpen = null;
       settle?.resolve();
+      this.sealIfFull();
     } else if (this.state === "reconnecting") {
       // jatos.js reopened a dropped channel
       this.state = "connected";
@@ -396,6 +456,7 @@ class JatosConnection implements MultiplayerConnection {
       for (const waiter of this.reopenWaiters.splice(0)) waiter.resolve();
       this.options.onStatus("connected");
       this.options.onChange();
+      this.sealIfFull();
     }
   }
 
@@ -403,6 +464,23 @@ class JatosConnection implements MultiplayerConnection {
     if (this.state !== "connected") return;
     this.refresh();
     this.options.onChange();
+    this.sealIfFull();
+  }
+
+  /**
+   * With `sealWhenFull`, fix the group once it has the batch's maxActiveMembers. JATOS
+   * assigns members on its server and never puts one into a full group, but a member who
+   * leaves an unfixed group frees their place. Every member asks; the server treats the
+   * extra requests as no-ops. A failed request is retried on the next change.
+   */
+  private sealIfFull() {
+    if (!this.settings.sealWhenFull || this.fixed || this.fixing || this.state !== "connected") {
+      return;
+    }
+    const size = groupSize();
+    if (size !== null && this.members.length >= size) {
+      this.sealGroup().catch((e) => console.warn(e));
+    }
   }
 
   private handleError(errMsg?: string) {
@@ -448,6 +526,7 @@ class JatosConnection implements MultiplayerConnection {
     if (this.state === "reconnecting" || this.state === "closed") return;
     this.data = (jatos.groupSession.getAll() ?? {}) as GroupSessionData;
     this.channels = (jatos.groupChannels ?? []).map(String);
+    this.members = (jatos.groupMembers ?? []).map(String);
   }
 
   private failOpen(error: Error) {
@@ -511,6 +590,12 @@ class JatosConnection implements MultiplayerConnection {
     }).then(() => this.release());
     return this.leaving;
   }
+}
+
+/** The batch's maxActiveMembers, or null when it sets no limit. */
+function groupSize(): number | null {
+  const size = jatos.batchProperties?.maxActiveMembers;
+  return typeof size === "number" && Number.isInteger(size) && size > 0 ? size : null;
 }
 
 function withCause(error: Error, cause: unknown): Error {

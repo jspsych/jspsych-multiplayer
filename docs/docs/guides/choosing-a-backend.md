@@ -75,7 +75,9 @@ Three things to plan for:
 
 - **You form the groups.** Everyone who opens the experiment with the same `?mp_session=`
   value in the address is in the same group, so each group needs its own link. JATOS, by
-  contrast, puts arriving participants into groups for you.
+  contrast, puts participants who arrive at one link into groups for you, and
+  `jsPsych.multiplayer.waitForGroup()` holds them in a waiting room until their group is full
+  (see [Forming groups](../reference/adapter-multiplayer-jatos#forming-groups)).
 - **The configuration is public.** Anyone can read it from your experiment's page. The
   security rules are what protect the data, so always deploy them.
 - **Recruitment and saving the jsPsych data are up to you.** Firebase only carries the shared

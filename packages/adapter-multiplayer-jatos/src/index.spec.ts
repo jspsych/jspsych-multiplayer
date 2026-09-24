@@ -41,6 +41,8 @@ function makeMockJatos(
   /** Held leave requests, released by finishLeave(). */
   let heldLeave: (() => void) | null = null;
   let holdLeaves = false;
+  /** When set, the next setGroupFixed() fails with it. */
+  let fixFailure: string | null = null;
   /** Called whenever what the server holds changes: data or open channels. */
   const serverListeners = new Set<() => void>();
   const serverChanged = () => serverListeners.forEach((listener) => listener());
@@ -50,6 +52,14 @@ function makeMockJatos(
     workerId,
     groupResultId: null as string | number | null,
     groupChannels: [] as Array<string | number>,
+    groupMembers: [] as Array<string | number>,
+    batchProperties: { maxActiveMembers: null } as { maxActiveMembers: number | null },
+    /** Like the server: fixing confirms only to the member who asked, after a round trip. */
+    setGroupFixed: jest.fn((onSuccess?: () => void, onFail?: (err: unknown) => void) => {
+      const failure = fixFailure;
+      fixFailure = null;
+      void Promise.resolve().then(() => (failure ? onFail?.(failure) : onSuccess?.()));
+    }),
     joinGroup: jest.fn((cbs: Record<string, (...args: unknown[]) => void>): unknown => {
       callbacks = cbs;
       if (closing) {
@@ -84,6 +94,17 @@ function makeMockJatos(
     jatos,
     store,
     serverListeners,
+    /** Make the next setGroupFixed() fail. */
+    failNextFix(reason: string) {
+      fixFailure = reason;
+    },
+    /** Another member leaves the group for good, freeing their place in an unfixed group. */
+    memberLeave(id: number) {
+      jatos.groupMembers = jatos.groupMembers.filter((m) => m !== id);
+      jatos.groupChannels = jatos.groupChannels.filter((c) => c !== id);
+      callbacks.onMemberLeave?.(id);
+      serverChanged();
+    },
     /** Later channels open without a group result ID. */
     omitGroupResultId() {
       groupId = null;
@@ -110,6 +131,7 @@ function makeMockJatos(
       wiped = false;
       jatos.groupResultId = groupId;
       if (!jatos.groupChannels.includes(self)) jatos.groupChannels.push(self);
+      if (!jatos.groupMembers.includes(self)) jatos.groupMembers.push(self);
       join?.resolve();
       join = null;
       callbacks.onOpen?.(self);
@@ -130,6 +152,7 @@ function makeMockJatos(
     /** Another member's channel opens. */
     memberOpen(id: number) {
       jatos.groupChannels.push(id);
+      if (!jatos.groupMembers.includes(id)) jatos.groupMembers.push(id);
       callbacks.onMemberOpen?.(id);
       serverChanged();
     },
@@ -636,6 +659,116 @@ describe("with the jsPsych multiplayer session", () => {
     mock.open();
     expect(jsPsych.multiplayer.status).toBe("connected");
 
+    await jsPsych.multiplayer.disconnect();
+  });
+});
+
+describe("forming groups", () => {
+  test("group() reports the batch's maxActiveMembers and the group's members", async () => {
+    mock.jatos.batchProperties.maxActiveMembers = 3;
+    const { connection } = await connected();
+    mock.memberOpen(2002);
+    expect(connection.group!()).toEqual({ size: 3, members: ["1001", "2002"], sealed: false });
+
+    // A member whose channel dropped is still a member
+    mock.memberClose(2002);
+    expect(connection.group!().members).toEqual(["1001", "2002"]);
+  });
+
+  test("without maxActiveMembers the size is null and the group is never fixed automatically", async () => {
+    const { connection } = await connected();
+    mock.memberOpen(2002);
+    await flushPromises();
+    expect(connection.group!().size).toBeNull();
+    expect(mock.jatos.setGroupFixed).not.toHaveBeenCalled();
+  });
+
+  test("fixes the group once it has maxActiveMembers, and reports it sealed", async () => {
+    mock.jatos.batchProperties.maxActiveMembers = 2;
+    const { connection, options } = await connected();
+    expect(mock.jatos.setGroupFixed).not.toHaveBeenCalled();
+
+    (options.onChange as jest.Mock).mockClear();
+    mock.memberOpen(2002);
+    // Sealed only once the server confirms
+    expect(connection.group!().sealed).toBe(false);
+    await flushPromises();
+    expect(mock.jatos.setGroupFixed).toHaveBeenCalledTimes(1);
+    expect(connection.group!()).toEqual({ size: 2, members: ["1001", "2002"], sealed: true });
+    expect(options.onChange).toHaveBeenCalled();
+
+    // Later changes don't ask again
+    mock.fireGroupSession();
+    await flushPromises();
+    expect(mock.jatos.setGroupFixed).toHaveBeenCalledTimes(1);
+  });
+
+  test("a place freed before the group is full is not sealed away", async () => {
+    mock.jatos.batchProperties.maxActiveMembers = 3;
+    const { connection } = await connected();
+    mock.memberOpen(2002);
+    mock.memberLeave(2002);
+    mock.memberOpen(3003);
+    expect(connection.group!()).toEqual({ size: 3, members: ["1001", "3003"], sealed: false });
+    expect(mock.jatos.setGroupFixed).not.toHaveBeenCalled();
+  });
+
+  test("with sealWhenFull false, only sealGroup() fixes the group", async () => {
+    mock.jatos.batchProperties.maxActiveMembers = 2;
+    const { connection } = await connected(new JatosAdapter({ sealWhenFull: false }));
+    mock.memberOpen(2002);
+    await flushPromises();
+    expect(mock.jatos.setGroupFixed).not.toHaveBeenCalled();
+
+    await connection.sealGroup!();
+    expect(mock.jatos.setGroupFixed).toHaveBeenCalledTimes(1);
+    expect(connection.group!().sealed).toBe(true);
+    await connection.sealGroup!();
+    expect(mock.jatos.setGroupFixed).toHaveBeenCalledTimes(1);
+  });
+
+  test("a failed fix rejects sealGroup(), and the automatic fix is retried on the next change", async () => {
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+    mock.jatos.batchProperties.maxActiveMembers = 2;
+    const { connection } = await connected();
+    mock.failNextFix("Timeout sending message");
+    mock.memberOpen(2002);
+    await flushPromises();
+    expect(connection.group!().sealed).toBe(false);
+    expect(warn).toHaveBeenCalled();
+
+    mock.fireGroupSession();
+    await flushPromises();
+    expect(mock.jatos.setGroupFixed).toHaveBeenCalledTimes(2);
+    expect(connection.group!().sealed).toBe(true);
+    warn.mockRestore();
+  });
+
+  test("sealGroup() waits for a dropped channel to reopen", async () => {
+    const { connection } = await connected(new JatosAdapter({ sealWhenFull: false }));
+    mock.drop();
+    const sealing = connection.sealGroup!();
+    await flushPromises();
+    expect(mock.jatos.setGroupFixed).not.toHaveBeenCalled();
+    mock.open();
+    await sealing;
+    expect(connection.group!().sealed).toBe(true);
+  });
+
+  test("the seal reaches members JATOS doesn't tell, through the session", async () => {
+    mock.jatos.batchProperties.maxActiveMembers = 2;
+    const jsPsych = await jatosSession();
+    const waiting = jsPsych.multiplayer.waitForGroup();
+    // The peer reads the server's data only, and JATOS never tells it the group was fixed
+    const peer = await serverPeer();
+    await expect(waiting).resolves.toEqual({ size: 2, members: ["1001", "2002"], sealed: true });
+    await flushPromises();
+    expect(peer.multiplayer.group()).toEqual({
+      size: null,
+      members: ["1001", "2002"],
+      sealed: true,
+    });
+    await peer.multiplayer.disconnect();
     await jsPsych.multiplayer.disconnect();
   });
 });
