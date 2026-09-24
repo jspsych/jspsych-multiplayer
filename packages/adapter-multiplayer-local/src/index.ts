@@ -1,17 +1,32 @@
+import type {
+  AdapterConnectOptions,
+  GroupSessionData,
+  MultiplayerAdapter,
+  MultiplayerConnection,
+} from "jspsych";
+
 import {
   SlotStorage,
   generateId,
+  presencePrefix,
   readAllSlots,
-  readSlot,
-  removeSlot,
+  readPresent,
+  removePresence,
   slotPrefix,
+  writePresence,
   writeSlot,
 } from "./local-store";
-import { GroupSessionData, MultiplayerAdapter, Unsubscribe } from "./multiplayer-adapter";
 import { ChangeSignal, createDefaultSignal } from "./signal";
 
 const SESSION_PARAM = "mp_session";
 const DEFAULT_KEY_PREFIX = "mp";
+const DEFAULT_HEARTBEAT_INTERVAL_MS = 2000;
+/**
+ * Chrome throttles timers in a tab that has been hidden for 5 minutes to once a minute, so a
+ * background tab may go a full minute between heartbeats. The default timeout leaves room for that;
+ * tabs that close normally are removed at once by their pagehide handler.
+ */
+const DEFAULT_PRESENCE_TIMEOUT_MS = 70000;
 
 export interface LocalAdapterOptions {
   /**
@@ -36,8 +51,30 @@ export interface LocalAdapterOptions {
   keyPrefix?: string;
   /** Storage backend. Defaults to `localStorage`. Injectable for tests. */
   storage?: SlotStorage;
-  /** Cross-tab change signal. Defaults to `BroadcastChannel` + `storage` event. Injectable for tests. */
+  /**
+   * Cross-tab change signal. Defaults to a new `BroadcastChannel` + `storage`-event signal per
+   * connection, which the connection closes on disconnect. An injected signal belongs to the
+   * caller: connections only add and remove their own handlers and never close it.
+   */
   signal?: ChangeSignal;
+  /** How often a connected tab refreshes its presence key, in ms. Defaults to 2000. */
+  heartbeatIntervalMs?: number;
+  /**
+   * How long after its last heartbeat a tab still counts as connected, in ms. Defaults to 70000,
+   * which covers browsers throttling timers in background tabs to once a minute.
+   */
+  presenceTimeoutMs?: number;
+}
+
+/** Everything a connection needs from the adapter's configuration. */
+interface LocalConfig {
+  participantId: string;
+  sessionId: string;
+  keyPrefix: string;
+  storage: SlotStorage;
+  signal?: ChangeSignal;
+  heartbeatIntervalMs: number;
+  presenceTimeoutMs: number;
 }
 
 /**
@@ -57,151 +94,196 @@ export interface LocalAdapterOptions {
  * @author Hannah Tsukamoto
  */
 export default class LocalAdapter implements MultiplayerAdapter {
-  readonly participantId: string;
-
-  private readonly sessionId: string;
-  private readonly keyPrefix: string;
-  private readonly storage: SlotStorage;
-  /** Builds a fresh signal; called on each connect() so a reconnect after disconnect() works. */
-  private readonly createSignal: () => ChangeSignal;
-  /** The live signal while connected; null before connect() and after disconnect(). */
-  private signal: ChangeSignal | null = null;
-
-  private connected = false;
-  private readonly subscribers = new Set<(data: GroupSessionData) => void>();
-  /** Coalescing flag so many writes in one tick fan out once, on a microtask. */
-  private notifyScheduled = false;
+  private readonly config: LocalConfig;
 
   constructor(options: LocalAdapterOptions = {}) {
-    this.keyPrefix = options.keyPrefix ?? DEFAULT_KEY_PREFIX;
-    this.storage = options.storage ?? resolveLocalStorage();
-    this.sessionId = options.sessionId ?? resolveSessionId();
-    this.participantId =
+    const keyPrefix = options.keyPrefix ?? DEFAULT_KEY_PREFIX;
+    const storage = options.storage ?? resolveLocalStorage();
+    const sessionId = options.sessionId ?? resolveSessionId();
+    const participantId =
       options.participantId ??
-      resolveParticipantId(this.keyPrefix, this.sessionId, options.persistParticipant);
+      resolveParticipantId(keyPrefix, sessionId, options.persistParticipant);
     // A ":" is the key-namespace boundary (`<keyPrefix>:<sessionId>:<participantId>`), and
     // participantIdFromKey slices on it assuming ids/sessions never contain one. Auto-generated ids
     // never do, but a user-supplied one could — which would silently mis-parse the snapshot (a
     // participantId with a ":" would look like it belonged to a different session, so it'd vanish
     // from getAll). Reject it up front with a clear message instead.
-    if (this.sessionId.includes(":")) {
+    if (sessionId.includes(":")) {
       throw new Error(
-        `LocalAdapter: sessionId must not contain ":" (got "${this.sessionId}") — it is the ` +
+        `LocalAdapter: sessionId must not contain ":" (got "${sessionId}") — it is the ` +
           "reserved storage-key namespace separator.",
       );
     }
-    if (this.participantId.includes(":")) {
+    if (participantId.includes(":")) {
       throw new Error(
-        `LocalAdapter: participantId must not contain ":" (got "${this.participantId}") — it is ` +
+        `LocalAdapter: participantId must not contain ":" (got "${participantId}") — it is ` +
           "the reserved storage-key namespace separator.",
       );
     }
-    // Store a factory, not a signal instance: disconnect() closes the signal (releasing the
-    // BroadcastChannel and storage listener), and a later connect() must build a fresh one — a
-    // reused closed signal would silently never receive cross-tab updates again. An injected signal
-    // is returned as-is (the injector owns its lifecycle).
-    const injected = options.signal;
-    this.createSignal = injected
-      ? () => injected
-      : () =>
-          createDefaultSignal(
-            `${this.keyPrefix}:${this.sessionId}`,
-            slotPrefix(this.keyPrefix, this.sessionId),
-          );
-  }
-
-  connect(): Promise<void> {
-    if (!this.connected) {
-      this.connected = true;
-      this.signal = this.createSignal();
-      // A signal from another tab means the store changed — re-read and fan out to our subscribers.
-      this.signal.onChange(() => this.scheduleNotify());
-    }
-    return Promise.resolve();
-  }
-
-  push(data: Record<string, unknown>): Promise<void> {
-    if (!this.connected) {
-      return Promise.reject(
-        new Error("LocalAdapter: push() called before connect(); call connect() first."),
-      );
-    }
-    try {
-      writeSlot(this.storage, this.keyPrefix, this.sessionId, this.participantId, data);
-    } catch (err) {
-      // storage.setItem throws SYNCHRONOUSLY on e.g. QuotaExceededError. Since push() advertises a
-      // Promise, route the failure into the returned promise so a caller's `.catch()` (or `await`)
-      // actually sees it — an uncaught synchronous throw from a Promise-returning method would slip
-      // past .catch() entirely. Nothing was written, so we skip the notify/post below.
-      return Promise.reject(err);
-    }
-    // Self-notify: neither the storage event nor BroadcastChannel fires in the writing tab, but our
-    // plugins wait on conditions their own push satisfies. Deliver it on a microtask (see
-    // scheduleNotify) rather than synchronously so a subscriber that reacts by pushing again can't
-    // recurse into this call or observe the store mid-update.
-    this.scheduleNotify();
-    // Tell the other tabs to re-read. (signal is non-null whenever connected.)
-    this.signal?.post();
-    return Promise.resolve();
-  }
-
-  getAll(): GroupSessionData {
-    return readAllSlots(this.storage, this.keyPrefix, this.sessionId);
-  }
-
-  get(participantId: string): Record<string, unknown> | undefined {
-    return readSlot(this.storage, this.keyPrefix, this.sessionId, participantId);
-  }
-
-  subscribe(callback: (data: GroupSessionData) => void): Unsubscribe {
-    this.subscribers.add(callback);
-    return () => {
-      this.subscribers.delete(callback);
+    const heartbeatIntervalMs = options.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
+    this.config = {
+      participantId,
+      sessionId,
+      keyPrefix,
+      storage,
+      signal: options.signal,
+      heartbeatIntervalMs,
+      presenceTimeoutMs: Math.max(
+        options.presenceTimeoutMs ?? DEFAULT_PRESENCE_TIMEOUT_MS,
+        heartbeatIntervalMs,
+      ),
     };
   }
 
-  disconnect(): Promise<void> {
-    // Remove our own slot first, then signal, so other tabs re-read a snapshot that no longer
-    // includes us (a lingering slot would inflate their group_size).
-    if (this.connected) {
-      removeSlot(this.storage, this.keyPrefix, this.sessionId, this.participantId);
-      this.signal?.post();
+  /** The participant id every connection from this adapter uses. */
+  get participantId(): string {
+    return this.config.participantId;
+  }
+
+  async connect(options: AdapterConnectOptions): Promise<MultiplayerConnection> {
+    if (options.signal.aborted) {
+      throw new Error("LocalAdapter: connect() was cancelled.");
     }
-    this.signal?.close();
-    // Null the signal so a later connect() rebuilds a fresh one (see createSignal).
-    this.signal = null;
-    // Drop all subscribers on disconnect (a reconnect requires re-subscribing). This matches core,
-    // which cancels every API-level subscription before calling the adapter's disconnect(); the clear
-    // matters for callers that drive this adapter directly (e.g. the group-quiz host page).
-    this.subscribers.clear();
-    this.connected = false;
-    // Note: a persisted participant id (persistParticipant) is intentionally left in sessionStorage
-    // so a refresh rejoins as the same participant. Its slot was removed above and is re-created on
-    // the next push — the brief gap is expected for the rejoin-on-refresh flow.
-    return Promise.resolve();
+    return new LocalConnection(this.config, options);
+  }
+}
+
+/**
+ * One tab's open connection: its own signal handler, heartbeat timer, and page-lifecycle
+ * listeners. Created by LocalAdapter.connect(); nothing is shared between connections.
+ */
+class LocalConnection implements MultiplayerConnection {
+  readonly participantId: string;
+
+  private closed = false;
+  private readonly signal: ChangeSignal;
+  /** True when this connection created the signal and so must close it. */
+  private readonly ownsSignal: boolean;
+  private readonly removeSignalHandler: () => void;
+  private readonly heartbeat: ReturnType<typeof setInterval>;
+  /** Present participants at the last check, as a string, to tell when the set changes. */
+  private lastPresent = "";
+
+  private readonly onPageHide = () => {
+    // Best effort: the tab is going away (or into the back/forward cache), so drop our presence
+    // key right away instead of letting other tabs wait out the timeout.
+    this.removeOwnPresence();
+    this.signal.post();
+  };
+
+  private readonly onPageShow = (event: PageTransitionEvent) => {
+    // Restored from the back/forward cache: the connection is still open, so reappear.
+    if (event.persisted) this.beat(true);
+  };
+
+  private readonly onVisibilityChange = () => {
+    // A hidden tab's timers may have been throttled; beat as soon as it's visible again.
+    if (typeof document !== "undefined" && document.visibilityState === "visible") this.beat();
+  };
+
+  constructor(
+    private readonly config: LocalConfig,
+    private readonly options: AdapterConnectOptions,
+  ) {
+    this.participantId = config.participantId;
+    this.ownsSignal = !config.signal;
+    this.signal =
+      config.signal ??
+      createDefaultSignal(
+        `${config.keyPrefix}:${config.sessionId}`,
+        slotPrefix(config.keyPrefix, config.sessionId),
+        presencePrefix(config.keyPrefix, config.sessionId),
+      );
+    // Another tab changed the store: data or presence may have changed
+    this.removeSignalHandler = this.signal.onChange(() => this.notify());
+
+    this.beat(true);
+    this.heartbeat = setInterval(() => this.beat(), config.heartbeatIntervalMs);
+    if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+      window.addEventListener("pagehide", this.onPageHide);
+      window.addEventListener("pageshow", this.onPageShow);
+    }
+    if (typeof document !== "undefined" && typeof document.addEventListener === "function") {
+      document.addEventListener("visibilitychange", this.onVisibilityChange);
+    }
+  }
+
+  getAll(): GroupSessionData {
+    return readAllSlots(this.config.storage, this.config.keyPrefix, this.config.sessionId);
+  }
+
+  connectedParticipants(): string[] {
+    return this.readPresent();
+  }
+
+  async push(data: Record<string, unknown>): Promise<void> {
+    if (this.closed) {
+      throw new Error("LocalAdapter: push() called after disconnect().");
+    }
+    // setItem throws on e.g. QuotaExceededError; being async, this rejects the returned promise
+    const { storage, keyPrefix, sessionId } = this.config;
+    writeSlot(storage, keyPrefix, sessionId, this.participantId, data);
+    // Tell the other tabs to re-read
+    this.signal.post();
+  }
+
+  async disconnect(): Promise<void> {
+    if (this.closed) return;
+    this.closed = true;
+    clearInterval(this.heartbeat);
+    this.removeSignalHandler();
+    if (typeof window !== "undefined" && typeof window.removeEventListener === "function") {
+      window.removeEventListener("pagehide", this.onPageHide);
+      window.removeEventListener("pageshow", this.onPageShow);
+    }
+    if (typeof document !== "undefined" && typeof document.removeEventListener === "function") {
+      document.removeEventListener("visibilitychange", this.onVisibilityChange);
+    }
+    // The data slot stays: presence, not the slot, says who is still here
+    this.removeOwnPresence();
+    this.signal.post();
+    if (this.ownsSignal) this.signal.close();
   }
 
   /**
-   * Schedule a single fan-out to local subscribers on a microtask. Coalesces bursts of writes and,
-   * crucially, guarantees the notification never runs synchronously inside `push()` — so a
-   * subscriber calling `push()` again enqueues another fan-out instead of recursing, and always sees
-   * a fully-written store.
+   * Refresh our presence key and check whether anyone else's has appeared or gone stale. A tab
+   * that crashed sends no signal, so this periodic check is how the others notice it's gone.
+   * `announce` also pings the other tabs, for the moments when our own presence changes.
    */
-  private scheduleNotify(): void {
-    if (this.notifyScheduled) return;
-    this.notifyScheduled = true;
-    queueMicrotask(() => {
-      this.notifyScheduled = false;
-      const data = this.getAll();
-      // Snapshot so a subscriber that unsubscribes (or subscribes) mid-fan-out doesn't disturb it.
-      for (const cb of [...this.subscribers]) {
-        try {
-          cb(data);
-        } catch (err) {
-          console.error("LocalAdapter: a group-session subscriber threw", err);
-        }
-      }
-    });
+  private beat(announce = false) {
+    if (this.closed) return;
+    const { storage, keyPrefix, sessionId } = this.config;
+    try {
+      writePresence(storage, keyPrefix, sessionId, this.participantId, Date.now());
+    } catch (e) {
+      console.error("LocalAdapter: could not write the presence heartbeat", e);
+    }
+    if (announce) this.signal.post();
+    const present = this.readPresent().join("\n");
+    if (present !== this.lastPresent) {
+      this.lastPresent = present;
+      this.options.onChange();
+    }
+  }
+
+  private readPresent(): string[] {
+    const { storage, keyPrefix, sessionId, presenceTimeoutMs } = this.config;
+    return readPresent(storage, keyPrefix, sessionId, Date.now(), presenceTimeoutMs);
+  }
+
+  private removeOwnPresence() {
+    const { storage, keyPrefix, sessionId } = this.config;
+    try {
+      removePresence(storage, keyPrefix, sessionId, this.participantId);
+    } catch {
+      // Best effort; the key expires on its own
+    }
+  }
+
+  private notify() {
+    if (this.closed) return;
+    this.lastPresent = this.readPresent().join("\n");
+    this.options.onChange();
   }
 }
 

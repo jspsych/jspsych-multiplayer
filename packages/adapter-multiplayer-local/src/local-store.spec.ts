@@ -3,10 +3,13 @@ import {
   generateId,
   participantIdFromKey,
   readAllSlots,
+  readPresent,
+  removePresence,
   readSlot,
   removeSlot,
   slotKey,
   slotPrefix,
+  writePresence,
   writeSlot,
 } from "./local-store";
 
@@ -86,6 +89,30 @@ describe("local-store read/write", () => {
     removeSlot(s, "mp", "s1", "alice");
     expect(readSlot(s, "mp", "s1", "alice")).toBeUndefined();
     expect(readAllSlots(s, "mp", "s1")).toEqual({});
+  });
+});
+
+describe("local-store presence", () => {
+  test("readPresent lists only fresh presence keys in this session, sorted", () => {
+    const storage = new MemoryStorage();
+    writePresence(storage, "mp", "sess", "bob", 1000);
+    writePresence(storage, "mp", "sess", "alice", 900);
+    writePresence(storage, "mp", "sess", "stale", 100);
+    writePresence(storage, "mp", "other", "carol", 1000);
+    expect(readPresent(storage, "mp", "sess", 1000, 500)).toEqual(["alice", "bob"]);
+  });
+
+  test("presence keys are never read as slots", () => {
+    const storage = new MemoryStorage();
+    writePresence(storage, "mp", "sess", "alice", 1000);
+    expect(readAllSlots(storage, "mp", "sess")).toEqual({});
+  });
+
+  test("removePresence drops the participant", () => {
+    const storage = new MemoryStorage();
+    writePresence(storage, "mp", "sess", "alice", 1000);
+    removePresence(storage, "mp", "sess", "alice");
+    expect(readPresent(storage, "mp", "sess", 1000, 500)).toEqual([]);
   });
 });
 
