@@ -71,8 +71,9 @@ trial is waiting, the trial stops without calling `on_timeout` and records no da
 
 ## Gate keys
 
-When a participant clicks, the plugin merges `{ ...push_data, ready: true, [data_key]: true }`
-into their slot. The gate counts participants who have `[data_key]: true` and have not left.
+When a participant clicks, the plugin merges `push_data` into their slot, along with `ready: true`
+and a flag named by `data_key` (for example, `"ready-1": true`). The gate counts participants who
+have that flag set to `true` and have not left.
 
 Each gate needs its own key, or a flag from an earlier gate would let a later one pass at once. By
 default the first ready trial a participant reaches uses `ready-1`, the second `ready-2`, and so

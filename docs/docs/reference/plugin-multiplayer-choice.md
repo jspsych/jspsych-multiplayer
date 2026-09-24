@@ -135,7 +135,14 @@ const dilemma = {
   reveal_prompt: "<h3>Both players have chosen</h3>",
   player_label: (id) => (id === jsPsych.multiplayer.participantId ? "You" : "Your partner"),
   payoff: (choices, me) => {
-    const other = Object.keys(choices).find((id) => id !== me);
+    // Find the other player's ID
+    let other;
+    for (const id in choices) {
+      if (id !== me) {
+        other = id;
+        break;
+      }
+    }
     return PAYOFFS[choices[me].index][choices[other].index];
   },
 };

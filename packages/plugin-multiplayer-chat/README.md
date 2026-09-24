@@ -86,8 +86,15 @@ Have each client write a `chat_done` flag (e.g. via `plugin-multiplayer-sync`, o
 ```js
 const chat = {
   type: jsPsychMultiplayerChat,
-  end_when: (group, presence) =>
-    Object.keys(group).every((id) => group[id].chat_done || presence[id] === "left"),
+  end_when: (group, presence) => {
+    // End once every participant has either set chat_done or left
+    for (const id in group) {
+      if (!group[id].chat_done && presence[id] !== "left") {
+        return false; // this participant is still going
+      }
+    }
+    return true;
+  },
 };
 ```
 
@@ -99,6 +106,13 @@ Compose with `plugin-multiplayer-role` — no hard dependency, just a function:
 const chat = {
   type: jsPsychMultiplayerChat,
   duration: 60000,
-  sender_label: (id) => jsPsychMultiplayerRole.participantsByRole()[id] ?? id,
+  sender_label: (senderId) => {
+    // Show the sender's role, or their ID if roles haven't been assigned yet
+    const roleMap = jsPsychMultiplayerRole.getRoleMap();
+    if (roleMap !== undefined && roleMap[senderId] !== undefined) {
+      return roleMap[senderId].role;
+    }
+    return senderId;
+  },
 };
 ```

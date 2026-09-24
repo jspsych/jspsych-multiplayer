@@ -207,9 +207,16 @@ const roleTrial = {
   roles: ["director", "matcher"],
   group_size: 2,
   on_finish: () => {
+    // Your partner holds the other role
+    let partnerRole = "director";
+    if (jsPsychMultiplayerRole.getMyRole() === "director") {
+      partnerRole = "matcher";
+    }
+    // participantsByRole() maps each role to a list of IDs; a role nobody got has no list
     const byRole = jsPsychMultiplayerRole.participantsByRole();
-    const me = jsPsychMultiplayerRole.getMyRole();
-    partnerId = me === "director" ? byRole.matcher?.[0] : byRole.director?.[0];
+    if (byRole[partnerRole] !== undefined) {
+      partnerId = byRole[partnerRole][0];
+    }
   },
 };
 

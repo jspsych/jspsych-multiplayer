@@ -53,7 +53,7 @@ await jsPsych.run(timeline);
 
 ## Gates and keys
 
-Each ready gate marks readiness with its own key, so flags from an earlier gate can never make a later gate pass. When this participant clicks ready, the plugin merges `{ ...push_data, ready: true, [key]: true }` into their slot, and the gate counts only participants who have `[key]: true` and haven't left the session. Earlier gates' keys stay in the slot, so a fast participant who moves on to the next gate can't remove a flag that a slower participant is still counting.
+Each ready gate marks readiness with its own key, so flags from an earlier gate can never make a later gate pass. When this participant clicks ready, the plugin merges `push_data` into their slot, along with `ready: true` and a flag named after the gate's key (for example `"ready-1": true`). The gate counts only participants who have that flag and haven't left the session. Earlier gates' keys stay in the slot, so a fast participant who moves on to the next gate can't remove a flag that a slower participant is still counting.
 
 By default the key is `ready-1` for the first ready gate this participant reaches, `ready-2` for the second, and so on. Participants have to pass gates in the same order, so the Nth gate gets the same key for everyone, however many other trials each participant saw along the way. Two cases need an explicit `data_key`:
 
@@ -77,8 +77,9 @@ const readyGate = {
   on_finish: (data) => {
     // Role assignment stays experiment-specific — do it here off data.group, or hand the snapshot
     // to @jspsych-multiplayer/plugin-multiplayer-role for deterministic consensus.
-    const [firstId, secondId] = Object.keys(data.group).sort();
-    myRole = jsPsych.multiplayer.participantId === firstId ? "proposer" : "responder";
+    // Sort the IDs so both players agree on who is first
+    const ids = Object.keys(data.group).sort();
+    myRole = jsPsych.multiplayer.participantId === ids[0] ? "proposer" : "responder";
   },
 };
 ```

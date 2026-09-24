@@ -103,7 +103,7 @@ Which ordering applies, highest priority first:
 only as well as their clocks agree.
 
 `rank_by`, `role_from`, and `ready` are called before everyone's data has arrived, so a function
-like `(e) => e.rounds[0].score` will throw at first. A throw counts as "not ready yet"; you don't
+like `(entry) => entry.rounds[0].score` will throw at first. A throw counts as "not ready yet"; you don't
 need to guard against missing data. If the group never becomes ready, the last error is logged to
 the console.
 

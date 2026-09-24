@@ -114,7 +114,10 @@ const roundTrials = {
     },
     // … the round itself …
   ],
-  loop_function: () => ++round < 5,
+  loop_function: () => {
+    round++;
+    return round < 5;
+  },
 };
 ```
 

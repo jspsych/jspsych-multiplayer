@@ -117,7 +117,11 @@ const chat = {
   max_length: 280,
   sender_label: (senderId, group) => {
     if (senderId === jsPsych.multiplayer.participantId) return "You";
-    return group[senderId]?.name || "A participant";
+    // A participant's slot is undefined until they write, and has no name until they enter one
+    if (group[senderId] !== undefined && group[senderId].name) {
+      return group[senderId].name;
+    }
+    return "A participant";
   },
 };
 ```
@@ -126,6 +130,12 @@ If you assigned roles with [`multiplayer-role`](plugin-multiplayer-role), label 
 instead:
 
 ```js
-sender_label: (senderId) =>
-  jsPsychMultiplayerRole.getRoleMap()?.[senderId]?.role ?? senderId,
+sender_label: (senderId) => {
+  // The role map is undefined until the role trial has run
+  const roleMap = jsPsychMultiplayerRole.getRoleMap();
+  if (roleMap !== undefined && roleMap[senderId] !== undefined) {
+    return roleMap[senderId].role;
+  }
+  return senderId;
+},
 ```

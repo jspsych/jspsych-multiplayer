@@ -50,13 +50,21 @@ Prefer predicates that are **monotone**: once true, they stay true under any lat
 
 ```js
 // Fragile: p2's next push may not include `status`, so this can flicker back to false
-wait_for: (group) => group["p2"]?.status === "ready",
+wait_for: (group) => group["p2"] !== undefined && group["p2"].status === "ready",
 
 // Robust: data slots are monotone — a participant's slot stays even after they leave
 wait_for: (group) => Object.keys(group).length >= 2,
 
 // Robust: carry a monotone counter/phase forward in every push and compare with >=
-wait_for: (group) => Object.values(group).every((p) => p.trial_index >= 5),
+wait_for: (group) => {
+  // True once every participant has reached trial 5
+  for (const id in group) {
+    if (group[id].trial_index === undefined || group[id].trial_index < 5) {
+      return false;
+    }
+  }
+  return true;
+},
 ```
 
 If a barrier must key on transient fields, include them in every subsequent push (so they are never overwritten away), or advance a `phase`/counter field that only increases.
@@ -72,8 +80,9 @@ const lobby = {
   on_finish: (data) => {
     // Role assignment stays experiment-specific — do it here off data.group, or hand the snapshot
     // to @jspsych-multiplayer/plugin-multiplayer-role for deterministic consensus.
-    const [proposerId, responderId] = Object.keys(data.group).sort();
-    myRole = jsPsych.multiplayer.participantId === proposerId ? "proposer" : "responder";
+    // Sort the IDs so both players agree on who is first
+    const ids = Object.keys(data.group).sort();
+    myRole = jsPsych.multiplayer.participantId === ids[0] ? "proposer" : "responder";
   },
 };
 ```

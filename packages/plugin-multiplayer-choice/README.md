@@ -165,7 +165,13 @@ const pd = {
   expected_players: 2,
   payoff: (choices, me) => {
     const mine = choices[me].index; // 0 = cooperate, 1 = defect
-    const other = Object.entries(choices).find(([id]) => id !== me)[1].index;
+    // Find the other player's choice
+    let other;
+    for (const id in choices) {
+      if (id !== me) {
+        other = choices[id].index;
+      }
+    }
     const T = [
       [3, 0], // I cooperate: (both C) 3, (I'm suckered) 0
       [5, 1], // I defect:    (I exploit) 5, (both D) 1
@@ -192,7 +198,7 @@ import MultiplayerChoice from "@jspsych-multiplayer/plugin-multiplayer-choice";
 const choices = MultiplayerChoice.collectChoices(group, data.data_key); // { id: { index, label } }
 // or re-tally and resolve the winner yourself:
 const counts = MultiplayerChoice.tally(group, data.data_key, ["Red", "Green", "Blue"]);
-const { winner, isTie } = MultiplayerChoice.plurality(counts);
+const result = MultiplayerChoice.plurality(counts); // { winner, isTie }
 ```
 
 ## Author / Citation

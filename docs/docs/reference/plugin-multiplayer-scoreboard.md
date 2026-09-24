@@ -117,7 +117,7 @@ const scoreboard = {
   label: () => myName,
   group_size: 4,
   timeout: 60000,
-  score_format: (s) => `${s} pts`,
+  score_format: (score) => `${score} pts`,
   title: "<h2>Final standings</h2>",
 };
 

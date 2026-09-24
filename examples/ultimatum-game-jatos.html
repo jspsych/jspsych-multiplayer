@@ -95,8 +95,16 @@
         // A lobby counts who is here, so someone leaving shouldn't end the wait
         participants: [],
         push_data: { status: "ready" },
-        wait_for: (_group, presence) =>
-          Object.values(presence).filter((status) => status === "connected").length >= 2,
+        wait_for: (group, presence) => {
+          // Count the participants who are currently connected
+          let connected = 0;
+          for (const id in presence) {
+            if (presence[id] === "connected") {
+              connected++;
+            }
+          }
+          return connected >= 2;
+        },
         message: "<p>Waiting for another player to join…</p>",
       };
 
@@ -128,33 +136,40 @@
         // connected keeps leftover slots from earlier members (which start out `away`) out of the
         // assignment until they turn `left` and drop out.
         ready: (group, presence) => {
-          const ids = Object.keys(group);
-          return (
-            ids.length >= 2 &&
-            ids.every(
-              (id) =>
-                presence[id] === "connected" &&
-                (group[id].joinedAt != null ||
-                  group[id].offer !== undefined ||
-                  group[id].decision !== undefined),
-            )
-          );
+          let players = 0;
+          for (const id in group) {
+            players++;
+            if (presence[id] !== "connected") {
+              return false;
+            }
+            // Each player needs a joinedAt time, or, if they joined mid-game, an offer or decision
+            const slot = group[id];
+            if (slot.joinedAt === undefined && slot.offer === undefined && slot.decision === undefined) {
+              return false;
+            }
+          }
+          return players >= 2;
         },
         // Save the snapshot the roles were computed over so on_finish can read back `joinedAt`.
         save_group: true,
         message: "<p>Assigning roles…</p>",
         on_finish: (data) => {
           myRole = jsPsychMultiplayerRole.getMyRole();
+          // If the trial ended before roles were assigned (for example, a player left), there are
+          // no roles to read
+          if (myRole === undefined) {
+            return;
+          }
           // The role plugin also exposes WHO holds each role, so the game can read their pushed data.
           const byRole = jsPsychMultiplayerRole.participantsByRole();
-          proposerId = byRole.proposer?.[0];
-          responderId = byRole.responder?.[0];
+          proposerId = byRole.proposer[0];
+          responderId = byRole.responder[0];
           // Capture this client's `joinedAt`. The sync plugin pushes `push_data` verbatim and the
           // adapter replaces this participant's WHOLE group-session entry on push, so every
           // mid-game push below must spread `joinedAt` back in — otherwise the first push would
           // erase it, and a late spectator (whose `ready` gate and `join_order` both read it) could
           // stall to a timeout or compute a different proposer/responder pair.
-          myJoinedAt = data.group?.[jsPsych.multiplayer.participantId]?.joinedAt;
+          myJoinedAt = data.group[jsPsych.multiplayer.participantId].joinedAt;
         },
       };
 
@@ -194,7 +209,10 @@
         type: jsPsychMultiplayerSync,
         // `joinedAt` rides along because a push replaces this client's whole entry (see assignRoles).
         push_data: () => ({ offer: proposerOffer, joinedAt: myJoinedAt }),
-        wait_for: (group) => group[responderId]?.decision !== undefined,
+        wait_for: (group) => {
+          const responder = group[responderId];
+          return responder !== undefined && responder.decision !== undefined;
+        },
         // Only the other player matters here; a spectator leaving must not end the round.
         participants: () => [responderId],
         timeout: PARTNER_TIMEOUT_MS,
@@ -220,7 +238,10 @@
       // ── Responder: wait for the proposer's offer ───────────────────────────────────────────────
       const responderWaitTrial = {
         type: jsPsychMultiplayerSync,
-        wait_for: (group) => group[proposerId]?.offer !== undefined,
+        wait_for: (group) => {
+          const proposer = group[proposerId];
+          return proposer !== undefined && proposer.offer !== undefined;
+        },
         participants: () => [proposerId],
         timeout: PARTNER_TIMEOUT_MS,
         message: "<p>Waiting for the Proposer's offer…</p>",
@@ -253,7 +274,10 @@
         // `joinedAt` rides along because a push replaces this client's whole entry (see assignRoles).
         push_data: () => ({ decision: responderDecision, joinedAt: myJoinedAt }),
         // Resolve as soon as our own decision is visible in the group session.
-        wait_for: (group) => group[responderId]?.decision !== undefined,
+        wait_for: (group) => {
+          const responder = group[responderId];
+          return responder !== undefined && responder.decision !== undefined;
+        },
         message: "<p>Sending your decision…</p>",
       };
 
