@@ -86,6 +86,11 @@ const base = {
   placeholder: "Type…",
   chat_persists: false,
   chat_position: "below",
+  typing_indicator: false,
+  typing_key: "typing_at",
+  typing_ttl: 2500,
+  typing_throttle: 800,
+  typing_label: null,
   response_mode: null,
   auto_submit: null,
   submit_label: "Submit",
@@ -932,5 +937,208 @@ describe("multiplayer-reference-game: role-keyed feedback_content", () => {
     expect(cell(el, "b").classList.contains("is-target")).toBe(true);
     expect(cell(el, "c").classList.contains("is-wrong")).toBe(true);
     expect(feedbackText(el)).toBe("");
+  });
+});
+
+describe("multiplayer-reference-game: typing indicator", () => {
+  const chatInputOf = (el: HTMLElement) => el.querySelector(`.${P}-chat-input`) as HTMLInputElement;
+  const type = (el: HTMLElement, text: string) => {
+    const input = chatInputOf(el);
+    input.value = text;
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  };
+  /** Pushes that reached the backend carrying a typing timestamp. */
+  const typingPushes = (api: Api) => api.connection.pushes.filter((d) => "typing_at" in d);
+
+  it("writes a typing timestamp on input without clobbering other slot keys", async () => {
+    const api = await makeApi("matcher");
+    api.pushAs("matcher", { joinedAt: 1, custom: { a: 1 } });
+    const { jsPsych } = makeJsPsych(api);
+    const el = display();
+    run(jsPsych, el, {
+      ...base,
+      typing_indicator: true,
+      typing_throttle: 0,
+      partner_id: "director",
+    });
+
+    type(el, "the");
+    await flush();
+
+    const slot = api.get("matcher") as Record<string, unknown>;
+    expect(typeof slot["typing_at"]).toBe("number");
+    expect(slot["joinedAt"]).toBe(1);
+    expect(slot["custom"]).toEqual({ a: 1 });
+  });
+
+  it("throttles continuous typing", async () => {
+    const api = await makeApi("matcher");
+    const { jsPsych } = makeJsPsych(api);
+    const el = display();
+    run(jsPsych, el, { ...base, typing_indicator: true, typing_throttle: 10000 });
+
+    type(el, "a");
+    type(el, "ab");
+    await flush();
+
+    expect(typingPushes(api)).toHaveLength(1);
+  });
+
+  it("falls back to the default typing key when given an empty string", async () => {
+    const api = await makeApi("matcher");
+    const { jsPsych } = makeJsPsych(api);
+    const el = display();
+    run(jsPsych, el, {
+      ...base,
+      typing_indicator: true,
+      typing_throttle: 0,
+      typing_key: "",
+    });
+
+    type(el, "the");
+    await flush();
+
+    const slot = api.get("matcher") as Record<string, unknown>;
+    expect(typeof slot["typing_at"]).toBe("number");
+    expect("" in slot).toBe(false);
+  });
+
+  it("emptying the input withdraws the typing mark immediately", async () => {
+    const api = await makeApi("matcher");
+    const { jsPsych } = makeJsPsych(api);
+    const el = display();
+    run(jsPsych, el, { ...base, typing_indicator: true, typing_throttle: 0 });
+
+    type(el, "the");
+    await flush();
+    expect(typeof (api.get("matcher") as Record<string, unknown>)["typing_at"]).toBe("number");
+    type(el, "");
+    await flush();
+    expect((api.get("matcher") as Record<string, unknown>)["typing_at"]).toBeNull();
+  });
+
+  it("sending a message keeps the message and clears the mark", async () => {
+    const api = await makeApi("matcher");
+    api.pushAs("director", { joinedAt: 1 });
+    const { jsPsych } = makeJsPsych(api);
+    const el = display();
+    run(jsPsych, el, {
+      ...base,
+      typing_indicator: true,
+      typing_throttle: 0,
+      partner_id: "director",
+    });
+
+    // The timestamp and the message are written back to back; neither may overwrite the other.
+    type(el, "the");
+    const input = chatInputOf(el);
+    input.value = "the star";
+    (el.querySelector(`.${P}-chat-form`) as HTMLFormElement).dispatchEvent(
+      new Event("submit", { cancelable: true }),
+    );
+    await flush();
+
+    const slot = api.get("matcher") as Record<string, unknown>;
+    const messages = slot["reference_game_chat_r0"] as Array<{ text: string }>;
+    expect(messages.some((m) => m.text === "the star")).toBe(true);
+    expect(slot["typing_at"]).toBeNull();
+  });
+
+  it("shows the partner hint with the role label, then hides it after the TTL", async () => {
+    const api = await makeApi("matcher");
+    api.pushAs("director", { joinedAt: 1 });
+    const { jsPsych } = makeJsPsych(api);
+    const el = display();
+    run(jsPsych, el, {
+      ...base,
+      typing_indicator: true,
+      typing_ttl: 60,
+      partner_id: "director",
+    });
+
+    api.pushAs("director", { joinedAt: 1, typing_at: Date.now() });
+    const hint = el.querySelector(`.${P}-typing-hint`) as HTMLElement;
+    expect(hint.hidden).toBe(false);
+    expect(hint.textContent).toBe("Director is typing…");
+
+    await sleep(150);
+    expect(hint.hidden).toBe(true);
+  });
+
+  it("hides the hint while the partner is away", async () => {
+    const api = await makeApi("matcher");
+    api.pushAs("director", { joinedAt: 1 });
+    const { jsPsych } = makeJsPsych(api);
+    const el = display();
+    run(jsPsych, el, { ...base, typing_indicator: true, partner_id: "director" });
+
+    api.pushAs("director", { joinedAt: 1, typing_at: Date.now() });
+    const hint = el.querySelector(`.${P}-typing-hint`) as HTMLElement;
+    expect(hint.hidden).toBe(false);
+
+    const director = [...api.hub.connections].find((c) => c.participantId === "director")!;
+    director.online = false;
+    api.hub.broadcast();
+    expect(api.multiplayer.presence().director).toBe("away");
+    expect(hint.hidden).toBe(true);
+  });
+
+  it("uses a custom typing label verbatim when provided", async () => {
+    const api = await makeApi("matcher");
+    const { jsPsych } = makeJsPsych(api);
+    const el = display();
+    run(jsPsych, el, {
+      ...base,
+      typing_indicator: true,
+      typing_label: "Partner is writing…",
+      partner_id: "director",
+    });
+
+    api.pushAs("director", { joinedAt: 1, typing_at: Date.now() });
+    expect((el.querySelector(`.${P}-typing-hint`) as HTMLElement).textContent).toBe(
+      "Partner is writing…",
+    );
+  });
+
+  it("does nothing when the indicator is off", async () => {
+    const api = await makeApi("matcher");
+    const { jsPsych } = makeJsPsych(api);
+    const el = display();
+    run(jsPsych, el, base);
+    const before = api.connection.pushes.length;
+
+    type(el, "the");
+    await flush();
+
+    expect(api.connection.pushes).toHaveLength(before);
+    expect(el.querySelector(`.${P}-typing-hint`)).toBeNull();
+  });
+
+  it("trial end withdraws the mark and stops listening", async () => {
+    const api = await makeApi("matcher");
+    api.pushAs("director", { joinedAt: 1 });
+    const { jsPsych, finished } = makeJsPsych(api);
+    const el = display();
+    run(jsPsych, el, {
+      ...base,
+      typing_indicator: true,
+      typing_throttle: 0,
+      partner_id: "director",
+    });
+
+    // Matcher clicks the target: auto-submit (k=1) with feedback off ends the trial synchronously.
+    clickCell(el, "b");
+    expect(finished).toHaveLength(1);
+    await flush();
+
+    // Round data landed, and the end-of-trial withdraw was sent.
+    const slot = api.get("matcher") as Record<string, unknown>;
+    expect(slot["typing_at"]).toBeNull();
+    expect((slot["reference_game"] as any)["0"].assignment).toEqual({ 1: "b" });
+    // Typing after the end sends nothing further.
+    const after = api.connection.pushes.length;
+    type(el, "late");
+    await flush();
+    expect(api.connection.pushes).toHaveLength(after);
   });
 });

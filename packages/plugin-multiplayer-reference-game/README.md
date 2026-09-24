@@ -65,6 +65,11 @@ Only `stimuli`, `targets`, and `role` are required; everything else has a sensib
 | `placeholder`                     | string  | `"Type a message…"` | Placeholder text in the empty input.                                                                                                                                                                                                                               |
 | `chat_persists`                   | boolean | `false`             | Carry the transcript across rounds (one shared log) vs. a fresh per-round log.                                                                                                                                                                                     |
 | `chat_position`                   | string  | `"below"`           | Chat panel placement: `"below"` or `"beside"` the grid.                                                                                                                                                                                                            |
+| `typing_indicator` | boolean | `false`       | Show a "partner is typing…" hint from a timestamp each client keeps in its own slot. Hint only — never gates the trial, and hidden while the partner is away or has left. |
+| `typing_key` | string | `"typing_at"` | Slot key for the typing timestamp (`number`) or `null`. Same key on both clients; values stay per-slot. |
+| `typing_ttl` | integer | `2500`          | Ms after the partner's last keystroke before the hint hides.                           |
+| `typing_throttle` | integer | `800`        | Write at most one typing timestamp per this many ms of continuous typing.              |
+| `typing_label` | string | `null`         | Hint text. `null` derives `"<Matcher\|Director> is typing…"` from the partner's role label. |
 
 ### Response & interaction
 

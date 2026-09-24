@@ -208,6 +208,44 @@ const info = <const>{
       type: ParameterType.STRING,
       default: "below",
     },
+    // ── Typing indicator ──────────────────────────────────────────────────────────────────────────
+    /**
+     * Show a "partner is typing…" hint driven by a timestamp each client maintains in its own
+     * slot. Off by default. This is only a chat-activity hint — it never gates trial progress, and
+     * a missing/stale timestamp only hides the hint. Cross-client clock skew can stretch or shrink
+     * how long the hint shows, which is harmless for a hint.
+     */
+    typing_indicator: {
+      type: ParameterType.BOOL,
+      default: false,
+    },
+    /**
+     * Top-level slot key holding this participant's typing timestamp (`number`) or `null`. Both
+     * clients must use the same key; the values stay per-slot. Namespaced as a plugin-owned key —
+     * do not point it at a key the study writes for other purposes.
+     */
+    typing_key: {
+      type: ParameterType.STRING,
+      default: "typing_at",
+    },
+    /** Hide the hint this long after the partner's last keystroke, in ms. */
+    typing_ttl: {
+      type: ParameterType.INT,
+      default: 2500,
+    },
+    /** Write at most one typing timestamp per this many ms of continuous typing. */
+    typing_throttle: {
+      type: ParameterType.INT,
+      default: 800,
+    },
+    /**
+     * Hint text. Null derives it from the partner's role label
+     * (`"<Matcher|Director> is typing…"`, honouring `role_labels`); a string is used verbatim.
+     */
+    typing_label: {
+      type: ParameterType.STRING,
+      default: null,
+    },
     // ── Response & interaction ──────────────────────────────────────────────────────────────────
     /** `"click"` or `"assign_slots"`; null derives it from k (click when k = 1, slots when k > 1). */
     response_mode: {
@@ -964,6 +1002,17 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
     let feedbackTimer: number | null = null;
     let selectionTimer: number | null = null;
     let roundTimer: number | null = null;
+    // The latest presence delivered to the subscriber, for the typing hint's TTL re-check.
+    let lastPresence: PresenceData = api.presence();
+
+    const typingOn = Boolean(trial.typing_indicator) && chatOn;
+    const typingKey = (trial.typing_key as string | null) || "typing_at";
+    const typingTtl =
+      typeof trial.typing_ttl === "number" && trial.typing_ttl > 0 ? trial.typing_ttl : 2500;
+    const typingThrottle =
+      typeof trial.typing_throttle === "number" && trial.typing_throttle >= 0
+        ? trial.typing_throttle
+        : 800;
 
     // THIS client's own chat messages, read from our slot under `chatKey` (which may hold an earlier
     // round's messages when `chat_persists` is on, or a reload's). Our own writes show up in the
@@ -1082,6 +1131,7 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
       api
         .update({ [chatKey]: messages })
         .catch((error) => showError(sendErrorText(error, "Couldn't send — please try again.")));
+      if (typingOn) markTyping(null);
       updateChatAvailability();
     };
 
@@ -1094,6 +1144,74 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
       }
       note.textContent = message;
     }
+
+    // --- Typing indicator ----------------------------------------------------------------------
+    // A "partner is typing…" hint with no effect on trial flow. Each client keeps a timestamp (or
+    // null) at `typingKey` in its OWN slot; the partner's slot is read, never written. `update`
+    // merges only that key, so a timestamp can't overwrite chat or round data, and the session
+    // combines timestamps written while an earlier write is in flight. Failures are ignored: a
+    // lost timestamp only hides a hint.
+    let typingTimer: number | null = null;
+    let lastTypingPing = 0;
+    const markTyping = (ts: number | null): void => {
+      if (!typingOn) return;
+      api.update({ [typingKey]: ts }).catch(() => {});
+    };
+    const typingLabel = (): string => {
+      const custom = trial.typing_label as string | null;
+      if (typeof custom === "string" && custom !== "") return custom;
+      const partnerRole = role === "director" ? "matcher" : "director";
+      return `${roleLabels[partnerRole] ?? "Partner"} is typing…`;
+    };
+    function setTypingHint(show: boolean) {
+      if (!typingOn) return;
+      let hint = display_element.querySelector(`.${P}-typing-hint`) as HTMLElement | null;
+      if (show) {
+        if (!hint) {
+          hint = document.createElement("div");
+          hint.className = `${P}-typing-hint`;
+          hint.setAttribute("role", "status");
+          hint.setAttribute("aria-live", "polite");
+          // Above the input, below the log: where study bolt-ons rendered the same hint.
+          (chatForm ?? status).before(hint);
+        }
+        hint.textContent = typingLabel();
+        hint.hidden = false;
+      } else if (hint) {
+        hint.hidden = true;
+      }
+    }
+    function updateTypingHint(group: GroupSessionData, presence: PresenceData) {
+      if (!typingOn || ended) return;
+      const at = partner != null ? group[partner]?.[typingKey] : null;
+      // A partner who is away or has left isn't typing, whatever their last timestamp says
+      const fresh =
+        partner != null &&
+        presence[partner] === "connected" &&
+        typeof at === "number" &&
+        Date.now() - at < typingTtl;
+      setTypingHint(fresh);
+      // Subscribers are only called on changes, so a partner who stops typing sends nothing
+      // further. Re-check when the TTL lapses instead of leaving a stale hint up.
+      if (typingTimer != null) clearTimeout(typingTimer);
+      typingTimer = fresh
+        ? pluginAPI.setTimeout(() => updateTypingHint(lastGroup, lastPresence), typingTtl)
+        : null;
+    }
+    const onTypingInput = () => {
+      if (!typingOn || ended || !chatInput) return;
+      if (chatInput.value === "") {
+        // Emptied (sending clears the field too, and onChatSubmit withdraws explicitly): withdraw
+        // the hint immediately rather than letting it linger for a TTL.
+        lastTypingPing = 0;
+        markTyping(null);
+        return;
+      }
+      const nowMs = Date.now();
+      if (nowMs - lastTypingPing < typingThrottle) return;
+      lastTypingPing = nowMs;
+      markTyping(nowMs);
+    };
 
     // Show/clear the "wait for your partner's message" hint shown when a click is gated by
     // require_message_before_response. A dedicated element, so it never collides with chat send errors.
@@ -1344,11 +1462,16 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
       if (feedbackTimer != null) clearTimeout(feedbackTimer);
       if (selectionTimer != null) clearTimeout(selectionTimer);
       if (roundTimer != null) clearTimeout(roundTimer);
+      if (typingTimer != null) clearTimeout(typingTimer);
+      // Withdraw our typing mark so the next round (same key under `chat_persists`) never inherits
+      // a stale "typing" flag. Fire-and-forget; rejected (and ignored) if the session has closed.
+      markTyping(null);
       grid.removeEventListener("click", onGridClick);
       grid.removeEventListener("keydown", onGridKeydown);
       slotsRow.removeEventListener("click", onSlotsClick);
       submitButton.removeEventListener("click", onSubmitClick);
       chatForm?.removeEventListener("submit", onChatSubmit);
+      chatInput?.removeEventListener("input", onTypingInput);
 
       const group = lastGroup;
       const transcript = mergeMessages(group, chatKey);
@@ -1397,6 +1520,7 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
     slotsRow.addEventListener("click", onSlotsClick);
     submitButton.addEventListener("click", onSubmitClick);
     chatForm?.addEventListener("submit", onChatSubmit);
+    chatInput?.addEventListener("input", onTypingInput);
     if (isMatcher) updateMatcherUi();
     updateChatAvailability();
 
@@ -1406,6 +1530,7 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
       (group, presence) => {
         if (ended) return;
         lastGroup = group;
+        lastPresence = presence;
         // The session calls subscribers one last time when it closes, with our own presence "left"
         if (presence[me] === "left") {
           end("connection_lost");
@@ -1418,6 +1543,11 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
           if (others.length === 1) partner = others[0];
         }
         onGroupUpdate(group);
+        try {
+          updateTypingHint(group, presence);
+        } catch {
+          // A malformed typing frame must not tear down the subscription — worst case the hint hides.
+        }
         // A partner who leaves before feedback can never finish the round. Checked after the
         // update, so a submission that arrived with the departure still counts; once feedback is
         // showing the round is complete, so a departure then changes nothing.
