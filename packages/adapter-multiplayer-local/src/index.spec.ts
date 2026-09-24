@@ -287,6 +287,94 @@ describe("LocalAdapter with jsPsych.multiplayer", () => {
   });
 });
 
+describe("LocalAdapter rejoining", () => {
+  /** Make the page visible and fire visibilitychange, as when a background tab is shown again. */
+  function showPage() {
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      get: () => "visible",
+    });
+    document.dispatchEvent(new Event("visibilitychange"));
+  }
+
+  afterEach(() => {
+    delete (document as { visibilityState?: string }).visibilityState;
+  });
+
+  test("a tab whose heartbeat lapsed reports a drop and recovery, and rejoins", async () => {
+    jest.useFakeTimers();
+    const { openTab } = makeBrowser();
+    const rejoined = jest.fn();
+    const a = initJsPsych();
+    await a.multiplayer.connect(openTab({ participantId: "alice" }), {
+      dropoutTimeout: 1000,
+      onParticipantRejoined: rejoined,
+    });
+    const statuses: string[] = [];
+    const b = initJsPsych();
+    // A throttled background tab: bob's heartbeat timer never fires on its own
+    jest.spyOn(global, "setInterval").mockImplementationOnce(() => 0 as never);
+    await b.multiplayer.connect(openTab({ participantId: "bob" }), {
+      onStatusChange: (status) => statuses.push(status),
+    });
+    await b.multiplayer.update({ score: 2 });
+
+    // Past the presence timeout and then the dropout timeout
+    jest.advanceTimersByTime(6000);
+    expect(a.multiplayer.presence().bob).toBe("left");
+    expect(rejoined).not.toHaveBeenCalled();
+
+    showPage();
+    expect(statuses).toEqual(["reconnecting", "connected"]);
+    expect(a.multiplayer.presence().bob).toBe("connected");
+    expect(rejoined).toHaveBeenCalledWith("bob");
+    expect(a.multiplayer.get("bob")).toEqual({ score: 2 });
+
+    await b.multiplayer.disconnect();
+    await a.multiplayer.disconnect();
+  });
+
+  test("regular heartbeats never report a drop", async () => {
+    jest.useFakeTimers();
+    const { openTab } = makeBrowser();
+    const { options } = await connect(openTab({ participantId: "alice" }));
+    jest.advanceTimersByTime(60000);
+    showPage();
+    jest.advanceTimersByTime(60000);
+    expect(options.onStatus).not.toHaveBeenCalled();
+  });
+
+  test("a refresh with persistParticipant is a restart, not a rejoin", async () => {
+    sessionStorage.clear();
+    const { openTab } = makeBrowser();
+    const rejoined = jest.fn();
+    const restarted = jest.fn();
+    const a = initJsPsych();
+    await a.multiplayer.connect(openTab({ participantId: "alice" }), {
+      onParticipantRejoined: rejoined,
+      onParticipantRestarted: restarted,
+    });
+    const before = initJsPsych();
+    await before.multiplayer.connect(openTab({ persistParticipant: true }));
+    const bob = before.multiplayer.participantId!;
+    await before.multiplayer.update({ round: 3 });
+
+    // The refresh: the old page goes away, and a new page keeps the id from sessionStorage
+    await before.multiplayer.disconnect();
+    const after = initJsPsych();
+    await after.multiplayer.connect(openTab({ persistParticipant: true }));
+
+    expect(after.multiplayer.participantId).toBe(bob);
+    expect(after.multiplayer.previousInstance).not.toBeNull();
+    expect(a.multiplayer.presence()[bob]).toBe("left");
+    expect(restarted).toHaveBeenCalledWith(bob);
+    expect(rejoined).not.toHaveBeenCalled();
+
+    await after.multiplayer.disconnect();
+    await a.multiplayer.disconnect();
+  });
+});
+
 describe("LocalAdapter configuration", () => {
   test("distinct tabs get distinct random participant ids by default", () => {
     const { openTab } = makeBrowser();
