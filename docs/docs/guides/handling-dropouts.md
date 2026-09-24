@@ -37,7 +37,7 @@ How quickly an adapter notices a drop depends on the backend; see
 
 - **Slots outlive participants.** A participant's data stays in the shared data after they
   leave. Count participants with `presence`, which every `wait_for`, `ready`, and `end_when`
-  callback receives as its second argument, not with `Object.keys(group)`.
+  callback receives as its second argument, not by counting the entries in `group`.
 - **A departure is not a timeout.** A slow participant who stays connected is never marked
   `left`. Keep timeouts for participants who are present but never act.
 
@@ -83,8 +83,16 @@ presence in `wait_for`:
 const lobby = {
   type: jsPsychMultiplayerSync,
   push_data: { status: "ready" },
-  wait_for: (_group, presence) =>
-    Object.values(presence).filter((status) => status === "connected").length >= 2,
+  wait_for: (group, presence) => {
+    // Count the participants who are currently connected
+    let connected = 0;
+    for (const id in presence) {
+      if (presence[id] === "connected") {
+        connected++;
+      }
+    }
+    return connected >= 2;
+  },
 };
 ```
 
@@ -146,7 +154,10 @@ const RETURN_WINDOW = 3 * 60 * 1000; // how long to wait for the partner, in ms
 const waitForDecision = {
   type: jsPsychMultiplayerSync,
   participants: () => [partnerId],
-  wait_for: (group) => group[partnerId]?.decision !== undefined,
+  wait_for: (group) => {
+    const partner = group[partnerId];
+    return partner !== undefined && partner.decision !== undefined;
+  },
 };
 
 // Runs only if the step above ended because the partner left
@@ -155,7 +166,7 @@ const waitForReturn = {
     {
       type: jsPsychMultiplayerSync,
       message: "<p>Your partner lost their connection. Waiting for them to come back…</p>",
-      wait_for: (_group, presence) => presence[partnerId] === "connected",
+      wait_for: (group, presence) => presence[partnerId] === "connected",
       timeout: RETURN_WINDOW,
       data: { return_wait: true },
     },
@@ -167,8 +178,13 @@ const decisionStep = {
   timeline: [waitForDecision, waitForReturn],
   // Repeat the step if the partner left and came back in time
   loop_function: (data) => {
-    const [step, returnWait] = data.values();
-    return step.partner_left === true && returnWait?.timed_out === false;
+    // data holds this pass's trials: the step, then the waiting trial if it ran
+    const step = data.values()[0];
+    const returnWait = data.values()[1];
+    if (returnWait === undefined) {
+      return false;
+    }
+    return step.partner_left === true && returnWait.timed_out === false;
   },
 };
 

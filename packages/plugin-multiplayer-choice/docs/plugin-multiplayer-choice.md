@@ -72,7 +72,13 @@ const pd = {
   reveal_prompt: "<h3>Both players have chosen</h3>",
   payoff: (choices, me) => {
     const mine = choices[me].index;
-    const other = Object.entries(choices).find(([id]) => id !== me)[1].index;
+    // Find the other player's choice
+    let other;
+    for (const id in choices) {
+      if (id !== me) {
+        other = choices[id].index;
+      }
+    }
     return [
       [3, 0],
       [5, 1],
@@ -107,7 +113,11 @@ const contribute = {
   choices: ["0", "2", "5", "10"],
   expected_players: 4,
   on_finish: (data) => {
-    const pot = Object.values(data.choices_by_player).reduce((sum, c) => sum + Number(c.label), 0);
+    // Add up everyone's contribution
+    let pot = 0;
+    for (const id in data.choices_by_player) {
+      pot += Number(data.choices_by_player[id].label);
+    }
     data.group_return = (pot * 1.6) / 4; // split the multiplied pot
   },
 };

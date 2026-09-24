@@ -253,8 +253,16 @@ host, open it, and send the address it shows (with `?mp_session=...`) to the oth
       type: jsPsychMultiplayerSync,
       participants: [],
       push_data: { status: "ready" },
-      wait_for: (group, presence) =>
-        Object.values(presence).filter((status) => status === "connected").length >= 2,
+      wait_for: (group, presence) => {
+        // Count the participants who are currently connected
+        let connected = 0;
+        for (const id in presence) {
+          if (presence[id] === "connected") {
+            connected++;
+          }
+        }
+        return connected >= 2;
+      },
       message: "<p>Waiting for another player to join...</p>",
     };
 

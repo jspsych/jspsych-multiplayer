@@ -136,7 +136,13 @@ const pairedRound = {
       type: jsPsychMultiplayerChoice,
       prompt: "<p>Cooperate or defect?</p>",
       choices: ["Cooperate", "Defect"],
-      data_key: () => "pd_" + [...jsPsychMultiplayerMatch.getMyMatch().members].sort().join("_"),
+      data_key: () => {
+        // Build a key that is the same for everyone in this pair: sort their IDs and join them.
+        // slice() makes a copy, so sorting doesn't change the plugin's own list.
+        const members = jsPsychMultiplayerMatch.getMyMatch().members.slice();
+        members.sort();
+        return "pd_" + members.join("_");
+      },
       expected_players: () => jsPsychMultiplayerMatch.getMyMatch().members.length,
       participants: () => jsPsychMultiplayerMatch.getMyPartners(),
     },

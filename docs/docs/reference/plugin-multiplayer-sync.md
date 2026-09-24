@@ -24,6 +24,7 @@ condition is true, then the next trial. There is nothing to click.
 ```js
 timeline.push({
   type: jsPsychMultiplayerSync,
+  // Wait until two participants have written to the shared data
   wait_for: (group) => Object.keys(group).length >= 2,
 });
 ```
@@ -76,13 +77,24 @@ Write conditions that, once true, stay true:
 
 ```js
 // Fragile: the other player's next push may not include `status`
-wait_for: (group) => group[partnerId]?.status === "ready",
+wait_for: (group) => {
+  // The partner's slot is undefined until they write
+  return group[partnerId] !== undefined && group[partnerId].status === "ready";
+},
 
 // Better: a slot stays in the shared data even after its owner moves on or leaves
 wait_for: (group) => Object.keys(group).length >= 2,
 
 // Better: a counter that only goes up, carried forward in every push
-wait_for: (group) => Object.values(group).every((p) => p.round >= 5),
+wait_for: (group) => {
+  // Check that every participant has reached round 5
+  for (const id in group) {
+    if (group[id].round === undefined || group[id].round < 5) {
+      return false;
+    }
+  }
+  return true;
+},
 ```
 
 To count who is here now, use `presence` rather than slots: slots stay after a participant
@@ -97,15 +109,26 @@ responder's decision:
 const lobby = {
   type: jsPsychMultiplayerSync,
   participants: [], // keep waiting even if someone joins and leaves
-  wait_for: (group, presence) =>
-    Object.values(presence).filter((s) => s === "connected").length >= 2,
+  wait_for: (group, presence) => {
+    // Count the participants who are currently connected
+    let connected = 0;
+    for (const id in presence) {
+      if (presence[id] === "connected") {
+        connected++;
+      }
+    }
+    return connected >= 2;
+  },
   message: "<p>Waiting for another player to join…</p>",
 };
 
 const sendOfferAndWait = {
   type: jsPsychMultiplayerSync,
   push_data: () => ({ offer: myOffer }),
-  wait_for: (group) => group[responderId]?.decision !== undefined,
+  wait_for: (group) => {
+    // The responder's slot is undefined until they write
+    return group[responderId] !== undefined && group[responderId].decision !== undefined;
+  },
   participants: () => [responderId], // end early if the responder leaves
   timeout: 120000,
   message: "<p>Waiting for the responder…</p>",

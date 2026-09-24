@@ -127,10 +127,13 @@ const proposerOffer = {
 };
 
 // Need the *identity* of the player in another role (e.g. to read their pushed decision):
-const {
-  responder: [responderId],
-} = MultiplayerRole.participantsByRole();
-const theirDecision = jsPsych.multiplayer.get(responderId)?.rounds[round].decision;
+const responderId = MultiplayerRole.participantsByRole().responder[0];
+const responderSlot = jsPsych.multiplayer.get(responderId);
+let theirDecision;
+if (responderSlot !== undefined) {
+  // The responder has written data, so read their decision for this round
+  theirDecision = responderSlot.rounds[round].decision;
+}
 
 // The full agreed map, if you need it:
 const map = MultiplayerRole.getRoleMap(); // { p1: { role: "proposer" }, p2: { role: "responder" } }
@@ -162,7 +165,7 @@ they disagree about who is still there.
 ## Accessors that throw
 
 Readiness calls `rank_by`, `role_from`, and `ready` speculatively, before every participant's data has
-arrived, so a natural accessor like `(e) => e.rounds[round].score` throws until then. A throw counts
+arrived, so a natural accessor like `(entry) => entry.rounds[round].score` throws until then. A throw counts
 as "not ready yet", so accessors don't need to be null-safe. If the group never becomes ready (a
 timeout, a departure, or a lost connection), the plugin logs the last error an accessor threw, since
 it may explain why — for example, an accessor that tries to modify the frozen snapshot.

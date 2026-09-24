@@ -148,14 +148,26 @@ const waitForPartner = {
   type: jsPsychMultiplayerSync,
   push_data: () => ({ colour: myColour }),
   wait_for: (group, presence) => {
-    const here = Object.keys(presence).filter((id) => presence[id] === "connected");
-    return here.length >= 2 && here.every((id) => group[id]?.colour);
+    let connected = 0;
+    for (const id in presence) {
+      if (presence[id] === "connected") {
+        connected++;
+        // A participant's entry in group is undefined until they share something
+        if (group[id] === undefined || group[id].colour === undefined) {
+          return false; // someone connected hasn't chosen yet
+        }
+      }
+    }
+    return connected >= 2;
   },
   message: "<p>Waiting for your partner to choose…</p>",
   on_finish: (data) => {
-    const me = jsPsych.multiplayer.participantId;
-    const partner = Object.keys(data.group).find((id) => id !== me);
-    partnerColour = data.group[partner]?.colour;
+    // The partner is whoever in the group isn't this participant
+    for (const id in data.group) {
+      if (id !== jsPsych.multiplayer.participantId) {
+        partnerColour = data.group[id].colour;
+      }
+    }
   },
 };
 ```

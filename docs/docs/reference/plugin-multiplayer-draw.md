@@ -118,9 +118,22 @@ const draw = {
   colors: ["#000000", "#d9480f", "#1971c2", "#2f9e44"],
   show_roster: true,
   end_on_participant_left: false, // keep drawing if someone leaves
-  roster_label: (id, group) => (group[id]?.draw_done ? `${id} ✓` : id),
-  end_when: (group, presence) =>
-    Object.keys(group).every((id) => group[id].draw_done || presence[id] === "left"),
+  roster_label: (id, group) => {
+    // Add a check mark once a participant has clicked "I'm done"
+    if (group[id] !== undefined && group[id].draw_done) {
+      return `${id} ✓`;
+    }
+    return id;
+  },
+  end_when: (group, presence) => {
+    // End once every participant has either clicked "I'm done" or left
+    for (const id in group) {
+      if (!group[id].draw_done && presence[id] !== "left") {
+        return false;
+      }
+    }
+    return true;
+  },
   on_load: () => {
     const done = document.createElement("button");
     done.textContent = "I'm done";

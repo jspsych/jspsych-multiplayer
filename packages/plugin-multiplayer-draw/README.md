@@ -104,7 +104,14 @@ A participant who left the study can't set `draw_done`, so count them as done:
 ```js
 const draw = {
   type: jsPsychMultiplayerDraw,
-  end_when: (group, presence) =>
-    Object.keys(group).every((id) => group[id].draw_done || presence[id] === "left"),
+  end_when: (group, presence) => {
+    // End once every participant has either set draw_done or left
+    for (const id in group) {
+      if (!group[id].draw_done && presence[id] !== "left") {
+        return false; // this participant is still going
+      }
+    }
+    return true;
+  },
 };
 ```

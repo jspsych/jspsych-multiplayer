@@ -39,8 +39,16 @@ responder. Play a round, then use the button on the last screen to download that
 const lobby = {
   type: jsPsychMultiplayerSync,
   push_data: { status: "ready" },
-  wait_for: (_group, presence) =>
-    Object.values(presence).filter((status) => status === "connected").length >= 2,
+  wait_for: (group, presence) => {
+    // Count the participants who are currently connected
+    let connected = 0;
+    for (const id in presence) {
+      if (presence[id] === "connected") {
+        connected++;
+      }
+    }
+    return connected >= 2;
+  },
   message: "<p>Waiting for another player to join…</p>",
 };
 ```
@@ -62,26 +70,34 @@ const assignRoles = {
   strategy: "join_order",
   overflow_role: "spectator",
   ready: (group, presence) => {
-    const ids = Object.keys(group);
-    return (
-      ids.length >= 2 &&
-      ids.every(
-        (id) =>
-          presence[id] === "connected" &&
-          (group[id].joinedAt != null ||
-            group[id].offer !== undefined ||
-            group[id].decision !== undefined),
-      )
-    );
+    let players = 0;
+    for (const id in group) {
+      players++;
+      if (presence[id] !== "connected") {
+        return false;
+      }
+      // Each player needs a joinedAt time, or, if they joined mid-game, an offer or decision
+      const slot = group[id];
+      if (slot.joinedAt === undefined && slot.offer === undefined && slot.decision === undefined) {
+        return false;
+      }
+    }
+    return players >= 2;
   },
   save_group: true,
   message: "<p>Assigning roles…</p>",
   on_finish: (data) => {
     myRole = jsPsychMultiplayerRole.getMyRole();
+    // If the trial ended before roles were assigned (for example, a player left), there are
+    // no roles to read
+    if (myRole === undefined) {
+      return;
+    }
+    // participantsByRole() gives a list of IDs for each role; each role has one player here
     const byRole = jsPsychMultiplayerRole.participantsByRole();
-    proposerId = byRole.proposer?.[0];
-    responderId = byRole.responder?.[0];
-    myJoinedAt = data.group?.[jsPsych.multiplayer.participantId]?.joinedAt;
+    proposerId = byRole.proposer[0];
+    responderId = byRole.responder[0];
+    myJoinedAt = data.group[jsPsych.multiplayer.participantId].joinedAt;
   },
 };
 ```
@@ -136,7 +152,10 @@ let partnerLeft = false;
 const proposerWait = {
   type: jsPsychMultiplayerSync,
   push_data: () => ({ offer: proposerOffer, joinedAt: myJoinedAt }),
-  wait_for: (group) => group[responderId]?.decision !== undefined,
+  wait_for: (group) => {
+    const responder = group[responderId];
+    return responder !== undefined && responder.decision !== undefined;
+  },
   participants: () => [responderId],
   timeout: PARTNER_TIMEOUT_MS,
   message: "<p>Waiting for the responder…</p>",
@@ -150,7 +169,7 @@ const proposerWait = {
 };
 ```
 
-The responder mirrors it: a sync trial that waits for `group[proposerId]?.offer`, a button trial
+The responder mirrors it: a sync trial that waits for the proposer's `offer`, a button trial
 to accept or reject, and a sync trial that pushes
 `{ decision: responderDecision, joinedAt: myJoinedAt }`.
 
