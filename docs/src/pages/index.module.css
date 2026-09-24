@@ -1,0 +1,354 @@
+/* The landing page. Laid out to the same grid and tokens as the other jsPsych
+   sites' home pages (copied from saccade.js): a 1080px column, 12px radii, the theme's surface and
+   border colours, and the orange accent on icons. */
+
+/* --- Hero (copy on the left, the two ways in on the right) --------------- */
+
+.hero {
+  position: relative;
+  overflow: hidden;
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 3.5rem 1.5rem 2rem;
+}
+
+.heroRow {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: 1.05fr 1fr;
+  gap: 3.5rem;
+  align-items: center;
+}
+
+/* Nudge the sentences down without moving the mark above them: `position:
+   relative` leaves the layout box where it was, so the column does not
+   re-centre. */
+.heroText {
+  position: relative;
+  top: -0.5rem;
+}
+
+.heroPaths {
+  position: relative;
+  top: 2rem;
+}
+
+.heroLogo {
+  display: inline-flex;
+  height: 76px;
+  margin: 0 0 1.5rem;
+  padding: 0;
+}
+
+.heroMark {
+  height: 100%;
+  width: auto;
+}
+
+.heroTitle {
+  font-size: 3rem;
+  line-height: 1.1;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  margin-bottom: 1.25rem;
+}
+
+.heroTitleAccent {
+  color: var(--ifm-color-primary);
+}
+
+.heroLede {
+  font-size: 1.15rem;
+  line-height: 1.55;
+  color: var(--ifm-color-emphasis-800);
+  margin-bottom: 1rem;
+}
+
+.heroNote {
+  font-size: 1rem;
+  line-height: 1.55;
+  color: var(--ifm-color-emphasis-600);
+  margin-bottom: 0;
+}
+
+/* --- The two ways in ----------------------------------------------------- */
+
+.pathList {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.pathCard {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--ifm-toc-border-color);
+  border-radius: 12px;
+  padding: 1.5rem;
+  background: var(--ifm-background-surface-color);
+}
+
+.pathCardHead {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  margin-bottom: 0.85rem;
+}
+
+.pathCardIcon {
+  color: var(--jspsych-orange);
+  flex-shrink: 0;
+}
+
+.pathCardTitle {
+  font-size: 1.15rem;
+  font-weight: 700;
+  margin: 0;
+}
+
+.pathCardDesc {
+  font-size: 0.95rem;
+  line-height: 1.55;
+  color: var(--ifm-color-emphasis-700);
+  margin: 0 0 1.25rem;
+}
+
+.pathCardActions {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  flex-wrap: wrap;
+}
+
+.pathLink {
+  font-weight: 600;
+}
+
+/* --- Shared section furniture -------------------------------------------- */
+
+.eyebrow {
+  color: var(--ifm-color-primary);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  margin-bottom: 1.75rem;
+}
+
+/* --- What you get -------------------------------------------------------- */
+
+.features {
+  max-width: 1080px;
+  margin: 2rem auto 3.5rem;
+  padding: 0 1.5rem;
+}
+
+.featureGrid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 2rem;
+}
+
+.featureIcon {
+  color: var(--jspsych-orange);
+  display: block;
+  margin-bottom: 0.65rem;
+}
+
+.featureTitle {
+  font-size: 1.2rem;
+  font-weight: 700;
+  margin-bottom: 0.4rem;
+}
+
+.featureBody {
+  color: var(--ifm-color-emphasis-700);
+  line-height: 1.55;
+  font-size: 0.95rem;
+  margin-bottom: 0;
+}
+
+/* --- In your timeline ---------------------------------------------------- */
+
+.timeline {
+  max-width: 1080px;
+  margin: 0 auto 3.5rem;
+  padding: 0 1.5rem;
+}
+
+.timelineCard {
+  display: grid;
+  grid-template-columns: 1fr 1.15fr;
+  gap: 2rem;
+  align-items: center;
+  border: 1px solid var(--ifm-toc-border-color);
+  border-radius: 12px;
+  padding: 1.75rem 2rem;
+  background: var(--ifm-background-surface-color);
+}
+
+.timelineTitle {
+  font-size: 1.3rem;
+  font-weight: 700;
+  margin: 0 0 0.5rem;
+}
+
+.timelineBody {
+  color: var(--ifm-color-emphasis-700);
+  line-height: 1.55;
+  font-size: 0.95rem;
+  margin: 0 0 1.5rem;
+}
+
+/* The code panel carries its own rounded corner and background, so the block
+   inside it should not add a second margin below. */
+.timelineCode :global(.theme-code-block) {
+  margin-bottom: 0;
+}
+
+.timelineCode :global(pre) {
+  font-size: 0.82rem;
+}
+
+/* --- What you need / the packages ---------------------------------------- */
+
+.details {
+  max-width: 1080px;
+  margin: 0 auto 4rem;
+  padding: 0 1.5rem;
+}
+
+.detailsGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2rem 3.5rem;
+}
+
+.needList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.needList li {
+  color: var(--ifm-color-emphasis-700);
+  font-size: 0.95rem;
+  line-height: 1.55;
+  margin-bottom: 0.85rem;
+}
+
+.needList strong {
+  color: var(--ifm-heading-color);
+}
+
+.packageList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.packageList li {
+  margin-bottom: 0.7rem;
+}
+
+.packageName {
+  display: block;
+  font-family: var(--ifm-font-family-monospace);
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.packageWhat {
+  color: var(--ifm-color-emphasis-700);
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.detailsNote {
+  margin: 1rem 0 0;
+  font-size: 0.95rem;
+  color: var(--ifm-color-emphasis-700);
+}
+
+/* --- Narrow ------------------------------------------------------------- */
+
+@media (max-width: 996px) {
+  .timelineCard {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 900px) {
+  .heroRow {
+    grid-template-columns: 1fr;
+    gap: 2.5rem;
+  }
+
+  .heroText,
+  .heroPaths {
+    top: 0;
+  }
+
+  .heroTitle {
+    font-size: 2.4rem;
+  }
+}
+
+@media (max-width: 800px) {
+  .featureGrid,
+  .detailsGrid {
+    grid-template-columns: 1fr;
+    gap: 2.25rem;
+  }
+}
+
+/* The step above already stacks everything; this one is about the phone
+   itself — the gutters and the display type, which still overhangs a 375px
+   screen at 2.4rem. */
+@media (max-width: 600px) {
+  .hero {
+    padding: 2.25rem 1.15rem 1.5rem;
+  }
+
+  .heroLogo {
+    height: 60px;
+    margin-bottom: 1.15rem;
+  }
+
+  .heroTitle {
+    font-size: 1.9rem;
+    letter-spacing: -0.02em;
+  }
+
+  .heroLede {
+    font-size: 1.05rem;
+  }
+
+  .pathCard {
+    padding: 1.15rem;
+  }
+
+  /* Side by side, the button would be too narrow to read, so they stack full
+     width — the link centres to stay aligned with the button above it. */
+  .pathCardActions {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 0.85rem;
+  }
+
+  .pathLink {
+    text-align: center;
+  }
+
+  .features,
+  .timeline,
+  .details {
+    padding-left: 1.15rem;
+    padding-right: 1.15rem;
+  }
+
+  .timelineCard {
+    padding: 1.25rem 1.15rem;
+  }
+}

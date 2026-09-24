@@ -2,7 +2,6 @@
 id: multiplayer-api
 title: jsPsych.multiplayer
 sidebar_label: jsPsych.multiplayer
-sidebar_position: 1
 description: The core multiplayer API — the methods plugins and experiments use.
 ---
 
@@ -50,7 +49,7 @@ The session tracks whether each participant is still in the group:
 
 A participant's slot stays in the shared data after they leave, so count participants by
 presence, not by slot. While your own connection is down, the session pauses everyone
-else's dropout timers. See [Handling dropouts](/guides/handling-dropouts) for how the
+else's dropout timers. See [Handling dropouts](../guides/handling-dropouts) for how the
 plugins use presence.
 
 ### Rejoining
@@ -114,7 +113,7 @@ with a `MultiplayerCancelledError` once the adapter has closed anything it opene
 
 **Replaces** your slot with `data`. Any key the call omits is gone, for you and for everyone
 reading the shared data. Whatever fields other participants depend on must be carried
-forward; see the [ultimatum tutorial](/tutorials/ultimatum-game) for the failure this causes.
+forward; see the [ultimatum game](../guides/ultimatum-game#carry-forward-what-others-read) for the failure this causes.
 
 ### `update(data): Promise<void>`
 
@@ -191,7 +190,7 @@ Closes the current session, or cancels a `connect()` in progress. Subscribers ge
 last call, pending `wait()` calls reject with a `MultiplayerCancelledError`, and
 unconfirmed writes reject. Your slot stays in the shared data; the others see you as `left`.
 
-## The adapter contract
+## The adapter interface
 
 An adapter has two parts. The **adapter** holds configuration; each call to its
 `connect()` opens a new, independent **connection**:
@@ -224,12 +223,3 @@ reports `"reconnecting"` then `"connected"` whenever other participants may have
 out. It stores and returns the reserved `$mp` key like any other data. jsPsych's
 "Multiplayer Adapter Development" page, part of
 [jsPsych#3694](https://github.com/jspsych/jsPsych/pull/3694), covers each method in detail.
-
-## The rules of the group session
-
-1. **A participant can write only their own slot.** Write conflicts are impossible by
-   construction.
-2. **Every participant can read every slot**, by snapshot or subscription.
-3. **Shared decisions are computed, not negotiated** — every client runs the same
-   deterministic function over the same data and reaches the same conclusion, with no
-   coordinator to lose.

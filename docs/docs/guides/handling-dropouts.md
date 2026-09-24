@@ -2,7 +2,6 @@
 id: handling-dropouts
 title: Handling dropouts
 sidebar_label: Handling dropouts
-sidebar_position: 2
 description: How the multiplayer plugins detect a participant who leaves, what they record, how a participant rejoins, and how gates stay separate.
 ---
 
@@ -34,7 +33,7 @@ await jsPsych.multiplayer.connect(adapter, {
 ```
 
 How quickly an adapter notices a drop depends on the backend; see
-[Choosing an adapter](/guides/choosing-an-adapter). Two consequences apply everywhere:
+[Choosing a backend](choosing-a-backend). Two consequences apply everywhere:
 
 - **Slots outlive participants.** A participant's data stays in the shared data after they
   leave. Count participants with `presence`, which every `wait_for`, `ready`, and `end_when`
@@ -91,7 +90,7 @@ const lobby = {
 
 To build a lobby from another barrier plugin, pass `participants: []`. A mid-game wait for a
 specific partner should name them, as in the
-[ultimatum tutorial](/tutorials/ultimatum-game): `participants: () => [partnerId]`.
+[ultimatum game](ultimatum-game): `participants: () => [partnerId]`.
 
 ## Rejoining
 

@@ -1,5 +1,5 @@
 {
-  "name": "jspsych-multiplayer-website",
+  "name": "jspsych-multiplayer-docs",
   "version": "0.0.0",
   "private": true,
   "scripts": {
@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@docusaurus/core": "3.9.2",
+    "@docusaurus/plugin-client-redirects": "3.9.2",
     "@docusaurus/preset-classic": "3.9.2",
     "@jspsych/docusaurus-preset": "^0.2.0",
     "@jspsych/docusaurus-theme": "^0.2.0",
