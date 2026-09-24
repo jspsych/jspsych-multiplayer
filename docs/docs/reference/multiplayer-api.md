@@ -32,7 +32,8 @@ ID to slot (type `GroupSessionData`).
   counter.
 - **Data is plain JSON.** Each write is copied as JSON when you make it. `BigInt` and
   circular data make the write reject, `Date` values become strings, and `undefined` values
-  are dropped.
+  are dropped. The key `$mp` is reserved for the session's own bookkeeping (see
+  [Rejoining](#rejoining)): it never appears in what you read, and writing it rejects.
 - **Reads are frozen and shared.** `getAll()`, `get()`, subscribers, and `wait()` all receive
   the same frozen object. Changing it throws a `TypeError`; copy it first if you need a
   modified version.
@@ -41,16 +42,27 @@ ID to slot (type `GroupSessionData`).
 
 The session tracks whether each participant is still in the group:
 
-| Status      | Meaning                                                                                                    |
-| ----------- | ---------------------------------------------------------------------------------------------------------- |
-| `connected` | The participant is connected.                                                                              |
-| `away`      | The participant's connection dropped. Brief network interruptions look like this.                          |
-| `left`      | The participant has been away longer than the dropout timeout (10 s by default). This status is permanent. |
+| Status      | Meaning                                                                           |
+| ----------- | --------------------------------------------------------------------------------- |
+| `connected` | The participant is connected.                                                     |
+| `away`      | The participant's connection dropped. Brief network interruptions look like this. |
+| `left`      | The participant has been away longer than the dropout timeout (10 s by default).  |
 
 A participant's slot stays in the shared data after they leave, so count participants by
 presence, not by slot. While your own connection is down, the session pauses everyone
 else's dropout timers. See [Handling dropouts](/guides/handling-dropouts) for how the
 plugins use presence.
+
+### Rejoining
+
+A participant who drops out can come back from the **same page**: after a network outage,
+for example, they become `connected` again and `onParticipantRejoined` is called. A
+participant who comes back from a **new page load** (a reload or a new tab) under the same
+ID has restarted the experiment, so they stay `left` and `onParticipantRestarted` is called;
+their own page sees `previousInstance`. The session tells the two apart with a page ID and
+counter it writes into each slot under `$mp`. A trial that already ended because a
+participant left stays ended. See [Handling dropouts](/guides/handling-dropouts#rejoining)
+for a recipe that waits for a partner to come back.
 
 ## Methods
 
@@ -75,21 +87,26 @@ runExperiment();
 Top-level `await` only works in `<script type="module">`, so wrap the two calls in an
 `async` function for a classic `<script>` tag.
 
-| Option              | Description                                                                                                                          |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `dropoutTimeout`    | How long, in ms, a participant can stay disconnected before they count as `left`. Default `10000`; `null` or `Infinity` means never. |
-| `onParticipantLeft` | Called with a participant's ID when they become `left`.                                                                              |
-| `onStatusChange`    | Called with this participant's new connection status.                                                                                |
-| `signal`            | An `AbortSignal` that cancels a `connect()` still in progress.                                                                       |
+| Option                   | Description                                                                                                                          |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `dropoutTimeout`         | How long, in ms, a participant can stay disconnected before they count as `left`. Default `10000`; `null` or `Infinity` means never. |
+| `onParticipantLeft`      | Called with a participant's ID when they become `left`.                                                                              |
+| `onParticipantRejoined`  | Called with a participant's ID when a participant who had `left` comes back from the same page.                                      |
+| `onParticipantRestarted` | Called with a participant's ID when they come back from a new page load. Their experiment restarted, so they stay `left`.            |
+| `onStatusChange`         | Called with this participant's new connection status.                                                                                |
+| `signal`                 | An `AbortSignal` that cancels a `connect()` still in progress.                                                                       |
 
 `connect()` rejects if a session is already open or connecting; call `disconnect()` first. A
 session whose connection was lost can be replaced directly. A cancelled `connect()` rejects
 with a `MultiplayerCancelledError` once the adapter has closed anything it opened.
 
-### `participantId`, `status`, `session`
+### `participantId`, `status`, `previousInstance`, `session`
 
 - `participantId: string | null` — this participant's ID; `null` without a session.
 - `status: "connected" | "reconnecting" | "closed" | null` — this participant's connection.
+- `previousInstance: string | null` — set when this participant's slot came from an earlier
+  page load: they reloaded or reopened the study, so the group has moved on without them.
+  Check it right after `connect()` and show a message instead of starting over.
 - `session: MultiplayerSession | null` — the current session, the object `connect()`
   returned. It has the same methods as `jsPsych.multiplayer`, except `connect()`.
 
@@ -201,7 +218,10 @@ interface MultiplayerConnection {
 asynchronous backend keeps an in-memory mirror and fills it during `connect()`. Presence
 comes from `connectedParticipants()`, which lists open connections, not participants who
 have data. `update()`, `wait()`, subscriptions, copying, and presence are all built by the
-API on top of these methods, so an adapter does not implement them. jsPsych's
+API on top of these methods, so an adapter does not implement them. For rejoining to work,
+an adapter keeps the same `participantId` for every connection made from the same page, and
+reports `"reconnecting"` then `"connected"` whenever other participants may have seen it drop
+out. It stores and returns the reserved `$mp` key like any other data. jsPsych's
 "Multiplayer Adapter Development" page, part of
 [jsPsych#3694](https://github.com/jspsych/jsPsych/pull/3694), covers each method in detail.
 

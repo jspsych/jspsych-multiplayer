@@ -88,7 +88,7 @@ Inside the empty `<script>`:
 ```js
 const jsPsych = initJsPsych();
 
-const adapter = new jsPsychAdapterMultiplayerLocal({ persistParticipant: true });
+const adapter = new jsPsychAdapterMultiplayerLocal();
 
 // ...timeline goes here...
 
@@ -98,8 +98,9 @@ jsPsych.multiplayer.connect(adapter).then(() => {
 ```
 
 `connect` must resolve **before** `jsPsych.run()`, because every multiplayer trial talks to
-the group session through the connected adapter. `persistParticipant: true` means a
-mid-experiment refresh rejoins as the same participant.
+the group session through the connected adapter. A refreshed tab joins as a new
+participant: a page that reloads has restarted its experiment, so it can't rejoin the group
+it left (see [Rejoining](/guides/handling-dropouts#rejoining)).
 
 </Step>
 

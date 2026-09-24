@@ -96,16 +96,25 @@ const localAdapter = new jsPsychAdapterMultiplayerLocal({ persistParticipant: tr
 // ...timeline definitions...
 
 jsPsych.multiplayer.connect(localAdapter).then(() => {
+  if (jsPsych.multiplayer.previousInstance) {
+    jsPsych.run([reloadedScreen]);
+    return;
+  }
   jsPsych.run([lobby, assignRoles, gameFull, noGroupScreen, gameTimeline, doneScreen]);
 });
 ```
 
-Two things to note:
+Three things to note:
 
 - **`connect` before `run`.** Every multiplayer trial talks to the group session through
   the connected adapter, so the connection must exist before the timeline starts.
 - **`persistParticipant: true`** stores this tab's participant ID in `sessionStorage`, so a
-  mid-game refresh rejoins as the *same* participant.
+  refreshed tab keeps its ID.
+- **A refreshed tab can't rejoin.** It restarted the experiment, so the other player sees it
+  as `left`. On the refreshed page, `jsPsych.multiplayer.previousInstance` is set, and the
+  page shows `reloadedScreen`, a single button-response trial saying the participant can't
+  rejoin, instead of starting the game over. See
+  [Rejoining](/guides/handling-dropouts#rejoining).
 
 This is the only backend-specific code in the whole file. Everything after this point runs
 unchanged on JATOS (step 8).

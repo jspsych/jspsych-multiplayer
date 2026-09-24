@@ -83,7 +83,7 @@ Once connected, `jsPsych.multiplayer` offers:
 
 | Method | What it does |
 | --- | --- |
-| `connect(adapter, options?)` | Open a session through the given backend and return it. Call before `jsPsych.run()`. Options include `dropoutTimeout` and `onParticipantLeft`. |
+| `connect(adapter, options?)` | Open a session through the given backend and return it. Call before `jsPsych.run()`. Options include `dropoutTimeout`, `onParticipantLeft`, and `onParticipantRejoined`. |
 | `push(data)` | **Replace** this participant's slot with `data`. Reads show the change at once. |
 | `update(data)` | Shallow-**merge** `data` into this participant's slot. |
 | `get(participantId)` | Read one participant's slot (frozen). |
@@ -93,6 +93,7 @@ Once connected, `jsPsych.multiplayer` offers:
 | `wait(condition, { timeout, participants, signal }?)` | Promise that resolves once `condition(data, presence)` holds, and rejects if a listed participant leaves. |
 | `cancelAllSubscriptions()` | Remove every subscription and cancel pending `wait()`s. jsPsych calls it when the timeline ends and on `abortExperiment()`. |
 | `participantId`, `status` | This participant's ID and connection status. `null` until `connect()` resolves. |
+| `previousInstance` | Set when this participant reloaded and can't rejoin the group; `null` otherwise. |
 | `disconnect()` | Close the session. |
 
 Most experiments never call these directly — the plugins do. `push()` followed by `wait()`
