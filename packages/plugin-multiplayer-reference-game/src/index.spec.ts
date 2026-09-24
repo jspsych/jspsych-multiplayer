@@ -604,6 +604,18 @@ describe("multiplayer-reference-game: chat, timeout, and the real pipeline", () 
 });
 
 describe("multiplayer-reference-game: review-fix regressions", () => {
+  it("throws a clear error for disjoint scramble mode with a single stimulus", async () => {
+    const { jsPsych } = makeJsPsych(await makeApi("x"));
+    expect(() =>
+      run(jsPsych, display(), {
+        ...base,
+        stimuli: [{ id: "a" }],
+        targets: ["a"],
+        scramble_mode: "disjoint",
+      }),
+    ).toThrow(/disjoint.*at least 2 stimuli/i);
+  });
+
   it("fails loudly when this round already holds a submitted assignment (stale-replay guard)", async () => {
     // A reused round index (or the old default of 0 across trials) leaves the previous submission in
     // data_key[round]; running again must throw rather than silently replay it into feedback.

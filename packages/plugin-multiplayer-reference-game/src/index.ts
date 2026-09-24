@@ -78,7 +78,8 @@ const info = <const>{
      * may occupy the same slot for both players — the stricter rule the original tangrams experiment
      * enforces, since under plain `independent` about a third of objects still coincide by chance),
      * `"shared"` (identical layouts), or `"matcher_only"` (director sees the canonical `stimuli`
-     * order, matcher a scramble).
+     * order, matcher a scramble). `"disjoint"` requires at least 2 stimuli — a single object cannot
+     * differ in position between layouts, so that combination fails loudly at setup.
      */
     scramble_mode: {
       type: ParameterType.STRING,
@@ -593,6 +594,15 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
     }
 
     const scrambleMode = (trial.scramble_mode ?? "independent") as ScrambleMode;
+    // `disjoint` is a derangement between the two layouts: NO object may share a slot. With a single
+    // stimulus that is impossible, and silently yielding identical layouts would violate exactly the
+    // property the mode promises — so reject it loudly instead of degrading.
+    if (scrambleMode === "disjoint" && stimuli.length < 2) {
+      throw new Error(
+        'multiplayer-reference-game: `scramble_mode: "disjoint"` requires at least 2 stimuli ' +
+          "(a single object cannot occupy different slots for the two players).",
+      );
+    }
     const ordered = (trial.ordered as boolean | null) ?? k > 1;
     const scoring = trial.scoring as unknown as ScoringSpec;
     const responseMode =
