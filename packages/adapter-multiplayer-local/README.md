@@ -34,7 +34,7 @@ Each run is namespaced by a **session id** carried in the URL as `?mp_session=�
 
 This per-run namespacing is deliberate: `localStorage` persists across reloads, so without it a slot left over from a previous run would be counted as a phantom participant ("why does my 2-player lobby open with one tab present?"). A fresh session id per run keeps every run clean.
 
-By default a **page refresh starts a new participant**. The old tab's data slot stays in the session, and the other tabs see that participant as away and then left (see [Presence](#presence)). If you want a refresh to rejoin as the *same* participant, pass `persistParticipant: true`; the tab's id is then kept in `sessionStorage` (per-tab, cleared when the tab closes).
+By default a **page refresh starts a new participant**. The old tab's data slot stays in the session, and the other tabs see that participant as away and then left (see [Presence](#presence)). If you want a refresh to keep the *same* participant id, pass `persistParticipant: true`; the tab's id is then kept in `sessionStorage` (per-tab, cleared when the tab closes). A refresh still restarts the experiment, so the other tabs see that participant as having restarted, not rejoined (see [Rejoining](#rejoining)), and the refreshed page can check `jsPsych.multiplayer.previousInstance`.
 
 > **Caveat — "Duplicate Tab" clones the participant id.** `persistParticipant` relies on `sessionStorage`, and the browser's *Duplicate Tab* feature (and middle-click-open-in-new-tab in some browsers) **copies `sessionStorage` into the new tab**. The duplicate therefore inherits the *same* participantId and the two tabs write the same slot, clobbering each other — so they look like one participant, not two. To bring a second player into a run, open the shared URL (with its `?mp_session=…`) in a **fresh** tab or window rather than duplicating an existing one.
 
@@ -44,7 +44,7 @@ By default a **page refresh starts a new participant**. The old tab's data slot 
 new jsPsychAdapterMultiplayerLocal({
   sessionId,           // override the ?mp_session= namespace
   participantId,       // override this tab's id (default: random per tab)
-  persistParticipant,  // true → rejoin as the same participant across reloads (sessionStorage)
+  persistParticipant,  // true → keep the same id across reloads (sessionStorage)
   keyPrefix,           // storage-key prefix (default "mp")
   storage,             // custom Storage backend (default: localStorage)
   signal,              // custom cross-tab ChangeSignal (default: BroadcastChannel + storage event)
@@ -64,6 +64,12 @@ jsPsych tracks whether each participant is still connected (`jsPsych.multiplayer
 - **A tab that crashes drops out after `presenceTimeoutMs`**, when its last heartbeat goes stale. The default of 70 seconds is long because browsers throttle timers in background tabs: Chrome runs them only once a minute in a tab that has been hidden for 5 minutes, and a background tab must not look disconnected just because it's waiting.
 
 A participant who drops out keeps their data slot; presence, not the slot, says who is still here.
+
+### Rejoining
+
+`localStorage` never disconnects, so this adapter normally never reports a connection status. The exception is a **lapsed heartbeat**: a throttled background tab, or a page frozen in the back/forward cache, can go longer than `presenceTimeoutMs` without a heartbeat, and the other tabs then count it as gone. When that tab's next heartbeat runs (on its timer, when it becomes visible, or when it is restored), it reports `reconnecting` and then `connected`. jsPsych then tells the other tabs that this page is back, so they see the participant as `connected` again (`onParticipantRejoined` if they had reached `left`).
+
+A **refresh** is different: the page starts the experiment again, so it can't rejoin. With a new id (the default) the old participant stays `left`. With `persistParticipant: true` the same id comes back from a new page load, and the other tabs report it through `onParticipantRestarted` while it stays `left`.
 
 ## How it works
 
