@@ -44,10 +44,10 @@ by participant ID, in which each participant owns exactly one slot.
 
 Three rules govern it:
 
-1. **A participant can write only their own slot**, and a write **replaces** that slot
-   entirely — it does not merge. No participant can write another's data, so write
-   conflicts are impossible by construction. (Replace-not-merge is the single most
-   consequential fact about the API; both tutorials return to it.)
+1. **A participant can write only their own slot.** `push()` **replaces** the slot
+   entirely; `update()` merges keys into it. No participant can write another's data, so
+   write conflicts are impossible by construction. (What a `push()` erases is the single
+   most common source of bugs; both tutorials return to it.)
 2. **Every participant can read every slot**, as a snapshot (`getAll`) or a live
    subscription (`subscribe`).
 3. **Shared decisions are computed, not negotiated.** When the group needs to agree on
@@ -55,6 +55,11 @@ Three rules govern it:
    client independently runs the *same deterministic function* over the *same group
    session*. Identical inputs plus an identical pure function give identical conclusions on
    every screen, with no coordinator whose disconnection would strand the rest.
+
+Alongside the data, the session tracks each participant's **presence**: `connected`,
+`away` (their connection dropped), or `left` (away longer than the dropout timeout). A slot
+stays after its participant leaves, so presence, not the slot, says who is still here. See
+[Handling dropouts](/guides/handling-dropouts).
 
 ## The `jsPsych.multiplayer` namespace
 
@@ -78,16 +83,17 @@ Once connected, `jsPsych.multiplayer` offers:
 
 | Method | What it does |
 | --- | --- |
-| `connect(adapter)` | Join the group session through the given backend. Call before `jsPsych.run()`. |
-| `push(data)` | **Replace** the calling client's slot with `data`. |
-| `update(data)` | Shallow-**merge** `data` into the calling client's slot, then push the result. |
-| `get(participantId)` | Read one participant's slot. |
-| `getAll()` | Snapshot of the whole group session. |
-| `subscribe(cb)` | Live updates; returns an unsubscribe function. Replays current state on registration. |
-| `cancelAllSubscriptions()` | Release every active subscription and cancel pending `wait()`s. jsPsych calls it at the end of the experiment and on `abortExperiment()`; a trial still releases its own handles. |
-| `wait(condition, timeout?)` | Promise that resolves once a predicate over the group session holds. |
-| `participantId` | The calling client's stable ID within the session. `null` until `connect()` resolves. |
-| `disconnect()` | Leave the session. |
+| `connect(adapter, options?)` | Open a session through the given backend and return it. Call before `jsPsych.run()`. Options include `dropoutTimeout` and `onParticipantLeft`. |
+| `push(data)` | **Replace** this participant's slot with `data`. Reads show the change at once. |
+| `update(data)` | Shallow-**merge** `data` into this participant's slot. |
+| `get(participantId)` | Read one participant's slot (frozen). |
+| `getAll()` | The whole group session (frozen). |
+| `presence()` | Each participant's presence: `connected`, `away`, or `left`. |
+| `subscribe(cb, { signal }?)` | Call `cb(data, presence)` now and after every change; returns an unsubscribe function. |
+| `wait(condition, { timeout, participants, signal }?)` | Promise that resolves once `condition(data, presence)` holds, and rejects if a listed participant leaves. |
+| `cancelAllSubscriptions()` | Remove every subscription and cancel pending `wait()`s. jsPsych calls it when the timeline ends and on `abortExperiment()`. |
+| `participantId`, `status` | This participant's ID and connection status. `null` until `connect()` resolves. |
+| `disconnect()` | Close the session. |
 
 Most experiments never call these directly — the plugins do. `push()` followed by `wait()`
 is the **synchronization barrier** that nearly every turn-based paradigm reduces to, and

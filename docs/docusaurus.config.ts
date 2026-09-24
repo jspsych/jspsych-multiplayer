@@ -54,8 +54,9 @@ const config: Config = defineJspsychConfig({
   // tutorial) once a `jspsych` release carries the API.
   themeConfig: {
     announcementBar: {
-      id: "prerelease-3694",
-      content: `These docs describe the <code>jsPsych.multiplayer</code> API from <a href="https://github.com/jspsych/jsPsych/pull/3694">jsPsych#3694</a>, which is still in review and not yet in any <code>jspsych</code> release. See <a href="${baseUrl}tutorials/first-multiplayer-trial">the first tutorial</a> for how to load a preview build.`,
+      // Changing the id shows the bar again to readers who closed an earlier version
+      id: "prerelease-3694-sessions-presence",
+      content: `These docs describe the <code>jsPsych.multiplayer</code> API from <a href="https://github.com/jspsych/jsPsych/pull/3694">jsPsych#3694</a>, which is still in review and not yet in any <code>jspsych</code> release. The API recently changed: <code>connect()</code> returns a session, <code>wait()</code> takes an options object, and participants have presence. See <a href="${baseUrl}tutorials/first-multiplayer-trial">the first tutorial</a> for how to load a preview build.`,
       isCloseable: true,
     },
   },
