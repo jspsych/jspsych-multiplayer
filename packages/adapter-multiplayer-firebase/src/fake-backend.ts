@@ -8,7 +8,7 @@
  *  - a shared `FakeRtdb` lets multiple backends (i.e. multiple simulated participants) see each
  *    other's writes through one session listener.
  *
- * Test-only helpers (not part of the interface): `setConnected`, `simulateBlip`, `FakeRtdb.get` /
+ * Test-only helpers (not part of the interface): `setConnected`, `simulateDrop`, `simulateBlip`, `FakeRtdb.get` /
  * `cancelListeners`, and the `denyReads` / `neverSnapshot` construction flags for the connect()
  * failure paths.
  */
@@ -206,14 +206,21 @@ export class FakeBackend implements FirebaseBackend {
   }
 
   /**
-   * Simulate a transient network blip: the server fires our armed onDisconnect (removing our
-   * presence node, one-shot), the client goes offline, then reconnects. The adapter's reconnect
-   * handler should re-arm and re-write presence in response.
+   * Simulate losing the network: the server fires our armed onDisconnect (removing our presence
+   * node, one-shot) and the client goes offline. `setConnected(true)` brings it back.
    */
-  simulateBlip(): void {
+  simulateDrop(): void {
     for (const path of this.armed) this.rtdb.remove(path);
     this.armed.clear();
     this.setConnected(false);
+  }
+
+  /**
+   * Simulate a transient network blip: a drop followed at once by a reconnect. The adapter's
+   * reconnect handler should re-arm and re-write presence in response.
+   */
+  simulateBlip(): void {
+    this.simulateDrop();
     this.setConnected(true);
   }
 
