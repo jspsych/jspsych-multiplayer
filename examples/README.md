@@ -20,13 +20,16 @@ drive **entirely from two browser tabs**, no server.
 Two small composition details are worth copying:
 
 1. **Names are published in the lobby and reused by the chat.** The lobby's `push_data` writes
-   `{ name, joinedAt }` into the participant's slot. The chat plugin preserves it: when it sends a
-   message it reads its own slot and rewrites only the chat key, so `name` stays available. The chat
-   trial's `sender_label` then labels each message by name (and this client's own messages as "You",
-   by comparing `senderId` against the adapter's `participantId`).
-2. **The lobby counts only entries that carry a name.** `wait_for` filters on `entry.name` rather
-   than a bare head-count, so a peer still mid-handshake — present in the group session but without a
-   published name yet — doesn't tip the room over its threshold before it can be labelled.
+   `{ name, joinedAt }` into the participant's slot. The chat plugin updates only its own key when
+   it sends a message, so `name` stays available. The chat trial's `sender_label` then labels each
+   message by name (and this client's own messages as "You", by comparing `senderId` against
+   `jsPsych.multiplayer.participantId`).
+2. **The lobby counts connected participants who carry a name.** `wait_for` receives presence as its
+   second argument and counts participants who are `connected` and have published a name. Counting
+   slots would be wrong: a slot stays in the group after its participant leaves, and a peer still
+   mid-handshake has no name yet. The lobby also sets `participants: []`, so someone leaving means
+   waiting longer rather than ending the lobby with `partner_left`. Every lobby in these examples
+   follows the same pattern.
 
 ### Swapping in a real backend
 
@@ -39,21 +42,25 @@ backend-specific — the lobby and chat trials are identical either way.
 
 Unlike the JATOS demos, this example needs **no server infrastructure** — but connecting any adapter
 still requires the multiplayer API from [jsPsych#3694](https://github.com/jspsych/jsPsych/pull/3694),
-which hasn't merged/released yet. Two ways to get that API today:
+which isn't in a jsPsych release yet.
 
-#### Running it today (pre-#3694): jsDelivr preview build
+#### Running it today: the #3694 preview build
 
-jsPsych's PR bot publishes a preview build of every commit on #3694, hosted on jsDelivr — no release,
-no vendoring #3694's types locally. Every example here is wired to use it already:
+jsPsych's PR bot publishes a preview build of every commit on #3694 to the `preview/pr-3694` branch.
+This repo uses one preview build in two places, and the two must match:
 
-1. Find the current preview link: open [#3694](https://github.com/jspsych/jsPsych/pull/3694), find the
-   pinned bot comment titled "📦 Preview build ready," and copy the `jspsych` URL under "All package
-   URLs" (plus the matching `jspsych.css` URL). **A SHA-pinned URL like this one keeps loading
-   indefinitely — it never 404s.** What it does _not_ track is the still-evolving #3694 API: it stays
-   frozen at whatever that commit shipped, so once #3694 moves on, a pin old enough to predate an API
-   change can still load fine yet behave wrongly. Every example's `<script>`/`<link>` tags carry the
-   same SHA, current as of the last contract change; re-pin them together (a find-and-replace of the
-   old SHA across `examples/`) whenever #3694's API moves, rather than letting them drift apart.
+- **The examples** load it from jsDelivr. Every example's `<script>`/`<link>` tags carry the same
+  pinned commit SHA. A pinned URL keeps loading indefinitely, but it stays frozen at whatever that
+  commit shipped.
+- **The packages' builds and tests** use a copy in `vendor/jspsych`, which the root `jspsych`
+  devDependency points at. The JATOS archive scripts bundle this copy too.
+
+When #3694's API changes, update both together:
+
+1. Open [#3694](https://github.com/jspsych/jsPsych/pull/3694), find the bot comment titled
+   "📦 Preview build ready," and note the full SHA of the preview commit it links to.
+2. Run `npm run vendor-jspsych <sha>` and then `npm install` to refresh `vendor/jspsych`.
+3. Replace the old SHA with the new one across `examples/` and `docs/`.
 
 2. Build the multiplayer packages from the repo root (their `dist/` is gitignored, not checked in):
 
@@ -80,21 +87,18 @@ no vendoring #3694's types locally. Every example here is wired to use it alread
    URL again would start a different session.
 
    The demo constructs the adapter with `persistParticipant: true`, so **refreshing a tab rejoins as
-   the same participant** rather than leaving behind a ghost slot that would falsely satisfy the
-   lobby's `wait_for`. (Closing a tab clears that tab's `sessionStorage`, and reopening the bare URL
-   still starts a fresh session.)
+   the same participant**. (Closing a tab clears that tab's `sessionStorage`, and reopening the bare
+   URL still starts a fresh session.) The adapter tracks presence itself, so the other tabs see a
+   closed tab as `left` without any unload handler in the page.
 
-This flow — name entry → lobby → live chat → message delivery across two tabs — was verified
-end-to-end with no console errors. That verification predates the lobby `message`-parameter fix in
-this change (the custom lobby instructions were previously passed as `prompt`, which the sync plugin
-ignores, so they were silently dropped and never displayed), so treat the end-to-end result as
-**pending re-verification** after this fix.
+The examples were updated for the current API (sessions and presence) and have not yet been
+re-verified end to end in a browser since.
 
-#### Running it after #3694 merges
+#### Running it after jsPsych releases the API
 
-Once #3694 releases, swap `chat-room.html`'s jsPsych `<script>`/`<link>` tags back to the published
-`jspsych` package (e.g. `https://unpkg.com/jspsych`) and repeat steps 2–4 above — nothing else in the
-timeline changes.
+Once a jsPsych release includes the multiplayer API, swap the examples' jsPsych `<script>`/`<link>`
+tags back to the published `jspsych` package (e.g. `https://unpkg.com/jspsych`), point the root
+`jspsych` devDependency back at npm, and delete `vendor/`. Nothing else in the timelines changes.
 
 Because the local adapter is same-origin, same-browser, same-machine, this is a development and demo
 tool only — not for data collection. For real, multi-participant data use JATOS or another networked
@@ -442,18 +446,19 @@ client to a brief "could not form a group" screen rather than letting it fall of
 timeline onto a blank page.
 
 The other failure open recruitment produces is an active player **leaving mid-game**. Each barrier that
-waits on the other player (`proposerWaitTrial`, `responderWaitTrial`) sets a `timeout`; if it elapses,
-`on_timeout` flags the partner as gone and the timeline shows a brief "the other player left" screen
-instead of hanging forever. The wait barriers that depend only on a player's _own_ data (the lobby, and
-the responder confirming its own decision) intentionally have no timeout — indefinite waiting is correct
-there (you genuinely want to wait for a partner to arrive). `PARTNER_TIMEOUT_MS` at the top of the file
-sets the value; tune it to your population.
+waits on the other player (`proposerWaitTrial`, `responderWaitTrial`) names that player in
+`participants`. The adapter reports who is connected; once the partner has been disconnected for longer
+than the dropout timeout (10 s by default), they count as `left`, the barrier ends with
+`partner_left: true`, and the timeline shows a brief "the other player left" screen instead of hanging
+forever. A lost connection on this client's side ends the barrier with `connection_lost: true` and takes
+the same route. The lobby sets `participants: []` and has no timeout: indefinite waiting is correct there
+(you genuinely want to wait for a partner to arrive).
 
-One property to be aware of: each client's barrier times out independently, with no "we both agree you're
-gone" handshake, so a _false_ timeout produces **divergent** end-states rather than a clean shared exit.
-If the responder is still present but takes longer than `PARTNER_TIMEOUT_MS` to decide, the proposer
-times out and sees "the other player left" while the responder goes on to complete the round and sees a
-normal outcome — the two walk away with contradictory views. The simple guard, if your decisions can run
+Each mid-game barrier also keeps a `timeout` (`PARTNER_TIMEOUT_MS` at the top of the file) as a backstop
+for a partner who stays connected but never acts. That backstop decides alone, with no "we both agree
+you're gone" handshake. If the responder is still present but takes longer than `PARTNER_TIMEOUT_MS` to
+decide, the proposer times out and sees "the other player left" while the responder goes on to complete
+the round and sees a normal outcome — the two walk away with contradictory views. The simple guard, if your decisions can run
 long, is to keep `PARTNER_TIMEOUT_MS` comfortably generous and/or cap the responder's decision screen with
 a `trial_duration` below `PARTNER_TIMEOUT_MS`, so a slow-but-present player is forced to a (timed-out)
 choice before they can ever be read as absent. This demo leaves that off by default — it imposes an
@@ -487,9 +492,9 @@ This flattens the assets (resolving the CDN `<script src>` above to their instal
 copies, since a JATOS study has to be self-contained), writes the `.jas` metadata with
 `groupStudy: true`, and zips the result. The batch is left **uncapped** on purpose: this demo's
 population model admits extra arrivals as `spectator`s (see above), which a two-member cap would
-make unreachable. Note the archive carries the same #3694 caveat as the example — the bundled
-jsPsych core is a published release, so the study imports cleanly but fails at `connect()` until
-#3694 ships.
+make unreachable. The archive bundles the repo's jsPsych core, which is the vendored #3694 preview
+build (see `chat-room.html`'s "Running it" section), so the study runs against the same API as the
+examples.
 
 Two packaging gotchas (they apply to `build:jatos:group-quiz` too):
 
@@ -562,8 +567,8 @@ Import the `.jzip` into JATOS and share the single study link with the room.
 
 ### Known limitations
 
-The player's mid-game barriers have **no timeout**, so a host who closes the presenter screen leaves
-every player hanging; group size at real audience scale (~20+ phones on one JATOS group session) is
+Each player's mid-game barriers name the host in `participants`, so a host who closes the presenter
+screen ends the game for every player once the host counts as `left`; group size at real audience scale (~20+ phones on one JATOS group session) is
 **untested**; and there is no host election or late-joiner catch-up. See the design doc for details
 and the mechanical fix for each.
 
@@ -613,7 +618,9 @@ Two ways, both documented in the file's header comment:
   emulator so a two-tab run works entirely offline.
 
 The adapter itself is verified end-to-end against the RTDB + Auth emulators (anonymous sign-in, the
-onValue mirror, cross-client visibility, exact JSON round-trip, and slot cleanup on disconnect).
+onValue mirror, cross-client visibility, and exact JSON round-trip). Since that verification the adapter
+gained a separate presence node and no longer deletes a participant's slot on disconnect; see its
+README for the updated security rules.
 
 ## `reference-game.html`
 
@@ -685,7 +692,9 @@ matcher's click (`game.client.js`: `if (globalGame.messageSent)`) so a referring
 every trial. The C&WG build leaves it off, matching its free-form protocol.
 
 > **`round_timeout` is not from either paper.** Both builds set one (60s Hawkins, 180s C&WG) purely so
-> a partner who disconnects or walks away cannot hang the trial forever — neither original was timed.
+> a partner who stays connected but walks away cannot hang the trial forever — neither original was
+> timed. A partner who disconnects ends the round sooner, through presence, with
+> `ended_by: "participant_left"`, and the example stops playing further rounds.
 > Rounds it ends are logged as `ended_by: "timeout"` with a null assignment, so they are easy to
 > exclude; raise the values if piloting shows genuine trials running long, especially C&WG's first
 > full-board trials, which are the longest in the study.
