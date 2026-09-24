@@ -57,7 +57,7 @@ const info = <const>{
     /**
      * `(snapshot, presence) => boolean` overriding the readiness gate. `snapshot` excludes
      * participants who have left; both arguments are frozen, so don't modify them. A predicate that
-     * throws counts as "not ready" (the first error is logged). FUNCTION is deliberate — it stops
+     * throws counts as "not ready"; if the group never becomes ready, the last error is logged. FUNCTION is deliberate — it stops
      * jsPsych's dynamic-parameter machinery from CALLING the value. Null derives readiness from
      * `expected_players` (and, for `join_order`, that every present participant has pushed `joinedAt`).
      */
@@ -204,7 +204,8 @@ class MultiplayerMatchPlugin implements JsPsychPlugin<Info> {
     // return a promise below, so signal load ourselves.
     on_load?.();
 
-    const isReady = this.makeReadiness(trial);
+    let lastReadyError: unknown;
+    const isReady = this.makeReadiness(trial, (e) => (lastReadyError = e));
     // The presence the group was ready under, so the partition covers exactly who was counted
     let readyPresence: PresenceData = {};
     const ready = (group: GroupSessionData, presence: PresenceData) => {
@@ -261,19 +262,25 @@ class MultiplayerMatchPlugin implements JsPsychPlugin<Info> {
         // of jspsych. A cancelled wait means jsPsych is ending or aborting the experiment: return
         // quietly, since finishing here would record a bogus trial on every abort.
         if (isMultiplayerError(err, "MultiplayerCancelledError")) return;
+        let outcome: Unmatched;
         if (isMultiplayerError(err, "MultiplayerTimeoutError")) {
-          return this.endUnmatched(trial, { timed_out: true });
+          outcome = { timed_out: true };
+        } else if (isMultiplayerError(err, "MultiplayerParticipantLeftError")) {
+          outcome = { partner_left: true, left_participant: err.participantId ?? null };
+        } else if (isMultiplayerError(err, "MultiplayerConnectionClosedError")) {
+          outcome = { connection_lost: true };
+        } else {
+          throw err;
         }
-        if (isMultiplayerError(err, "MultiplayerParticipantLeftError")) {
-          return this.endUnmatched(trial, {
-            partner_left: true,
-            left_participant: err.participantId ?? null,
-          });
+        // A `ready` predicate may throw routinely while data is still arriving, so its errors are
+        // only worth reporting when the group never became ready — one may be the reason why.
+        if (lastReadyError !== undefined) {
+          console.error(
+            "plugin-multiplayer-match: the group never became ready; the `ready` predicate last threw",
+            lastReadyError,
+          );
         }
-        if (isMultiplayerError(err, "MultiplayerConnectionClosedError")) {
-          return this.endUnmatched(trial, { connection_lost: true });
-        }
-        throw err;
+        return this.endUnmatched(trial, outcome);
       });
   }
 
@@ -283,6 +290,7 @@ class MultiplayerMatchPlugin implements JsPsychPlugin<Info> {
    */
   private makeReadiness(
     trial: TrialType<Info>,
+    onError: (e: unknown) => void,
   ): (s: GroupSessionData, presence: PresenceData) => boolean {
     // Exact count converts a contract violation (overshoot) into a loud stall->timeout rather than a
     // silent subset partition. `null` resolves as soon as anyone is present (an upstream barrier trust).
@@ -291,22 +299,13 @@ class MultiplayerMatchPlugin implements JsPsychPlugin<Info> {
 
     if (typeof trial.ready === "function") {
       const ready = trial.ready as (s: Snapshot, presence: PresenceData) => boolean;
-      let logged = false;
       return (s, presence) => {
         if (!enough(s)) return false;
         try {
           return !!ready(s, presence);
         } catch (err) {
-          // A throw (e.g. reading data a peer hasn't written yet) means "not ready". Log the first
-          // one, so a predicate that fails for another reason — such as modifying the frozen
-          // snapshot — doesn't just hang silently.
-          if (!logged) {
-            logged = true;
-            console.error(
-              "plugin-multiplayer-match: the `ready` predicate threw; treating the group as not ready",
-              err,
-            );
-          }
+          // A throw (e.g. reading data a peer hasn't written yet) means "not ready"
+          onError(err);
           return false;
         }
       };

@@ -386,7 +386,7 @@ describe("plugin-multiplayer-match — departures", () => {
     expect(finished[0]).toMatchObject({ connection_lost: true, matched_self: false });
   });
 
-  it("gives a custom ready predicate (snapshot, presence) and logs a predicate that throws", async () => {
+  it("gives a custom ready predicate (snapshot, presence) and logs its error if never ready", async () => {
     const errSpy = jest.spyOn(console, "error").mockImplementation(() => {});
     const { api, jsPsych, finished } = await setup("a");
     api.seed("b", { list: [1] });
