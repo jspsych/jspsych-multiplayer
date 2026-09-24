@@ -27,49 +27,49 @@ timeline.push({
 });
 ```
 
-| | |
-| --- | --- |
-| Package | `@jspsych-multiplayer/plugin-multiplayer-role` |
-| Browser global | `jsPsychMultiplayerRole` |
-| Trial type | `multiplayer-role` |
-| Requires | a connected session (see [Getting started](../getting-started)), and usually a lobby before it ([`multiplayer-sync`](plugin-multiplayer-sync) or [`multiplayer-ready`](plugin-multiplayer-ready)) |
+|                |                                                                                                                                                                                                   |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Package        | `@jspsych-multiplayer/plugin-multiplayer-role`                                                                                                                                                    |
+| Browser global | `jsPsychMultiplayerRole`                                                                                                                                                                          |
+| Trial type     | `multiplayer-role`                                                                                                                                                                                |
+| Requires       | a connected session (see [Getting started](../getting-started)), and usually a lobby before it ([`multiplayer-sync`](plugin-multiplayer-sync) or [`multiplayer-ready`](plugin-multiplayer-ready)) |
 
 ## Parameters
 
-| Parameter | Type | Default | Description |
-| --- | --- | --- | --- |
-| `roles` | `string[] \| object` | required | The roles to hand out. An array has one slot per entry: `["proposer", "responder"]`. An object gives counts: `{ leader: 1, follower: 3 }`. |
-| `strategy` | `string \| function` | `"join_order"` | How participants are ordered into the slots: `"join_order"`, `"random"`, `"rotate"`, or your own function (see [How roles are assigned](#how-roles-are-assigned)). |
-| `group_size` | `number \| null` | `null` | Wait until **exactly** this many participants are present before assigning. Participants who have left don't count. `null` relies on an earlier lobby to have gathered the group; see [Set `group_size`](#set-group_size). |
-| `round` | `number` | `0` | The round number, used by `"rotate"` and to reshuffle `"random"`. Increase it each time you run the trial again. |
-| `balanced` | `boolean` | `false` | For `"rotate"`: use a balanced (Williams) rotation, so each role follows every other role equally often across the group. Exact for an even number of participants. |
-| `seed` | `string \| null` | `null` | Seed for `"random"`. `null` derives one from the participant IDs and `round`, so the shuffle is the same for everyone and changes each round. |
-| `rank_by` | `(entry, id, ctx) => number` | `null` | Order participants by a number, highest first, e.g. a score. `entry` is the participant's whole slot. Takes precedence over a string `strategy`. |
-| `role_from` | `(entry, id, ctx) => string` | `null` | Read each participant's role directly from their data. Must return one of the declared roles. Does not enforce the counts in `roles`. Takes precedence over `rank_by`. |
-| `ready` | `(group, presence) => boolean` | `null` | Your own condition for when the group is ready to assign. **Required** with a custom `strategy` function. `group` leaves out participants who have left. Both arguments are frozen. |
-| `overflow_role` | `string \| null` | `null` | The role for participants beyond the declared slots, e.g. `"spectator"`. Without it, more participants than slots is an error. |
-| `push_data` | `object` | `{}` | Data this participant contributes for this round, such as the score `rank_by` reads. It is stored in the slot under `rounds[round]`. |
-| `save_group` | `boolean` | `false` | Save the shared data the assignment was computed from, as `group`. |
-| `timeout` | `number \| null` | `30000` | The longest time to wait for the group to be ready, in ms. `null` or a negative number waits indefinitely; `0` gives up at once. |
-| `on_timeout` | `function \| null` | `null` | Called with the `jsPsych` instance if `timeout` runs out. The trial ends with `role: null` either way. |
-| `participants` | `string[] \| null` | `null` | The participants the assignment depends on. If one of them leaves before the group is ready, the trial ends with `role: null, partner_left: true`. `null` means every other participant who is connected when this trial starts. `[]` ignores departures. |
-| `message` | HTML string | `"<p>Assigning roles…</p>"` | Shown while waiting. |
+| Parameter       | Type                           | Default                     | Description                                                                                                                                                                                                                                               |
+| --------------- | ------------------------------ | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `roles`         | `string[] \| object`           | required                    | The roles to hand out. An array has one slot per entry: `["proposer", "responder"]`. An object gives counts: `{ leader: 1, follower: 3 }`.                                                                                                                |
+| `strategy`      | `string \| function`           | `"join_order"`              | How participants are ordered into the slots: `"join_order"`, `"random"`, `"rotate"`, or your own function (see [How roles are assigned](#how-roles-are-assigned)).                                                                                        |
+| `group_size`    | `number \| null`               | `null`                      | Wait until **exactly** this many participants are present before assigning. Participants who have left don't count. `null` relies on an earlier lobby to have gathered the group; see [Set `group_size`](#set-group_size).                                |
+| `round`         | `number`                       | `0`                         | The round number, used by `"rotate"` and to reshuffle `"random"`. Increase it each time you run the trial again.                                                                                                                                          |
+| `balanced`      | `boolean`                      | `false`                     | For `"rotate"`: use a balanced (Williams) rotation, so each role follows every other role equally often across the group. Exact for an even number of participants.                                                                                       |
+| `seed`          | `string \| null`               | `null`                      | Picks a different random assignment within the session. Randomness is seeded by the session ID (or the `randomSeed` connect option), so each group gets its own assignment. The shuffle is the same for everyone and changes each `round`.                |
+| `rank_by`       | `(entry, id, ctx) => number`   | `null`                      | Order participants by a number, highest first, e.g. a score. `entry` is the participant's whole slot. Takes precedence over a string `strategy`.                                                                                                          |
+| `role_from`     | `(entry, id, ctx) => string`   | `null`                      | Read each participant's role directly from their data. Must return one of the declared roles. Does not enforce the counts in `roles`. Takes precedence over `rank_by`.                                                                                    |
+| `ready`         | `(group, presence) => boolean` | `null`                      | Your own condition for when the group is ready to assign. **Required** with a custom `strategy` function. `group` leaves out participants who have left. Both arguments are frozen.                                                                       |
+| `overflow_role` | `string \| null`               | `null`                      | The role for participants beyond the declared slots, e.g. `"spectator"`. Without it, more participants than slots is an error.                                                                                                                            |
+| `push_data`     | `object`                       | `{}`                        | Data this participant contributes for this round, such as the score `rank_by` reads. It is stored in the slot under `rounds[round]`.                                                                                                                      |
+| `save_group`    | `boolean`                      | `false`                     | Save the shared data the assignment was computed from, as `group`.                                                                                                                                                                                        |
+| `timeout`       | `number \| null`               | `30000`                     | The longest time to wait for the group to be ready, in ms. `null` or a negative number waits indefinitely; `0` gives up at once.                                                                                                                          |
+| `on_timeout`    | `function \| null`             | `null`                      | Called with the `jsPsych` instance if `timeout` runs out. The trial ends with `role: null` either way.                                                                                                                                                    |
+| `participants`  | `string[] \| null`             | `null`                      | The participants the assignment depends on. If one of them leaves before the group is ready, the trial ends with `role: null, partner_left: true`. `null` means every other participant who is connected when this trial starts. `[]` ignores departures. |
+| `message`       | HTML string                    | `"<p>Assigning roles…</p>"` | Shown while waiting.                                                                                                                                                                                                                                      |
 
 `ctx`, passed to `rank_by`, `role_from`, and a custom `strategy`, is
 `{ ids, round, seed }`: the sorted participant IDs, the `round`, and the `seed` you set (or `""`).
 
 ## Data
 
-| Field | Type | Description |
-| --- | --- | --- |
-| `role` | `string \| null` | This participant's role. `null` if the trial ended without an assignment. |
-| `role_map` | `object \| null` | The full assignment, `{ participantId: { role } }`, identical for every participant. `null` if the trial ended without an assignment. |
-| `assigned_self` | `boolean` | Whether this participant is in `role_map`. `false` after a timeout or dropout, or when a custom strategy left this participant out. Overflow participants are in the map, so they read `true`. |
-| `timed_out` | `boolean` | `true` if the group was not ready before `timeout` ran out. |
-| `partner_left` | `boolean` | `true` if the trial ended because a participant in `participants` left. |
-| `left_participant` | `string \| null` | The ID of the participant who left, when `partner_left` is `true`. |
-| `connection_lost` | `boolean` | `true` if the trial ended because this participant's own connection was lost for good. |
-| `group` | `object` | The shared data the assignment was computed from. Only saved when `save_group` is `true`. |
+| Field              | Type             | Description                                                                                                                                                                                    |
+| ------------------ | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `role`             | `string \| null` | This participant's role. `null` if the trial ended without an assignment.                                                                                                                      |
+| `role_map`         | `object \| null` | The full assignment, `{ participantId: { role } }`, identical for every participant. `null` if the trial ended without an assignment.                                                          |
+| `assigned_self`    | `boolean`        | Whether this participant is in `role_map`. `false` after a timeout or dropout, or when a custom strategy left this participant out. Overflow participants are in the map, so they read `true`. |
+| `timed_out`        | `boolean`        | `true` if the group was not ready before `timeout` ran out.                                                                                                                                    |
+| `partner_left`     | `boolean`        | `true` if the trial ended because a participant in `participants` left.                                                                                                                        |
+| `left_participant` | `string \| null` | The ID of the participant who left, when `partner_left` is `true`.                                                                                                                             |
+| `connection_lost`  | `boolean`        | `true` if the trial ended because this participant's own connection was lost for good.                                                                                                         |
+| `group`            | `object`         | The shared data the assignment was computed from. Only saved when `save_group` is `true`.                                                                                                      |
 
 [Handling dropouts](../guides/handling-dropouts) explains `partner_left`, `left_participant`,
 `connection_lost`, and how to branch on them. If the experiment ends or is aborted while the
@@ -90,14 +90,14 @@ and `rounds[round]`, the `push_data`. A later `push()`, including a `multiplayer
 
 Which ordering applies, highest priority first:
 
-| Setting | Order | Also waits until |
-| --- | --- | --- |
-| `strategy` is a function | You return the whole `{ participantId: { role } }` map. | your `ready` returns `true` |
-| `role_from` | No order; each participant's role is read from their data. | it returns a value for everyone |
-| `rank_by` | By the number, highest first; ties by ID. | it returns a finite number for everyone |
-| `"join_order"` | By `joinedAt`, earliest first. | everyone has a `joinedAt` |
-| `"random"` | A shuffle seeded from `seed`, the same on every computer. | — |
-| `"rotate"` | ID order, shifted by `round`. Over *n* rounds, each participant holds each role once. | — |
+| Setting                  | Order                                                                                                                                                                                           | Also waits until                        |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- |
+| `strategy` is a function | You return the whole `{ participantId: { role } }` map.                                                                                                                                         | your `ready` returns `true`             |
+| `role_from`              | No order; each participant's role is read from their data.                                                                                                                                      | it returns a value for everyone         |
+| `rank_by`                | By the number, highest first; ties by ID.                                                                                                                                                       | it returns a finite number for everyone |
+| `"join_order"`           | By `joinedAt`, earliest first.                                                                                                                                                                  | everyone has a `joinedAt`               |
+| `"random"`               | A shuffle from the session's shared randomness, the same on every computer. It differs between groups, changes with `round` and `seed`, and can be pinned with the `randomSeed` connect option. | —                                       |
+| `"rotate"`               | ID order, shifted by `round`. Over *n* rounds, each participant holds each role once.                                                                                                           | —                                       |
 
 `joinedAt` comes from each participant's own clock, so `"join_order"` reflects who arrived first
 only as well as their clocks agree.
@@ -125,11 +125,11 @@ number you expect.
 
 The plugin keeps the latest assignment for later trials, through functions on the browser global:
 
-| Function | Returns |
-| --- | --- |
-| `jsPsychMultiplayerRole.getMyRole()` | This participant's role, e.g. `"proposer"`. |
-| `jsPsychMultiplayerRole.getMyAssignment()` | This participant's entry in the map, `{ role }`. |
-| `jsPsychMultiplayerRole.getRoleMap()` | The full map. |
+| Function                                      | Returns                                                                          |
+| --------------------------------------------- | -------------------------------------------------------------------------------- |
+| `jsPsychMultiplayerRole.getMyRole()`          | This participant's role, e.g. `"proposer"`.                                      |
+| `jsPsychMultiplayerRole.getMyAssignment()`    | This participant's entry in the map, `{ role }`.                                 |
+| `jsPsychMultiplayerRole.getRoleMap()`         | The full map.                                                                    |
 | `jsPsychMultiplayerRole.participantsByRole()` | Participant IDs grouped by role, e.g. `{ proposer: ["p1"], responder: ["p2"] }`. |
 
 All of them return `undefined` (or `{}`) before an assignment, and after a trial that ended

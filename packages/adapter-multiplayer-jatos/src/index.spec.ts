@@ -30,6 +30,8 @@ function makeMockJatos(
   // What the JATOS server holds; the local copy is wiped while the channel is closed
   const store: Record<string, Record<string, unknown>> = {};
   let wiped = false;
+  /** The group result ID jatos.js sets when the channel opens. */
+  let groupId: string | null = "77";
   let callbacks: Record<string, ((...args: unknown[]) => void) | undefined> = {};
   let join: { resolve: () => void; reject: (reason: unknown) => void } | null = null;
   /** The socket from a left channel is still closing. */
@@ -46,6 +48,7 @@ function makeMockJatos(
   const jatos = {
     studyResultId: studyResultId ?? undefined,
     workerId,
+    groupResultId: null as string | number | null,
     groupChannels: [] as Array<string | number>,
     joinGroup: jest.fn((cbs: Record<string, (...args: unknown[]) => void>): unknown => {
       callbacks = cbs;
@@ -81,6 +84,10 @@ function makeMockJatos(
     jatos,
     store,
     serverListeners,
+    /** Later channels open without a group result ID. */
+    omitGroupResultId() {
+      groupId = null;
+    },
     /** Make later leaves leave the socket closing until finishClosing(). */
     leaveSlowly() {
       leaveLeavesSocketClosing = true;
@@ -101,6 +108,7 @@ function makeMockJatos(
     /** The channel opens: jatos.js resolves the join and calls onOpen for this member. */
     open() {
       wiped = false;
+      jatos.groupResultId = groupId;
       if (!jatos.groupChannels.includes(self)) jatos.groupChannels.push(self);
       join?.resolve();
       join = null;
@@ -138,6 +146,7 @@ function makeMockJatos(
      */
     drop() {
       wiped = true;
+      jatos.groupResultId = null;
       jatos.groupChannels = jatos.groupChannels.filter((c) => c !== self);
       callbacks.onClose?.();
       serverChanged();
@@ -199,6 +208,7 @@ async function serverPeer(connect?: ConnectOptions) {
       mock.memberOpen(2002);
       return {
         participantId: "2002",
+        sessionId: "77",
         getAll: () => JSON.parse(JSON.stringify(mock.store)),
         connectedParticipants: () => mock.jatos.groupChannels.map(String),
         push: async (data) => {
@@ -245,6 +255,27 @@ describe("connect", () => {
     (globalThis as Record<string, unknown>).jatos = mock.jatos;
     const { connection } = await connected();
     expect(connection.participantId).toBe("777");
+  });
+
+  test("uses the group result id as the session id", async () => {
+    const { connection } = await connected();
+    expect(connection.sessionId).toBe("77");
+  });
+
+  test("keeps the session id while jatos.js reconnects", async () => {
+    const { connection } = await connected();
+    mock.drop();
+    expect(mock.jatos.groupResultId).toBeNull();
+    expect(connection.sessionId).toBe("77");
+  });
+
+  test("rejects and leaves the group when the channel opens without a group result id", async () => {
+    mock.omitGroupResultId();
+    const { options } = connectOptions();
+    const promise = new JatosAdapter().connect(options);
+    mock.open();
+    await expect(promise).rejects.toThrow("group result ID");
+    expect(mock.jatos.leaveGroup).toHaveBeenCalledTimes(1);
   });
 
   test("each connect() returns a new connection", async () => {
@@ -297,6 +328,8 @@ describe("connect", () => {
     });
     const { options } = connectOptions();
     const promise = new JatosAdapter().connect(options);
+    // jatos.js sets the group variables before it calls onOpen
+    mock.jatos.groupResultId = "77";
     (mock.jatos.joinGroup.mock.calls[0][0] as { onOpen: () => void }).onOpen();
     const connection = await promise;
     open.push(connection);

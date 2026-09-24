@@ -102,6 +102,14 @@ describe("LocalAdapter connections", () => {
     expect(second.participantId).toBe("alice");
   });
 
+  test("every tab in a session reports the same session id", async () => {
+    const { openTab } = makeBrowser();
+    const { connection: a } = await connect(openTab({ participantId: "alice" }));
+    const { connection: b } = await connect(openTab({ participantId: "bob" }));
+    expect(a.sessionId).toBe("sess");
+    expect(b.sessionId).toBe("sess");
+  });
+
   test("connect() rejects when its signal is already aborted", async () => {
     const { openTab } = makeBrowser();
     const options = { ...connectOptions(), signal: AbortSignal.abort() };

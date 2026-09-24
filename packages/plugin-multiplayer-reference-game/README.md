@@ -33,7 +33,7 @@ Only `stimuli`, `targets`, and `role` are required; everything else has a sensib
 | `rows`          | integer  | `null`          | Grid rows; `null` derives the shape from `columns`.                                                                                                                                         |
 | `cell_size`     | integer  | `null`          | Object display size in px; `null` lets the grid size itself.                                                                                                                                |
 | `scramble_mode` | string   | `"independent"` | `"independent"` (director/matcher differ — the classic design), `"disjoint"` (as independent, but no object may occupy the same slot for both — the original tangrams rule), `"shared"` (identical), or `"matcher_only"`. |
-| `seed`          | string   | `null`          | Base seed mixed into the deterministic scramble; the round (and, per-participant, the id) are always mixed in too.                                                                          |
+| `seed`          | string   | `null`          | Picks different arrangements within the session. Randomness is seeded by the session ID (or the `randomSeed` connect option), so each group gets its own arrangements.                   |
 | `show_labels`   | boolean  | `false`         | Show each object's `label` as a caption.                                                                                                                                                    |
 
 ### Targets & scoring
@@ -142,7 +142,7 @@ This plugin writes with **`update`**, which merges just the one key it owns into
 
 Like the chat room, the trial stays open and re-renders on every group-session update. The **matcher's submitted assignment is the shared trigger**: the director's subscription watches for it, and both clients then score (identically, from the same data), reveal the answer, and end within `feedback_duration` of the submission — no extra barrier needed. The matcher's pre-submit action log stays **local** until submit; only the final assignment is ever written.
 
-Layouts are a **deterministic** function of `(seed, round, participant ids)`, so they are stable across re-renders and each client can also compute its _partner's_ order locally — which is how `partner_order` lands in the data without an extra push. In `"independent"` mode the two layouts are **guaranteed to differ** when there is more than one object (the higher participant id's scramble is deterministically re-salted on the rare collision), so the "can't point by position" property holds even for small object sets.
+Layouts are a **deterministic** function of `(session, seed, round, participant ids)`: every shuffle goes through `jsPsych.multiplayer.shuffle`, which is seeded by the session ID (or the `randomSeed` connect option), so each group gets its own layouts. They are stable across re-renders and reloads and each client can also compute its _partner's_ order locally — which is how `partner_order` lands in the data without an extra push. In `"independent"` mode the two layouts are **guaranteed to differ** when there is more than one object (the higher participant id's scramble is deterministically re-salted on the rare collision), so the "can't point by position" property holds even for small object sets.
 
 ## Example: sequential (one target, a single click)
 

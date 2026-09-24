@@ -629,6 +629,13 @@ interface MultiplayerAdapter {
 interface MultiplayerConnection {
     /** Stable identifier for this participant within the group session namespace. */
     readonly participantId: string;
+    /**
+     * Identifies the group session. Every participant in the group gets the same
+     * non-empty value, it stays the same across reconnects and reloads, and a
+     * different group gets a different value. The API seeds shared randomness
+     * with it.
+     */
+    readonly sessionId: string;
     /** Read the full current group session (all participants). Return `{}` when empty. */
     getAll(): GroupSessionData;
     /**
@@ -652,6 +659,12 @@ interface SessionOptions {
      * left, in milliseconds. Defaults to 10000. null or Infinity means never.
      */
     dropoutTimeout?: number | null;
+    /**
+     * Seed for random(), randomInt(), shuffle(), and sample() in place of the
+     * session ID. Every participant in the group must pass the same value. Use
+     * it to make the random values the same in every session.
+     */
+    randomSeed?: string;
     /** Called once when another participant reaches the `left` presence status. */
     onParticipantLeft?: (participantId: string) => void;
     /**
@@ -709,6 +722,10 @@ declare class MultiplayerSession {
     private readonly options;
     private readonly identity;
     readonly participantId: string;
+    /** Identifies the group session; the same for every participant in the group. */
+    readonly sessionId: string;
+    /** Seeded with `options.randomSeed`, or else the session ID. */
+    private readonly rng;
     private currentStatus;
     /** Why the session closed; pending and later waits reject with it. */
     private closeReason;
@@ -781,6 +798,17 @@ declare class MultiplayerSession {
     get(participantId: string): Record<string, unknown> | undefined;
     /** The presence status of every participant seen in the session, including this one. Frozen. */
     presence(): PresenceData;
+    /**
+     * A float in [0, 1) that is the same for every participant who asks with the
+     * same `key`. Asking again with the same key returns the same value.
+     */
+    random(key: string): number;
+    /** An integer from `lower` to `upper`, inclusive, shared like random(). */
+    randomInt(key: string, lower: number, upper: number): number;
+    /** A shuffled copy of `array`, in the same order for every participant who uses `key`. */
+    shuffle<T>(key: string, array: readonly T[]): T[];
+    /** `size` items drawn from `array` without replacement, shared like shuffle(). */
+    sample<T>(key: string, array: readonly T[], size: number): T[];
     /**
      * Replace this participant's data. Reads reflect the change at once; the
      * promise resolves when the backend confirms a push that includes it.
@@ -917,6 +945,11 @@ declare class MultiplayerAPI {
     /** This participant's ID within the group. Null until connect() resolves and after disconnect(). */
     get participantId(): string | null;
     /**
+     * The group session's ID, the same for every participant in the group. Null
+     * until connect() resolves and after disconnect().
+     */
+    get sessionId(): string | null;
+    /**
      * Set when this participant's slot came from an earlier page load: they
      * reloaded or reopened the study, so the group is ahead of them. Null
      * otherwise, and when there is no session.
@@ -951,6 +984,17 @@ declare class MultiplayerAPI {
     subscribe(callback: SessionListener, options?: SubscribeOptions): Unsubscribe;
     /** Resolve with the group session once `condition` returns true. */
     wait(condition: (data: GroupSessionData, presence: PresenceData) => boolean, options?: WaitOptions): Promise<GroupSessionData>;
+    /**
+     * A float in [0, 1) that is the same for every participant who asks with the
+     * same `key`. Asking again with the same key returns the same value.
+     */
+    random(key: string): number;
+    /** An integer from `lower` to `upper`, inclusive, shared like random(). */
+    randomInt(key: string, lower: number, upper: number): number;
+    /** A shuffled copy of `array`, in the same order for every participant who uses `key`. */
+    shuffle<T>(key: string, array: readonly T[]): T[];
+    /** `size` items drawn from `array` without replacement, shared like shuffle(). */
+    sample<T>(key: string, array: readonly T[], size: number): T[];
     /**
      * Remove every subscription on the current session and reject its pending
      * waits with a MultiplayerCancelledError. jsPsych calls this when the

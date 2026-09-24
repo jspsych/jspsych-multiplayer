@@ -155,6 +155,7 @@ type OwnStatus = "connected" | "reconnecting" | "closed";
  */
 class FirebaseConnection implements MultiplayerConnection {
   participantId = "";
+  readonly sessionId: string;
 
   private backend: FirebaseBackend | null = null;
   private mirror: GroupSessionData = {};
@@ -177,7 +178,9 @@ class FirebaseConnection implements MultiplayerConnection {
   constructor(
     private readonly config: ConnectionConfig,
     private readonly options: AdapterConnectOptions,
-  ) {}
+  ) {
+    this.sessionId = config.sessionId;
+  }
 
   /** Connect, sign in, bind the session, load both nodes, and announce our presence. */
   async open(): Promise<void> {

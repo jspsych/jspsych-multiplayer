@@ -42,7 +42,7 @@ timeline.push({
 | `group_size` | `number` | `2` | Members per sub-group: 2 for pairs, 3 for triads. Must be a whole number of at least 2. |
 | `expected_players` | `number \| null` | `null` | Wait until **exactly** this many participants are present before splitting. Participants who have left don't count and aren't matched. `null` relies on an earlier lobby to have gathered the group; see [Set `expected_players`](#set-expected_players). |
 | `strategy` | `string` | `"ordered"` | How participants are ordered before being split: `"ordered"` (by participant ID), `"join_order"` (by `joinedAt`, earliest first), or `"random"` (a shuffle that is the same on every computer). Use `"random"` in real studies, so that pairings don't follow ID order. |
-| `seed` | `string \| null` | `null` | Seed for `"random"`. `null` derives one from the participant IDs and `round`. |
+| `seed` | `string \| null` | `null` | Picks a different random grouping within the session. Randomness is seeded by the session ID (or the `randomSeed` connect option), so each group of participants gets its own grouping. |
 | `round` | `number` | `0` | The round number. With `"random"`, a new `round` gives new partners. |
 | `leftover` | `string` | `"error"` | What to do when the number of participants isn't a multiple of `group_size`: `"error"` stops the experiment with an error, `"spectator"` leaves the extra participants unmatched, and `"smaller_group"` puts them together in one smaller group. |
 | `ready` | `(group, presence) => boolean` | `null` | Your own condition for when the group is ready to split. `group` leaves out participants who have left. Both arguments are frozen. A throw counts as "not ready yet"; if the group never becomes ready, the last error is logged. |

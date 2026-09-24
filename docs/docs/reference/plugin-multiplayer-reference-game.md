@@ -61,7 +61,7 @@ In the tables below, _k_ is the number of targets.
 | `rows` | `number \| null` | `null` | How many rows the grid has. The number of columns is then worked out from it. `null` uses `columns`. |
 | `cell_size` | `number \| null` | `null` | The width of each grid column, in pixels. `null` lets each be between 3 and 6 em wide. |
 | `scramble_mode` | `string` | `"independent"` | How the two players' arrangements relate: `"independent"` (different random arrangements), `"disjoint"` (different, and no object is in the same place for both, as in the original study; needs at least 2 objects), `"shared"` (the same arrangement for both), or `"matcher_only"` (the director sees `stimuli` in the order given; the matcher's is shuffled). |
-| `seed` | `string \| null` | `null` | Changes the arrangements. Every combination of seed, round, and players gives a different shuffle; `null` uses just the round and players. |
+| `seed` | `string \| null` | `null` | Picks different arrangements within the session. Randomness is seeded by the session ID (or the `randomSeed` connect option), so each group gets its own arrangements. |
 | `show_labels` | `boolean` | `false` | Show each object's `label` (or `id`) under it. |
 
 ### Targets and scoring
@@ -176,8 +176,9 @@ Put one trial per round in a timeline with `timeline_variables`, and give each r
 earlier round's answer. The trial throws an error if the matcher's slot already holds an answer
 for that round.
 
-Arrangements are shuffled again every round. They depend only on `seed`, the round number, and
-the two participant IDs, so a player who reloads the page sees the same arrangement, and each
+Arrangements are shuffled again every round. They depend only on the session ID (or the
+`randomSeed` connect option), `seed`, the round number, and the two participant IDs, so a player
+who reloads the page sees the same arrangement, each group gets its own arrangements, and each
 player's data can record the partner's arrangement too.
 
 With the default feedback settings, both players' trials end together: when the matcher answers, the director's screen shows the

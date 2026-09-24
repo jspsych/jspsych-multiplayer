@@ -603,3 +603,81 @@ describe("plugin-multiplayer-role — departures", () => {
     errSpy.mockRestore();
   });
 });
+
+// ---------------------------------------------------------------------------------------------------
+describe("plugin-multiplayer-role — random draws from the session's shared randomness", () => {
+  const ids = ["p1", "p2", "p3", "p4"];
+
+  /** Every participant in one hub runs a `random` trial; returns each one's role_map. */
+  async function runRandom(sessionId: string, round: number, connect?: ConnectOptions) {
+    const hub = new MemoryHub();
+    hub.sessionId = sessionId;
+    const members = [];
+    for (const id of ids) members.push(await hub.join(id, { connect }));
+    const finished: Array<Record<string, any>> = [];
+    for (const { jsPsych } of members) {
+      const standIn = {
+        multiplayer: jsPsych.multiplayer,
+        finishTrial: (data: Record<string, any>) => finished.push(data),
+      };
+      new MultiplayerRolePlugin(standIn as never).trial(display(), {
+        roles: ["a", "b", "c", "d"],
+        strategy: "random",
+        group_size: ids.length,
+        round,
+        push_data: {},
+        timeout: 30000,
+      } as never);
+    }
+    await flush();
+    await flush();
+    expect(finished).toHaveLength(ids.length);
+    return finished.map((d) => d.role_map);
+  }
+
+  it("gives every participant in the session the same role map", async () => {
+    const maps = await runRandom("session-a", 0);
+    for (const map of maps) expect(map).toEqual(maps[0]);
+    expect(Object.keys(maps[0]).sort()).toEqual(ids);
+  });
+
+  it("gives different sessions different assignments", async () => {
+    let differs = false;
+    for (let round = 0; round < 10 && !differs; round++) {
+      const [a] = await runRandom("session-a", round);
+      const [b] = await runRandom("session-b", round);
+      differs = JSON.stringify(a) !== JSON.stringify(b);
+    }
+    expect(differs).toBe(true);
+  });
+
+  it("with the same randomSeed, different sessions agree", async () => {
+    for (const round of [0, 1, 2]) {
+      const [a] = await runRandom("session-a", round, { randomSeed: "x" });
+      const [b] = await runRandom("session-b", round, { randomSeed: "x" });
+      expect(a).toEqual(b);
+    }
+  });
+
+  it("uses multiplayer.shuffle with a key built from the seed and round", async () => {
+    const { api, jsPsych, multiplayer, finished } = await setup("p1");
+    api.seed("p2", {});
+    const shuffle = jest.spyOn(multiplayer, "shuffle");
+    new MultiplayerRolePlugin(jsPsych as never).trial(display(), {
+      roles: ["a", "b"],
+      strategy: "random",
+      group_size: 2,
+      round: 3,
+      seed: "s",
+      push_data: {},
+      timeout: 30000,
+    } as never);
+    await flush();
+    expect(shuffle).toHaveBeenCalledWith('["plugin-multiplayer-role","s",3]', ["p1", "p2"]);
+    const expected = multiplayer.shuffle('["plugin-multiplayer-role","s",3]', ["p1", "p2"]);
+    expect(finished[0].role_map).toEqual({
+      [expected[0]]: { role: "a" },
+      [expected[1]]: { role: "b" },
+    });
+  });
+});

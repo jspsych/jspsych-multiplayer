@@ -39,12 +39,15 @@ const info = <const>{
     expected_players: { type: ParameterType.INT, default: null },
     /**
      * How participants are ordered before being chunked into groups: `"ordered"` (by id, the default),
-     * `"join_order"` (by pushed `joinedAt`), or `"random"` (a seeded shuffle — unpredictable-by-id yet
-     * identical on every client, and per-round via `round`). Prefer `"random"` for real experiments to
+     * `"join_order"` (by pushed `joinedAt`), or `"random"` (a shuffle seeded by the session — unpredictable-by-id
+     * yet identical on every client, and per-round via `round`). Prefer `"random"` for real experiments to
      * avoid pairings that track participant-id order.
      */
     strategy: { type: ParameterType.STRING, default: "ordered" },
-    /** Shared seed for `"random"`. Defaults to a hash of the sorted ids + `round`. */
+    /**
+     * Picks a different random grouping within the session. Randomness is seeded by the session ID
+     * (or the `randomSeed` connect option), so each group of participants gets its own grouping.
+     */
     seed: { type: ParameterType.STRING, default: null },
     /** Round index, for `"random"` re-pairing. Increment each re-run to shuffle partners anew. */
     round: { type: ParameterType.INT, default: 0 },
@@ -239,6 +242,8 @@ class MultiplayerMatchPlugin implements JsPsychPlugin<Info> {
           strategy: trial.strategy as MatchOptions["strategy"],
           seed: trial.seed ?? undefined,
           round: trial.round,
+          // Session-seeded, so every participant in this group computes the same shuffle
+          shuffle: (key, ids) => multiplayer.shuffle(key, ids),
           leftover: trial.leftover as MatchOptions["leftover"],
         });
         const mine = matchMap[me];

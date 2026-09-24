@@ -130,7 +130,7 @@ All three nodes are named after `pathPrefix`: `<pathPrefix>` holds the data slot
 | --- | --- | --- |
 | `firebaseConfig` | — | Firebase config object; the adapter initializes and owns a dedicated app. |
 | `database` | — | An already-initialized RTDB `Database` (the caller owns the app + auth); use instead of `firebaseConfig`. |
-| `sessionId` | `?mp_session=` or a fresh id | Session namespace under `<pathPrefix>/<sessionId>`. |
+| `sessionId` | `?mp_session=` or a fresh id | Session namespace under `<pathPrefix>/<sessionId>`. Also the session ID that seeds jsPsych's shared randomness. |
 | `participantId` | a fresh random id | This participant's slot key. Incompatible with `useUidAsParticipantId`. |
 | `useUidAsParticipantId` | `false` | Adopt the auth uid as the id during connect (enables the recommended rules). |
 | `sessionBinding` | same as `useUidAsParticipantId` | Register the first-write-wins `mp-sessions-memberships/<uid>` record during connect (required by the recommended rules; must be `false` with the quick-start rules). |

@@ -32,6 +32,8 @@ npm install @jspsych-multiplayer/plugin-multiplayer-role
 import MultiplayerRole from "@jspsych-multiplayer/plugin-multiplayer-role";
 // The pure core and the role accessors are static members of the plugin class:
 //   MultiplayerRole.assignRoles, MultiplayerRole.getMyRole, MultiplayerRole.getRoleMap, …
+// To match the trial's "random" assignment, pass the session's shuffle:
+//   MultiplayerRole.assignRoles(snapshot, { ...opts, shuffle: jsPsych.multiplayer.shuffle })
 ```
 
 ## Compatibility
@@ -48,7 +50,7 @@ adapter (e.g. JATOS group sessions).
 | `group_size`    | int             | `null`                      | If set, assignment waits for **exactly** this many participants before computing (fail-loud, not `>=`). Participants who have left the session don't count and aren't assigned. `null` assumes an upstream waiting-room barrier already capped the group.        |
 | `round`         | int             | `0`                         | Round index, for `rotate` and per-round `random`. Increment it each time you re-run the trial.                                                                                                                                                                   |
 | `balanced`      | bool            | `false`                     | For `rotate`: use the balanced (Latin-square) variant — see [Rotation](#rotation-rotate).                                                                                                                                                                        |
-| `seed`          | string          | `null`                      | Shared seed for `random`. Defaults to a hash of the sorted ids + round, so the shuffle re-randomizes each round and is identical on every client.                                                                                                                |
+| `seed`          | string          | `null`                      | Picks a different random assignment within the session. Randomness is seeded by the session ID (or the `randomSeed` connect option), so each group gets its own assignment and every client computes the same one.                                               |
 | `rank_by`       | fn              | `null`                      | `(entry, id, ctx) => number`. Order participants by a numeric key (highest first), e.g. a task score.                                                                                                                                                            |
 | `role_from`     | fn              | `null`                      | `(entry, id, ctx) => string`. The role **is** a value each participant already carries; must return a declared role. Does not enforce per-role counts.                                                                                                           |
 | `ready`         | fn              | `null`                      | `(snapshot, presence) => boolean`. Override the readiness gate; **required** when `strategy` is a custom function. `snapshot` excludes participants who have left; both arguments are frozen, so don't modify them.                                              |
@@ -77,12 +79,12 @@ adapter (e.g. JATOS group sessions).
 
 The `strategy` parameter takes one of three string presets or a custom function:
 
-| `strategy`   | Ordering                                                 | Requires                         |
-| ------------ | -------------------------------------------------------- | -------------------------------- |
-| `join_order` | by pushed `joinedAt` (falls back to id order)            | every participant has `joinedAt` |
-| `random`     | shared-seeded Fisher–Yates shuffle                       | the id set only                  |
-| `rotate`     | base order rotated by round; optional `balanced`         | the id set only                  |
-| custom fn    | you compute the whole map (and own the consensus burden) | —                                |
+| `strategy`   | Ordering                                                                                  | Requires                         |
+| ------------ | ----------------------------------------------------------------------------------------- | -------------------------------- |
+| `join_order` | by pushed `joinedAt` (falls back to id order)                                             | every participant has `joinedAt` |
+| `random`     | Fisher–Yates shuffle from the session's shared randomness (`jsPsych.multiplayer.shuffle`) | the id set only                  |
+| `rotate`     | base order rotated by round; optional `balanced`                                          | the id set only                  |
+| custom fn    | you compute the whole map (and own the consensus burden)                                  | —                                |
 
 Two **separate** parameters provide attribute- and value-based ordering — they are _not_ `strategy`
 values, and they take precedence over `strategy` when set:

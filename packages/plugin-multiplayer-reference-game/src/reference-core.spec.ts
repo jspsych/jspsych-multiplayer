@@ -282,3 +282,36 @@ describe("reference-core: disjoint layouts (the original tangrams rule)", () => 
     );
   });
 });
+
+describe("reference-core: injected shuffle", () => {
+  const ids = ["a", "b", "c", "d", "e", "f"];
+
+  it("scramble passes a plugin-namespaced key containing the seed string", () => {
+    const shuffle = jest.fn((_key: string, list: string[]) => [...list].reverse());
+    expect(scramble(ids, "s#3#p1", shuffle)).toEqual([...ids].reverse());
+    expect(shuffle).toHaveBeenCalledWith(
+      JSON.stringify(["plugin-multiplayer-reference-game", "s#3#p1"]),
+      ids,
+    );
+  });
+
+  it("disjoint re-salts use distinct keys and still end with no shared position", () => {
+    const keys: string[] = [];
+    // Ignores the key, so every attempt collides and the rotation backstop must kick in.
+    const shuffle = (key: string, list: string[]) => {
+      keys.push(key);
+      return [...list];
+    };
+    const orders = independentOrders(ids, 0, "p1", "p2", null, true, shuffle);
+    expect(new Set(keys).size).toBe(keys.length);
+    expect(orders.p1.some((id, i) => orders.p2[i] === id)).toBe(false);
+  });
+
+  it("displayOrder routes every mode through the shuffle", () => {
+    const shuffle = jest.fn((_key: string, list: string[]) => [...list]);
+    displayOrder(ids, "director", "shared", 0, "p1", null, "p2", shuffle);
+    displayOrder(ids, "matcher", "matcher_only", 0, "p1", null, "p2", shuffle);
+    displayOrder(ids, "matcher", "independent", 0, "p1", null, null, shuffle);
+    expect(shuffle).toHaveBeenCalledTimes(3);
+  });
+});

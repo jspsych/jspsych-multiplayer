@@ -40,6 +40,11 @@ declare const jatos: {
   studyResultId?: string | number | null;
   /** Worker ID assigned by JATOS — fallback namespace key when studyResultId is absent. */
   workerId: string | number;
+  /**
+   * ID of the group this study run joined. jatos.js sets it when the group channel opens,
+   * and sets it back to null while the channel is closed.
+   */
+  groupResultId?: string | number | null;
   /** IDs of the group members whose group channel is currently open. */
   groupChannels?: Array<string | number>;
   /**
@@ -163,6 +168,9 @@ type ConnectionState = "connecting" | "connected" | "reconnecting" | "closed";
 
 class JatosConnection implements MultiplayerConnection {
   private state: ConnectionState = "connecting";
+
+  /** The JATOS group result ID, read when the channel first opens. */
+  sessionId = "";
 
   /**
    * The last group session data and open channels read from jatos.js. jatos.js wipes both
@@ -361,6 +369,19 @@ class JatosConnection implements MultiplayerConnection {
       // waits for this one to release jatos.js, so this one still owns it.
       if (!this.isReleased && !this.leaving) void this.leave();
       return;
+    }
+    if (this.state === "connecting") {
+      // Every member of a JATOS group shares its group result ID, and a study run that
+      // rejoins returns to the same group, so it identifies the session
+      const groupResultId = jatos.groupResultId;
+      if (groupResultId === null || groupResultId === undefined || groupResultId === "") {
+        this.failOpen(
+          new Error("JatosAdapter: the group channel opened without a group result ID."),
+        );
+        if (!this.isReleased && !this.leaving) void this.leave();
+        return;
+      }
+      this.sessionId = String(groupResultId);
     }
     this.refresh();
     if (this.state === "connecting") {

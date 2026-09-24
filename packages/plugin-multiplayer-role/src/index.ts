@@ -48,7 +48,10 @@ const info = <const>{
     round: { type: ParameterType.INT, default: 0 },
     /** For `rotate`: use the balanced (Williams) variant. */
     balanced: { type: ParameterType.BOOL, default: false },
-    /** Shared seed for `random`. Defaults to a hash of the sorted ids + round. */
+    /**
+     * For `random`: picks a different random assignment within the session. Randomness is seeded
+     * by the session ID (or the `randomSeed` connect option), so each group gets its own assignment.
+     */
     seed: { type: ParameterType.STRING, default: null },
     /** `(entry, id, ctx) => number`. Order by a numeric key, highest first. FUNCTION: see `strategy`. */
     rank_by: { type: ParameterType.FUNCTION, default: null },
@@ -263,6 +266,8 @@ class MultiplayerRolePlugin implements JsPsychPlugin<Info> {
             rankBy: trial.rank_by ?? undefined,
             roleFrom: trial.role_from ?? undefined,
             overflowRole: trial.overflow_role ?? undefined,
+            // Session-shared shuffle, so every client in the group draws the same order.
+            shuffle: (key, ids) => multiplayer.shuffle(key, ids),
           });
           const mine = roleMap[me];
           setMyAssignment(mine, roleMap); // update accessor store for downstream trials

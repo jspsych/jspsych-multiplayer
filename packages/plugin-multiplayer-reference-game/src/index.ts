@@ -14,6 +14,7 @@ import {
   ScoreResult,
   ScoringSpec,
   ScrambleMode,
+  ShuffleFn,
   SlotAssignment,
   StimulusSpec,
   Submission,
@@ -86,9 +87,10 @@ const info = <const>{
       default: "independent",
     },
     /**
-     * Base seed mixed into the deterministic scramble. Null derives the seed from the round and
-     * participant id alone. (The round and — in per-participant modes — the participantId are
-     * ALWAYS mixed in, so a fixed seed does not collapse "independent" into "shared".)
+     * Picks different arrangements within the session. Randomness is seeded by the session ID (or
+     * the `randomSeed` connect option), so each group gets its own arrangements. (The round and — in
+     * per-participant modes — the participantId are ALWAYS mixed in, so a fixed seed does not
+     * collapse "independent" into "shared".)
      */
     seed: {
       type: ParameterType.STRING,
@@ -720,11 +722,25 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
       partner = others.length === 1 ? others[0] : null;
     }
 
-    // This client's display order is deterministic in (seed, round, participant ids), so it is stable
-    // across re-renders — and the partner's order is computable locally the same way (both ids are
-    // known), which is how `partner_order` lands in the data without an extra push. Passing `partner`
-    // makes "independent" mode GUARANTEE the two layouts differ (N>1).
-    const myOrder = displayOrder(ids, role, scrambleMode, round, me, seedBase, partner);
+    // This client's display order is deterministic in (session, seed, round, participant ids), so it
+    // is stable across re-renders and reloads — and the partner's order is computable locally the same
+    // way (both ids are known), which is how `partner_order` lands in the data without an extra push.
+    // Passing `partner` makes "independent" mode GUARANTEE the two layouts differ (N>1). Every
+    // shuffle goes through the session's shared shuffle so the two clients cannot disagree. The
+    // session is captured now because `partner_order` is computed at finish, which may come after
+    // disconnect() has detached it from jsPsych.multiplayer.
+    const session = api.session!;
+    const sessionShuffle: ShuffleFn = (key, list) => session.shuffle(key, list);
+    const myOrder = displayOrder(
+      ids,
+      role,
+      scrambleMode,
+      round,
+      me,
+      seedBase,
+      partner,
+      sessionShuffle,
+    );
 
     // --- Base styling (injected once) ------------------------------------------------------------
     // The plugin ships no separate CSS asset (matching this repo's other plugins' convention).
@@ -1505,6 +1521,7 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
               partner,
               seedBase,
               me,
+              sessionShuffle,
             )
           : null;
       }

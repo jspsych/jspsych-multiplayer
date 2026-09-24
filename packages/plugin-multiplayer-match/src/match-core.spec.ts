@@ -77,6 +77,28 @@ describe("buildMatches — random strategy", () => {
     const s2 = groupsOf(buildMatches(snap(ids), { strategy: "random", seed: "trial-7" }));
     expect(s1).toEqual(s2);
   });
+
+  it("uses an injected shuffle, keyed by seed + round, over the sorted ids", () => {
+    const shuffle = jest.fn((_key: string, ids: string[]) => [...ids].reverse());
+    const map = buildMatches(snap(["c", "a", "d", "b"]), {
+      strategy: "random",
+      seed: "s",
+      round: 2,
+      shuffle,
+    });
+    expect(shuffle).toHaveBeenCalledWith('["plugin-multiplayer-match","s",2]', [
+      "a",
+      "b",
+      "c",
+      "d",
+    ]);
+    expect(groupsOf(map)).toEqual([
+      ["d", "c"],
+      ["b", "a"],
+    ]);
+    buildMatches(snap(["a", "b"]), { strategy: "random", shuffle });
+    expect(shuffle).toHaveBeenLastCalledWith('["plugin-multiplayer-match",null,0]', ["a", "b"]);
+  });
 });
 
 describe("buildMatches — leftover policy", () => {
