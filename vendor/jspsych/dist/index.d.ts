@@ -654,6 +654,17 @@ interface SessionOptions {
     dropoutTimeout?: number | null;
     /** Called once when another participant reaches the `left` presence status. */
     onParticipantLeft?: (participantId: string) => void;
+    /**
+     * Called when a participant who had `left` comes back from the same page
+     * load, so their experiment is still where they left it.
+     */
+    onParticipantRejoined?: (participantId: string) => void;
+    /**
+     * Called when a participant comes back from a new page load (a reload or a
+     * new tab) under the same ID. Their experiment restarted, so they are out of
+     * step with the group and stay `left`.
+     */
+    onParticipantRestarted?: (participantId: string) => void;
     /** Called whenever this client's connection status changes. */
     onStatusChange?: (status: ConnectionStatus) => void;
 }
@@ -677,6 +688,18 @@ interface WaitOptions {
 }
 type SessionListener = (data: GroupSessionData, presence: PresenceData) => void;
 /**
+ * Slot key the session reserves for its own bookkeeping. It is added to every
+ * push and removed from every snapshot, so readers never see it.
+ */
+declare const RESERVED_KEY = "$mp";
+/** Identifies one page load. Shared by every session made from one jsPsych.multiplayer. */
+interface SessionIdentity {
+    /** Random, and new on every page load. */
+    instance: string;
+    /** Goes up every time this page (re)announces itself to the group. */
+    epoch: number;
+}
+/**
  * One connection to a multiplayer backend, returned by
  * jsPsych.multiplayer.connect(). All state belongs to the session, so work
  * left over from an earlier connection can never touch a later one.
@@ -684,15 +707,28 @@ type SessionListener = (data: GroupSessionData, presence: PresenceData) => void;
 declare class MultiplayerSession {
     private readonly connection;
     private readonly options;
+    private readonly identity;
     readonly participantId: string;
     private currentStatus;
     /** Why the session closed; pending and later waits reject with it. */
     private closeReason;
     /** Memoized so overlapping disconnect() calls close the connection once. */
     private closing;
-    /** The adapter's latest session data, as a frozen copy, and its JSON text. */
+    /**
+     * The adapter's latest session data as a frozen copy with the reserved key
+     * removed, the JSON text of the raw and the cleaned data, and each
+     * participant's reserved bookkeeping.
+     */
     private remote;
     private remoteJson;
+    private remoteDataJson;
+    private metas;
+    /**
+     * The page load this participant's slot came from before this page, if it
+     * wasn't this one: this participant reloaded or opened the study again, so
+     * their experiment restarted. Null otherwise.
+     */
+    readonly previousInstance: string | null;
     /**
      * This participant's own data. The session is its source of truth: writes
      * change it at once and the backend is brought up to date after.
@@ -707,6 +743,17 @@ declare class MultiplayerSession {
     private presenceStatus;
     private awayTimers;
     private readonly dropoutTimeout;
+    /** Each participant's page load, as last seen while they were connected. */
+    private knownInstance;
+    /**
+     * Each absent participant's bookkeeping as of when they dropped out (null if
+     * they had none). They count as back only after a write made since then.
+     */
+    private dropMeta;
+    /** `${id}\n${instance}` for every restart already reported. */
+    private restartsReported;
+    /** Callbacks to researcher code, run once the session's state is settled. */
+    private events;
     private listeners;
     private pendingWaits;
     private notifying;
@@ -723,7 +770,7 @@ declare class MultiplayerSession {
      * Connect with an adapter. Once `signal` is aborted this rejects, but only
      * after any connection the adapter opened has been closed.
      */
-    static open(adapter: MultiplayerAdapter, signal: AbortSignal, options: SessionOptions): Promise<MultiplayerSession>;
+    static open(adapter: MultiplayerAdapter, signal: AbortSignal, options: SessionOptions, identity: SessionIdentity): Promise<MultiplayerSession>;
     private constructor();
     /** This client's connection status. */
     get status(): ConnectionStatus;
@@ -751,6 +798,14 @@ declare class MultiplayerSession {
      * writes the same value on every notification can't start a loop.
      */
     private write;
+    /**
+     * Push this page's identity with a new epoch, so the group can tell that this
+     * participant is (back) on this page load. Runs on connect and whenever the
+     * connection recovers.
+     */
+    private announce;
+    /** The slot as pushed: this participant's data plus the reserved bookkeeping. */
+    private payload;
     /** Start the sender if it's idle; a running sender picks up the change itself. */
     private requestSend;
     /**
@@ -793,6 +848,13 @@ declare class MultiplayerSession {
      * stopping dropout clocks. Returns whether any presence status changed.
      */
     private refreshPresence;
+    /**
+     * A participant came back from a new page load, so their experiment restarted.
+     * They stay (or become) `left`. Returns whether their presence changed.
+     */
+    private markRestarted;
+    /** Run queued researcher callbacks, after the session's state and snapshots are settled. */
+    private flushEvents;
     private startAwayTimer;
     private clearAwayTimer;
     private clearAwayTimers;
@@ -844,11 +906,22 @@ interface ConnectOptions extends SessionOptions {
 declare class MultiplayerAPI {
     private current;
     private connecting;
+    /**
+     * This page load's identity, shared by every session opened from it, so the
+     * group can tell a reconnect of this page from a reload.
+     */
+    private readonly identity;
     constructor();
     /** The current session. Null until connect() resolves and after disconnect(). */
     get session(): MultiplayerSession | null;
     /** This participant's ID within the group. Null until connect() resolves and after disconnect(). */
     get participantId(): string | null;
+    /**
+     * Set when this participant's slot came from an earlier page load: they
+     * reloaded or reopened the study, so the group is ahead of them. Null
+     * otherwise, and when there is no session.
+     */
+    get previousInstance(): string | null;
     /** The current session's connection status, or null when there is no session. */
     get status(): ConnectionStatus | null;
     private requireSession;
@@ -1302,4 +1375,4 @@ declare class JsPsych {
  */
 declare function initJsPsych(options?: any): JsPsych;
 
-export { type AdapterConnectOptions, type ConnectOptions, type ConnectionStatus, DataCollection, type GroupSessionData, JsPsych, type JsPsychExtension, type JsPsychExtensionInfo, type JsPsychPlugin, type MultiplayerAdapter, MultiplayerCancelledError, type MultiplayerConnection, MultiplayerConnectionClosedError, MultiplayerParticipantLeftError, MultiplayerSession, MultiplayerTimeoutError, ParameterType, type PluginInfo, type PresenceData, type PresenceStatus, type SessionListener, type SubscribeOptions, type TrialType, type Unsubscribe, type WaitOptions, initJsPsych };
+export { type AdapterConnectOptions, type ConnectOptions, type ConnectionStatus, DataCollection, type GroupSessionData, JsPsych, type JsPsychExtension, type JsPsychExtensionInfo, type JsPsychPlugin, RESERVED_KEY as MULTIPLAYER_RESERVED_KEY, type MultiplayerAdapter, MultiplayerCancelledError, type MultiplayerConnection, MultiplayerConnectionClosedError, MultiplayerParticipantLeftError, MultiplayerSession, MultiplayerTimeoutError, ParameterType, type PluginInfo, type PresenceData, type PresenceStatus, type SessionListener, type SubscribeOptions, type TrialType, type Unsubscribe, type WaitOptions, initJsPsych };

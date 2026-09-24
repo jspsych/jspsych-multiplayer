@@ -5,6 +5,7 @@ import {
   MultiplayerConnection,
 } from "jspsych";
 
+import { stripMeta } from "../../../test-utils/memory-backend";
 import JatosAdapter from ".";
 
 /**
@@ -490,7 +491,7 @@ describe("with the jsPsych multiplayer session", () => {
     await connecting;
 
     await jsPsych.multiplayer.update({ ready: true });
-    expect(mock.store["1001"]).toEqual({ ready: true });
+    expect(stripMeta(mock.store["1001"])).toEqual({ ready: true });
 
     mock.drop();
     expect(jsPsych.multiplayer.status).toBe("reconnecting");
