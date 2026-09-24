@@ -15,18 +15,20 @@ export interface ReadinessOptions {
   rankBy?: AssignOptions["rankBy"];
   roleFrom?: AssignOptions["roleFrom"];
   /** Required for a custom function strategy (opaque to derivation). */
-  ready?: (s: Snapshot) => boolean;
+  ready?: (s: Snapshot, presence: Presence) => boolean;
   round?: number;
   seed?: string;
 }
 
-/** Run a predicate; a thrown error (e.g. accessor reading not-yet-present round data) means "not ready". */
-const tryBool = (fn: () => boolean): boolean => {
-  try {
-    return !!fn();
-  } catch {
-    return false;
-  }
+/** Presence status per participant, as jsPsych's multiplayer API reports it. */
+export type Presence = Record<string, string>;
+
+/**
+ * A readiness predicate. `lastError()` returns the most recent error an accessor or `ready`
+ * threw, so a caller can report it if the group never becomes ready.
+ */
+export type ReadinessPredicate = ((s: Snapshot, presence?: Presence) => boolean) & {
+  lastError: () => unknown;
 };
 
 /**
@@ -35,7 +37,18 @@ const tryBool = (fn: () => boolean): boolean => {
  * (`e => e.rounds[round].score`) will throw — treated here as "not ready yet" so researchers need
  * not write null-safe accessors.
  */
-export function makeReadiness(opts: ReadinessOptions): (s: Snapshot) => boolean {
+export function makeReadiness(opts: ReadinessOptions): ReadinessPredicate {
+  let lastError: unknown;
+  /** Run a predicate; a thrown error (e.g. an accessor reading not-yet-present round data) means "not ready". */
+  const tryBool = (fn: () => boolean): boolean => {
+    try {
+      return !!fn();
+    } catch (e) {
+      lastError = e;
+      return false;
+    }
+  };
+
   // Exact count converts a contract violation (overshoot) into a loud stall->timeout rather than a
   // silent subset assignment. It does NOT create membership consensus.
   const enoughPlayers = (s: Snapshot) =>
@@ -50,11 +63,18 @@ export function makeReadiness(opts: ReadinessOptions): (s: Snapshot) => boolean 
   const every = (fn: (entry: any, id: string, c: Ctx) => boolean) => (s: Snapshot) =>
     enoughPlayers(s) && Object.keys(s).every((id) => tryBool(() => fn(s[id], id, ctx(s))));
 
-  if (opts.ready) return (s) => enoughPlayers(s) && tryBool(() => opts.ready!(s));
-  if (opts.roleFrom) return every((e, id, c) => opts.roleFrom!(e, id, c) != null);
-  if (opts.rankBy) return every((e, id, c) => Number.isFinite(opts.rankBy!(e, id, c)));
-  if ((opts.strategy ?? "join_order") === "join_order")
-    return (s) => enoughPlayers(s) && Object.keys(s).every((id) => s[id]?.joinedAt != null);
-  // random / rotate need only the id set
-  return (s) => enoughPlayers(s);
+  let predicate: (s: Snapshot, presence?: Presence) => boolean;
+  if (opts.ready) {
+    predicate = (s, presence = {}) => enoughPlayers(s) && tryBool(() => opts.ready!(s, presence));
+  } else if (opts.roleFrom) {
+    predicate = every((e, id, c) => opts.roleFrom!(e, id, c) != null);
+  } else if (opts.rankBy) {
+    predicate = every((e, id, c) => Number.isFinite(opts.rankBy!(e, id, c)));
+  } else if ((opts.strategy ?? "join_order") === "join_order") {
+    predicate = (s) => enoughPlayers(s) && Object.keys(s).every((id) => s[id]?.joinedAt != null);
+  } else {
+    // random / rotate need only the id set
+    predicate = (s) => enoughPlayers(s);
+  }
+  return Object.assign(predicate, { lastError: () => lastError });
 }
