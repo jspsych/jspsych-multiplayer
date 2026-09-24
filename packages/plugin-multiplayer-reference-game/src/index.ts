@@ -74,8 +74,11 @@ const info = <const>{
     },
     /**
      * How the two layouts relate: `"independent"` (director and matcher see different scrambles —
-     * the classic "you can't point by position" design), `"shared"` (identical layouts), or
-     * `"matcher_only"` (director sees the canonical `stimuli` order, matcher a scramble).
+     * the classic "you can't point by position" design), `"disjoint"` (as independent, but NO object
+     * may occupy the same slot for both players — the stricter rule the original tangrams experiment
+     * enforces, since under plain `independent` about a third of objects still coincide by chance),
+     * `"shared"` (identical layouts), or `"matcher_only"` (director sees the canonical `stimuli`
+     * order, matcher a scramble).
      */
     scramble_mode: {
       type: ParameterType.STRING,
@@ -242,7 +245,15 @@ const info = <const>{
       type: ParameterType.BOOL,
       default: true,
     },
-    /** Which feedback elements to show: `{ reveal_target, show_score, show_partner_choice }`. */
+    /**
+     * Which feedback elements to show: `{ reveal_target, show_score, show_partner_choice }`.
+     *
+     * May instead be keyed BY ROLE — `{ director: {...}, matcher: {...} }` — when the two players
+     * should see different things. That is what the original tangrams experiment does: the director
+     * sees only what the matcher clicked, the matcher sees only the true target. Any key omitted
+     * from a role's object falls back to the default for that key, and a flat object (no `director`
+     * / `matcher` key) applies to both roles exactly as before.
+     */
     feedback_content: {
       type: ParameterType.OBJECT,
       default: { reveal_target: true, show_score: true, show_partner_choice: true },
@@ -597,11 +608,20 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
     const canSend = chatOn && (trial.chat_role === "both" || trial.chat_role === role);
     const showFeedback =
       Boolean(trial.feedback) && (trial.feedback_to === "both" || trial.feedback_to === role);
+    // `feedback_content` is either flat (applies to both roles) or keyed by role. Detected by the
+    // presence of a `director`/`matcher` key rather than by a separate parameter, so the flat form
+    // keeps working untouched.
+    const rawFeedbackContent = (trial.feedback_content ?? {}) as Record<string, unknown>;
+    const roleKeyed =
+      typeof rawFeedbackContent.director === "object" ||
+      typeof rawFeedbackContent.matcher === "object";
     const feedbackContent = {
       reveal_target: true,
       show_score: true,
       show_partner_choice: true,
-      ...((trial.feedback_content as Record<string, boolean>) ?? {}),
+      ...((roleKeyed
+        ? (rawFeedbackContent[role] as Record<string, boolean>)
+        : (rawFeedbackContent as Record<string, boolean>)) ?? {}),
     };
     // Per-round chat namespacing: with `chat_persists` every round shares one log; without it each
     // round gets its own key so the panel starts empty (old rounds' arrays stay in the slot,
