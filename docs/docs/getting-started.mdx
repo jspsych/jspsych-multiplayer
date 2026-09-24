@@ -1,0 +1,246 @@
+---
+id: getting-started
+title: Getting started
+sidebar_label: Getting started
+description: Build a two-player jsPsych experiment in one HTML file and run it in two browser tabs.
+---
+
+import Link from "@docusaurus/Link";
+import { Steps, Step } from "@site/src/components/Steps";
+
+# Getting started
+
+On this page you will build a small two-player experiment, one piece at a time. Each
+participant will:
+
+1. pick a colour,
+2. wait until the other participant has picked one too,
+3. see both choices.
+
+You will run both participants yourself, from two tabs of one browser. That needs no server
+and no account. The same file runs for real participants on different computers once you
+change one line; see [Choosing a backend](guides/choosing-a-backend).
+
+**What you need:** a recent Chrome, Edge, Firefox or Safari, [Node.js](https://nodejs.org/)
+to build the packages and serve the page, and `git`.
+
+## How the pieces fit together
+
+A multiplayer experiment has two kinds of parts:
+
+- **One backend** (an _adapter_). It decides where the data participants share is kept: in
+  the browser for testing, or on a JATOS or Firebase server for a real study. You connect it
+  once, before the timeline runs.
+- **Multiplayer trials** (plugins). They go in the timeline like any other trial. Most of
+  them share a value with the group, wait until the group meets some condition, or show what
+  other participants are doing.
+
+Everything else in the experiment is ordinary jsPsych.
+
+## Before the release
+
+The multiplayer packages need the `jsPsych.multiplayer` API. It is in review as
+[jsPsych#3694](https://github.com/jspsych/jsPsych/pull/3694) and not yet in a `jspsych`
+release, and most of the packages are not on npm yet. Until both are released:
+
+- **jsPsych** loads from a preview build of #3694, pinned to one commit, as in the code
+  below.
+- **The multiplayer packages** load from a local build. Clone the repository and build them:
+
+  ```sh
+  git clone https://github.com/jspsych/jspsych-multiplayer.git
+  cd jspsych-multiplayer
+  npm install && npm run build
+  ```
+
+  Then make a folder in the repository, for example `my-experiment/`, and put your HTML file
+  there. The script tags below point from that folder to the built packages.
+
+After the release, the first two script tags become the usual `jspsych` ones, and the
+multiplayer tags become `https://unpkg.com/@jspsych-multiplayer/<package>@<version>` URLs.
+The rest of this page stays the same.
+
+## Build the experiment
+
+<Steps>
+<Step>
+
+### Load the packages
+
+Create `my-experiment/first-trial.html`:
+
+```html
+<!doctype html>
+<html>
+  <head>
+    <!-- jsPsych: the #3694 preview build (see "Before the release") -->
+    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@a6e05be017bcadf6ca208ed2fc0ac79e438c9626/packages/jspsych/dist/index.browser.min.js"></script>
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@a6e05be017bcadf6ca208ed2fc0ac79e438c9626/packages/jspsych/css/jspsych.css"
+    />
+    <script src="https://unpkg.com/@jspsych/plugin-html-button-response@2"></script>
+
+    <!-- The backend, and one multiplayer plugin -->
+    <script src="../packages/adapter-multiplayer-local/dist/index.browser.min.js"></script>
+    <script src="../packages/plugin-multiplayer-sync/dist/index.browser.min.js"></script>
+  </head>
+  <body></body>
+  <script>
+    // The code from the next steps goes here
+  </script>
+</html>
+```
+
+</Step>
+<Step>
+
+### Connect a backend
+
+```js
+const jsPsych = initJsPsych({
+  on_finish: () => jsPsych.data.displayData(),
+});
+
+const adapter = new jsPsychAdapterMultiplayerLocal({ persistParticipant: true });
+```
+
+The local adapter shares data between tabs of one browser. It is for building and testing
+only; it cannot connect participants on different computers. `persistParticipant: true`
+means a tab that reloads rejoins as the same participant.
+
+You will hand the adapter to jsPsych in the last step, just before the timeline runs.
+
+</Step>
+<Step>
+
+### Ask for a choice
+
+An ordinary jsPsych trial. Nothing about it is multiplayer:
+
+```js
+let myColour;
+
+const choose = {
+  type: jsPsychHtmlButtonResponse,
+  stimulus: "<p>Pick a colour. Your partner will see it.</p>",
+  choices: ["red", "blue"],
+  on_finish: (data) => {
+    myColour = ["red", "blue"][data.response];
+  },
+};
+```
+
+</Step>
+<Step>
+
+### Share it and wait for the partner
+
+This is the multiplayer trial. [`multiplayer-sync`](reference/plugin-multiplayer-sync) does
+two things in order: it saves `push_data` where everyone in the group can read it, then it
+waits until `wait_for` returns `true`.
+
+```js
+let partnerColour;
+
+const waitForPartner = {
+  type: jsPsychMultiplayerSync,
+  push_data: () => ({ colour: myColour }),
+  wait_for: (group, presence) => {
+    const here = Object.keys(presence).filter((id) => presence[id] === "connected");
+    return here.length >= 2 && here.every((id) => group[id]?.colour);
+  },
+  message: "<p>Waiting for your partner to choose…</p>",
+  on_finish: (data) => {
+    const me = jsPsych.multiplayer.participantId;
+    const partner = Object.keys(data.group).find((id) => id !== me);
+    partnerColour = data.group[partner]?.colour;
+  },
+};
+```
+
+`wait_for` gets two arguments:
+
+- `group`, what each participant has shared, keyed by participant ID. Here, after both have
+  chosen, it looks like `{ "a1b2…": { colour: "red" }, "c3d4…": { colour: "blue" } }`.
+- `presence`, whether each participant is `"connected"`, `"away"` (their connection dropped)
+  or `"left"`.
+
+Read the condition aloud: _at least two participants are connected, and each of them has
+shared a colour._ Both tabs check the same condition against the same data, so both move on
+at the same moment.
+
+`push_data` is a function because `myColour` only has a value once the previous trial has
+finished. When the wait ends, the trial saves the group's data in `data.group`, which is
+where `on_finish` finds the partner's colour.
+
+</Step>
+<Step>
+
+### Show the result and run
+
+```js
+const result = {
+  type: jsPsychHtmlButtonResponse,
+  stimulus: () => `<p>You picked <b>${myColour}</b>. Your partner picked <b>${partnerColour}</b>.</p>`,
+  choices: ["Finish"],
+};
+
+jsPsych.multiplayer.connect(adapter).then(() => {
+  jsPsych.run([choose, waitForPartner, result]);
+});
+```
+
+`connect()` must finish before `jsPsych.run()`, because the multiplayer trials need the
+connection from their first moment.
+
+</Step>
+</Steps>
+
+## Run it in two tabs
+
+Browsers only share the local adapter's data between pages served from the same web address,
+so serve the repository instead of opening the file directly. From the repository folder:
+
+```sh
+npx http-server .
+```
+
+Open `http://localhost:8080/my-experiment/first-trial.html`. Pick a colour, and the page says
+it is waiting for your partner. The address bar now ends in `?mp_session=…`: that is the
+session this tab joined.
+
+**Copy the whole address, including `?mp_session=…`, into a second tab.** A second tab without
+it would start its own session, and the two tabs would each wait forever. Pick a colour in the
+second tab, and both tabs show the result.
+
+## What the data looks like
+
+The sync trial adds these fields to the usual jsPsych data:
+
+```jsonc
+{
+  "trial_type": "multiplayer-sync",
+  "group": {
+    "a1b2…": { "colour": "red" },
+    "c3d4…": { "colour": "blue" }
+  },
+  "wait_time": 2310,        // ms this participant waited
+  "timed_out": false,
+  "partner_left": false,    // true if a participant it depended on left
+  "left_participant": null,
+  "connection_lost": false,
+  "wait_error": null
+}
+```
+
+The data from each participant's own browser holds the choices of the whole group, so you
+can analyse a session from either participant's file.
+
+## Next steps
+
+- Read [How it works](guides/how-it-works) for the rules behind `group` and `presence`.
+- Build the [ultimatum game](guides/ultimatum-game): a complete two-player study with roles,
+  a partner who might leave, and a real backend.
+- Browse the <Link to="/examples">examples</Link> for chat, polls, pairing, scoreboards and
+  more.

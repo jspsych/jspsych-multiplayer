@@ -1,0 +1,253 @@
+---
+id: ultimatum-game
+title: Building an ultimatum game
+sidebar_label: Ultimatum game
+description: A complete two-player ultimatum game with a lobby, roles, a partner who might leave, and a switch to a real backend.
+---
+
+import { Steps, Step } from "@site/src/components/Steps";
+
+# Building an ultimatum game
+
+In the ultimatum game (Güth, Schmittberger & Schwarze, 1982), two players split $10. The
+**proposer** offers the **responder** some amount. If the responder accepts, both keep their
+share; if they reject it, both get nothing.
+
+This guide walks through
+[`examples/ultimatum-game-local.html`](https://github.com/jspsych/jspsych-multiplayer/blob/main/examples/ultimatum-game-local.html),
+a complete version you can run in two browser tabs. It adds three things to
+[Getting started](../getting-started):
+
+- **roles**, decided the same way on both screens,
+- **a partner who might leave**, without leaving the other player stuck,
+- **a real backend**, by changing one line.
+
+## Run it first
+
+Follow [Running an example](../examples#running-an-example) and open
+`examples/ultimatum-game-local.html` in two tabs. One tab becomes the proposer, the other the
+responder. Play a round, then use the button on the last screen to download that tab's data.
+
+## Build it
+
+<Steps>
+<Step>
+
+### Wait in a lobby
+
+```js
+const lobby = {
+  type: jsPsychMultiplayerSync,
+  push_data: { status: "ready" },
+  wait_for: (_group, presence) =>
+    Object.values(presence).filter((status) => status === "connected").length >= 2,
+  message: "<p>Waiting for another player to join…</p>",
+};
+```
+
+The lobby holds each player until at least two are connected. It has no `timeout`, because
+waiting for a partner to arrive is the point of a lobby.
+
+</Step>
+<Step>
+
+### Assign roles
+
+```js
+let myRole, proposerId, responderId, myJoinedAt;
+
+const assignRoles = {
+  type: jsPsychMultiplayerRole,
+  roles: ["proposer", "responder"],
+  strategy: "join_order",
+  overflow_role: "spectator",
+  ready: (group, presence) => {
+    const ids = Object.keys(group);
+    return (
+      ids.length >= 2 &&
+      ids.every(
+        (id) =>
+          presence[id] === "connected" &&
+          (group[id].joinedAt != null ||
+            group[id].offer !== undefined ||
+            group[id].decision !== undefined),
+      )
+    );
+  },
+  save_group: true,
+  message: "<p>Assigning roles…</p>",
+  on_finish: (data) => {
+    myRole = jsPsychMultiplayerRole.getMyRole();
+    const byRole = jsPsychMultiplayerRole.participantsByRole();
+    proposerId = byRole.proposer?.[0];
+    responderId = byRole.responder?.[0];
+    myJoinedAt = data.group?.[jsPsych.multiplayer.participantId]?.joinedAt;
+  },
+};
+```
+
+[`multiplayer-role`](../reference/plugin-multiplayer-role) writes a `joinedAt` time into each
+participant's slot, and with `strategy: "join_order"` the earliest becomes the proposer. Both
+browsers sort the same shared data the same way, so they agree on the roles without asking
+each other. A third player who arrives late gets the `overflow_role`, `"spectator"`, and is
+shown a "game full" screen.
+
+The `ready` function says when the group is complete enough to assign roles over: at least two
+participants, all connected, and each with a `joinedAt` (or, for someone who joined
+mid-game, an offer or decision). Without it, a browser could sort before the partner's
+`joinedAt` arrived and pick the wrong proposer.
+
+`on_finish` keeps what the rest of the game needs: this player's role, both players' IDs, and
+this player's own `joinedAt`, which the next step needs.
+
+</Step>
+<Step>
+
+### Carry forward what others read
+
+A sync trial's `push_data` **replaces** the participant's whole slot (see [How it
+works](how-it-works#writing-replace-or-merge)). So if the proposer pushed only
+`{ offer: 9 }`, their `joinedAt` would disappear from the shared data. The two players would
+not notice, because they already stored their roles. But a spectator arriving later would sort
+the players without it, compute different roles, and could act on the wrong ones.
+
+So every later `push_data` includes `joinedAt`:
+
+```js
+push_data: () => ({ offer: proposerOffer, joinedAt: myJoinedAt }),
+```
+
+The general rule: **every push must include every field that other participants still read.**
+Fields nobody reads any more, like the lobby's `status`, can be dropped.
+
+</Step>
+<Step>
+
+### Play the two turns
+
+The proposer chooses an offer with an ordinary button trial, then sends it and waits for the
+decision:
+
+```js
+const PARTNER_TIMEOUT_MS = 60000;
+let proposerOffer, responderDecision;
+let partnerLeft = false;
+
+const proposerWait = {
+  type: jsPsychMultiplayerSync,
+  push_data: () => ({ offer: proposerOffer, joinedAt: myJoinedAt }),
+  wait_for: (group) => group[responderId]?.decision !== undefined,
+  participants: () => [responderId],
+  timeout: PARTNER_TIMEOUT_MS,
+  message: "<p>Waiting for the responder…</p>",
+  on_finish: (data) => {
+    if (data.partner_left || data.timed_out || data.connection_lost) {
+      partnerLeft = true;
+      return;
+    }
+    responderDecision = data.group[responderId].decision;
+  },
+};
+```
+
+The responder mirrors it: a sync trial that waits for `group[proposerId]?.offer`, a button trial
+to accept or reject, and a sync trial that pushes
+`{ decision: responderDecision, joinedAt: myJoinedAt }`.
+
+Each role's trials sit in a timeline with a `conditional_function`, such as
+`() => myRole === "proposer"`. Both players load the same file; the role decides which trials
+each one sees.
+
+</Step>
+<Step>
+
+### Handle a partner who leaves
+
+`participants: () => [responderId]` tells the trial which participant it depends on. If that
+participant leaves (disconnected for more than 10 seconds), the trial ends with
+`partner_left: true` instead of waiting forever. `connection_lost: true` means this player's own
+connection is gone. `timeout` covers a partner who stays connected but never acts, and ends
+the trial with `timed_out: true`.
+
+All three set `partnerLeft`, and the timeline shows a "your partner left" screen instead of the
+outcome:
+
+```js
+const partnerLeftScreen = {
+  timeline: [/* "The other player left…" */],
+  conditional_function: () => partnerLeft,
+};
+const outcome = {
+  timeline: [outcomeTrial],
+  conditional_function: () => !partnerLeft,
+};
+```
+
+A timeout has one catch: the other player does not know it happened. If the responder decides
+after the proposer's timeout, the proposer sees "your partner left" while the responder sees
+an outcome. Make the timeout much longer than your slowest participant needs, or limit the
+decision screen with `trial_duration`. [Handling dropouts](handling-dropouts) has more.
+
+</Step>
+<Step>
+
+### Switch to a real backend
+
+The local adapter only connects tabs of one browser. For a real study, change the connection
+code, and load that adapter's script instead. For JATOS
+([`examples/ultimatum-game-jatos.html`](https://github.com/jspsych/jspsych-multiplayer/blob/main/examples/ultimatum-game-jatos.html)):
+
+```js
+// Before: two tabs in one browser
+const jsPsych = initJsPsych();
+jsPsych.multiplayer
+  .connect(new jsPsychAdapterMultiplayerLocal({ persistParticipant: true }))
+  .then(() => jsPsych.run(timeline));
+
+// After: a JATOS group study
+jatos.onLoad(() => {
+  const jsPsych = initJsPsych({
+    on_finish: () => jatos.endStudy(jsPsych.data.get().json()),
+  });
+  jsPsych.multiplayer
+    .connect(new jsPsychAdapterMultiplayerJatos())
+    .then(() => jsPsych.run(timeline));
+});
+```
+
+The lobby, roles, turns and dropout handling stay exactly as they are.
+[`ultimatum-game-firebase.html`](https://github.com/jspsych/jspsych-multiplayer/blob/main/examples/ultimatum-game-firebase.html)
+is the same game on Firebase. See [Choosing a backend](choosing-a-backend).
+
+</Step>
+</Steps>
+
+## The data
+
+Each player's data includes the multiplayer trials. From the proposer's browser (IDs
+shortened):
+
+```jsonc
+{ "trial_type": "multiplayer-role", "role": "proposer",
+  "role_map": { "031c…": { "role": "proposer" }, "dbad…": { "role": "responder" } } }
+
+{ "trial_type": "multiplayer-sync", "wait_time": 2359, "partner_left": false, "timed_out": false,
+  "group": { "031c…": { "offer": 9, "joinedAt": 1783619087856 },
+             "dbad…": { "decision": "accept", "joinedAt": 1783619087857 } } }
+```
+
+The last sync trial's `group` holds both the offer and the decision, so either player's file is
+enough to score the round. `role_map` lets you check that both browsers agreed on the roles.
+
+## Where to go next
+
+- **More rounds or more players.** The rounds are ordinary jsPsych, so loop them with a
+  timeline variable. For more than two players, add roles to `roles`;
+  `participantsByRole()` returns a list of IDs for each.
+- **Talking before deciding.** Add a [`multiplayer-chat`](../reference/plugin-multiplayer-chat)
+  trial before the offer.
+
+## Reference
+
+Güth, W., Schmittberger, R., & Schwarze, B. (1982). An experimental analysis of ultimatum
+bargaining. _Journal of Economic Behavior & Organization_, 3(4), 367–388.

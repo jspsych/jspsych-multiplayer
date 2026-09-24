@@ -1,0 +1,158 @@
+---
+id: plugin-multiplayer-choice
+title: multiplayer-choice
+sidebar_label: multiplayer-choice
+description: Have every participant choose at the same time, wait for the whole group, then show what everyone chose.
+---
+
+# `multiplayer-choice`
+
+A choice trial is a simultaneous decision. Every participant picks one of the same options
+without seeing anyone else's pick; once the whole group has chosen, the trial shows the outcome.
+Use it for simultaneous-move games (prisoner's dilemma, coordination, public goods with a few
+contribution levels) and for group votes.
+
+The outcome screen either lists who chose what, or shows only the count for each option and the
+winner, as an anonymous poll. An optional `payoff` function scores the round for each
+participant.
+
+**What the participant sees:** your `prompt` and one button per option. After a click, the
+buttons dim and "Waiting for the other players to choose…" appears until the group has chosen.
+Then the outcome screen, with a Continue button.
+
+```js
+timeline.push({
+  type: jsPsychMultiplayerChoice,
+  choices: ["Cooperate", "Defect"],
+  expected_players: 2,
+});
+```
+
+| | |
+| --- | --- |
+| Package | `@jspsych-multiplayer/plugin-multiplayer-choice` |
+| Browser global | `jsPsychMultiplayerChoice` |
+| Trial type | `multiplayer-choice` |
+| Requires | a connected session (see [Getting started](../getting-started)) |
+
+## Parameters
+
+| Parameter | Type | Default | Description |
+| --- | --- | --- | --- |
+| `choices` | `string[]` | required | The options, one button each. HTML is allowed. The option's index (from 0) is what is shared with the group. |
+| `prompt` | HTML string | `null` | Shown above the buttons. |
+| `button_html` | `(choice, index) => string` | `null` | Returns the HTML for each option, as in `html-button-response`. `null` uses a plain `jspsych-btn` button. |
+| `data_key` | `string \| null` | `null` | The field in each participant's slot that holds their choice. `null` generates `choice-1`, `choice-2`, … (see [Choice keys](#choice-keys)). |
+| `expected_players` | `number` | required | How many participants, including this one, must choose before the outcome is shown. Can be a function that returns the number. |
+| `waiting_message` | HTML string | `"<p>Waiting for the other players to choose…</p>"` | Shown after this participant chooses, while the rest of the group finishes. |
+| `timeout` | `number \| null` | `null` | The longest time to wait for the others **after** choosing, in ms. When it runs out, the trial goes on with whoever has chosen, flagged `timed_out: true`, and `on_timeout` is called. `null`, `0`, or a negative number waits indefinitely. It does not limit how long this participant takes to choose. |
+| `on_timeout` | `function \| null` | `null` | Called with the timeout error if `timeout` runs out first. |
+| `participants` | `string[] \| null` | `null` | The participants this choice depends on. If one of them leaves before the group has chosen, the trial goes on with whoever has chosen, flagged `partner_left: true`. `null` means every other participant who is connected when this participant chooses. `[]` ignores departures. |
+| `reveal` | `boolean` | `true` | Show the outcome screen. `false` ends the trial as soon as the group has chosen. |
+| `reveal_mode` | `"players" \| "tally"` | `"players"` | `"players"` lists each participant's choice by name. `"tally"` shows only the count for each option and the winner (or a tie), never who chose what. |
+| `reveal_prompt` | HTML string | `null` | A heading above the outcome. |
+| `continue_label` | `string \| null` | `"Continue"` | The label of the button that ends the outcome screen. `null` hides the button; then set `reveal_duration`, or the screen can't end. |
+| `reveal_duration` | `number \| null` | `null` | End the outcome screen automatically after this many ms. With a button as well, whichever comes first ends it. |
+| `player_label` | `(participantId) => string` | `null` | The name to show for each participant in `"players"` mode. `null` shows participant IDs. |
+| `payoff` | `(choices, me) => number` | `null` | Computes this participant's payoff. `choices` is `{ participantId: { index, label } }` and `me` is this participant's ID. The result is saved as `my_payoff` and shown on the outcome screen. |
+| `record_choices_by_player` | `boolean` | `true` | Save everyone's choice as `choices_by_player`. Set `false` for an anonymous poll; see [Anonymous polls](#anonymous-polls). |
+
+## Data
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `choice` | `string` | The label of this participant's choice. |
+| `choice_index` | `number` | The index of this participant's choice, from 0. |
+| `rt` | `number` | Milliseconds from the buttons appearing to this participant's click. |
+| `wait_time` | `number` | Milliseconds from the click until the group had chosen (or the wait ended early). Does not include the outcome screen. |
+| `choices_by_player` | `object \| null` | Everyone's choice, `{ participantId: { index, label } }`. `null` when `record_choices_by_player` is `false`. |
+| `n_players` | `number` | How many choices were counted. |
+| `tally` | `object[]` | One `{ index, label, count }` per option, in `choices` order. |
+| `winner` | `object \| null` | The option with the most picks, `{ index, label, count }`. `null` on a tie or if no one chose. |
+| `is_tie` | `boolean` | `true` if two or more options shared the most picks. |
+| `tied_options` | `object[]` | The options that tied, in `choices` order. Empty if there was no tie. |
+| `my_payoff` | `number \| null` | The value `payoff` returned. `null` without a `payoff` function, or if it threw or didn't return a finite number. |
+| `data_key` | `string` | The key used for this trial (your `data_key`, or the generated `choice-N`). |
+| `timed_out` | `boolean` | `true` if the trial went on because `timeout` ran out. |
+| `partner_left` | `boolean` | `true` if the trial went on because a participant in `participants` left. |
+| `left_participant` | `string \| null` | The ID of the participant who left, when `partner_left` is `true`. |
+| `connection_lost` | `boolean` | `true` if the trial went on because this participant's own connection was lost for good. |
+| `wait_error` | `string \| null` | The message of whatever ended the wait early (timeout, departure, or lost connection). `null` when the group chose. |
+
+When the wait ends early, the trial still shows and records the outcome among those who did
+choose. Check `timed_out`, `partner_left`, and
+`connection_lost` in `on_finish`; [Handling dropouts](../guides/handling-dropouts) has patterns
+for that. The counts include a choice from a participant who chose and then left. If the
+experiment ends or is aborted while the trial is waiting, it stops without calling `on_timeout`
+and records no data.
+
+## Choice keys
+
+When a participant chooses, the plugin merges `{ [data_key]: { index, label } }` into their slot.
+The trial counts participants who have a choice under that key and have not left.
+
+Each choice trial needs its own key, or choices from an earlier trial would count toward a later
+one. By default the first choice trial a participant reaches uses `choice-1`, the second
+`choice-2`, and so on. Because everyone passes the same trials in the same order, the Nth trial
+gets the same key for everyone.
+
+Set `data_key` yourself when:
+
+- only some participants reach the trial, for example inside a `conditional_function`;
+- a participant might reload the page (the count starts over);
+- several sub-groups choose separately in one session. Give each sub-group its own key and set
+  `expected_players` to the sub-group's size. [`multiplayer-match`](plugin-multiplayer-match#example)
+  shows this for pairs.
+
+An explicit `data_key` does not advance the default count.
+
+## Anonymous polls
+
+With `reveal_mode: "tally"`, the outcome screen shows a bar for each option with its count, the
+winner or the tie, and "(you)" next to this participant's own pick. Add
+`record_choices_by_player: false` to leave the per-participant choices out of the data as well;
+the data then holds the tally, the winner, and this participant's own choice.
+
+This hides choices on screen and in your data, not in the session. Each participant's pick is
+still in their slot, and a participant who inspects the page's network traffic can see it.
+
+## Example
+
+A one-shot prisoner's dilemma with payoffs, followed by an anonymous vote:
+
+```js
+const PAYOFFS = [
+  [3, 0], // I cooperate: they cooperate, they defect
+  [5, 1], // I defect:    they cooperate, they defect
+];
+
+const dilemma = {
+  type: jsPsychMultiplayerChoice,
+  prompt: "<p>You and your partner choose at the same time.</p>",
+  choices: ["Cooperate", "Defect"],
+  expected_players: 2,
+  timeout: 60000,
+  reveal_prompt: "<h3>Both players have chosen</h3>",
+  player_label: (id) => (id === jsPsych.multiplayer.participantId ? "You" : "Your partner"),
+  payoff: (choices, me) => {
+    const other = Object.keys(choices).find((id) => id !== me);
+    return PAYOFFS[choices[me].index][choices[other].index];
+  },
+};
+
+const vote = {
+  type: jsPsychMultiplayerChoice,
+  prompt: "<p>Which game should the group play next?</p>",
+  choices: ["Trust", "Ultimatum", "Public goods"],
+  expected_players: 4,
+  reveal_mode: "tally",
+  record_choices_by_player: false,
+  reveal_prompt: "<h3>The votes are in</h3>",
+  on_finish: (data) => {
+    nextGame = data.winner ? data.winner.label : "Public goods"; // winner is null on a tie
+  },
+};
+```
+
+If the partner times out, `choices[other]` is missing, `payoff` throws, and `my_payoff` is
+recorded as `null`.
