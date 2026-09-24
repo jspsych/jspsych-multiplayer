@@ -56,10 +56,10 @@
 
     const jsPsych = initJsPsych();
 
-    // Connecting the adapter is the only network setup the timeline needs. persistParticipant keeps
-    // this tab's participant id in sessionStorage, so a mid-lobby refresh rejoins as the same
-    // participant. The adapter tracks presence itself, including when a tab closes.
-    const localAdapter = new jsPsychAdapterMultiplayerLocal({ persistParticipant: true });
+    // Connecting the adapter is the only network setup the timeline needs. The adapter tracks
+    // presence itself, including when a tab closes. A refreshed tab gets a new participant id and
+    // joins as a new participant: a page that reloaded can't rejoin the group it left.
+    const localAdapter = new jsPsychAdapterMultiplayerLocal();
 
     // A participant's display name, collected before the lobby and published to the group session so
     // every client can label messages by name instead of by raw participant id.

@@ -57,6 +57,21 @@
       // session through this adapter; nothing about the timeline is JATOS-specific.
       await jsPsych.multiplayer.connect(new jsPsychAdapterMultiplayerJatos());
 
+      // A reload gives this participant a new page load under the same ID. The group has moved on
+      // without them, so they can't rejoin: say so instead of starting the game over.
+      if (jsPsych.multiplayer.previousInstance) {
+        await jsPsych.run([
+          {
+            type: jsPsychHtmlButtonResponse,
+            stimulus:
+              "<p>You reloaded the page, so you can't rejoin this game.</p>" +
+              "<p>Thank you for taking part.</p>",
+            choices: ["Finish"],
+          },
+        ]);
+        return;
+      }
+
       const POT = 10;
 
       // A backstop for the mid-game barriers. A player who leaves is detected sooner through presence

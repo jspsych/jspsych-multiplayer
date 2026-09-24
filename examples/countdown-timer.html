@@ -59,10 +59,9 @@
 
     const jsPsych = initJsPsych();
 
-    // persistParticipant keeps this tab's participant id in sessionStorage, so a mid-demo refresh
-    // rejoins as the same participant and resumes the countdown at the group's real remaining time
-    // (the countdown keeps an existing start time).
-    const localAdapter = new jsPsychAdapterMultiplayerLocal({ persistParticipant: true });
+    // A refreshed tab joins as a new participant. Its countdown still shows the group's real
+    // remaining time, because the countdown uses the earliest start time any participant wrote.
+    const localAdapter = new jsPsychAdapterMultiplayerLocal();
 
     // 1) Lobby: announce we're here, then wait until enough players are present. Aligning the START
     //    of the countdown behind this barrier is what keeps the timers converged.

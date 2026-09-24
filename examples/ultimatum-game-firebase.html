@@ -359,8 +359,22 @@
 
     // Connect the backend, then run. Everything above is backend-agnostic — swapping the adapter is
     // the only change from ultimatum-game-jatos.html (plus the jatos.onLoad wrapper it no longer needs).
+    const reloadedScreen = {
+      type: jsPsychHtmlButtonResponse,
+      stimulus:
+        "<p>You reloaded the page, so you can't rejoin this game.</p>" +
+        "<p>Thank you for taking part.</p>",
+      choices: ["Finish"],
+    };
+
     jsPsych.multiplayer.connect(adapter).then(
       () => {
+        // A reload gives this participant a new page load under the same ID. The group has moved on
+        // without them, so they can't rejoin: say so instead of starting the game over.
+        if (jsPsych.multiplayer.previousInstance) {
+          jsPsych.run([reloadedScreen]);
+          return;
+        }
         jsPsych.run([lobby, assignRoles, gameFull, noGroupScreen, gameTimeline, doneScreen]);
       },
       (error) => {

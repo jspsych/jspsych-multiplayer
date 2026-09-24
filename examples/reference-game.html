@@ -52,7 +52,9 @@
     const MIN_PLAYERS = 2;
 
     const jsPsych = initJsPsych();
-    const localAdapter = new jsPsychAdapterMultiplayerLocal({ persistParticipant: true });
+    // A refreshed tab gets a new participant id and joins as a new participant: a page that
+    // reloaded can't rejoin the game it left.
+    const localAdapter = new jsPsychAdapterMultiplayerLocal();
 
     // ── Twelve self-contained "tangram-like" silhouettes (no external assets) ──────────────────────
     // Regular polygons (3–8 sides) and star polygons (3–8 points) — abstract and distinct, so naming
