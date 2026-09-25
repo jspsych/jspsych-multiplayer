@@ -44,6 +44,9 @@
     "url": "https://github.com/jspsych/jspsych-multiplayer/issues"
   },
   "homepage": "https://github.com/jspsych/jspsych-multiplayer/blob/main/packages/adapter-multiplayer-firebase/README.md",
+  "dependencies": {
+    "@jspsych-multiplayer/utils": "^0.0.0"
+  },
   "peerDependencies": {
     "firebase": ">=10.0.0",
     "jspsych": ">=8.0.0"

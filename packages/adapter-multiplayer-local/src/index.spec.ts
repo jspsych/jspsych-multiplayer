@@ -1,5 +1,6 @@
 import { AdapterConnectOptions, initJsPsych, MultiplayerConnection } from "jspsych";
 
+import { flushPromises } from "../../../test-utils/memory-backend";
 import LocalAdapter, { LocalAdapterOptions } from "./index";
 import { SlotStorage, writePresence } from "./local-store";
 import { ChangeSignal } from "./signal";
@@ -53,7 +54,11 @@ class BusSignal implements ChangeSignal {
   }
 }
 
-/** Simulated browser: a shared store + bus, minting adapters that model separate tabs. */
+/**
+ * Simulated browser: a shared store + bus, minting adapters that model separate tabs. Every tab
+ * shares jsdom's one sessionStorage, so tabs get a fresh participant id unless a test asks to
+ * keep one.
+ */
 function makeBrowser() {
   const storage = new MemoryStorage();
   const bus = new Bus();
@@ -64,6 +69,7 @@ function makeBrowser() {
       signal: bus.newSignal(),
       heartbeatIntervalMs: 1000,
       presenceTimeoutMs: 3000,
+      persistParticipant: false,
       ...opts,
     });
   return { storage, bus, openTab };
@@ -72,8 +78,14 @@ function makeBrowser() {
 function connectOptions(): AdapterConnectOptions & {
   onChange: jest.Mock;
   onStatus: jest.Mock;
+  onResumed: jest.Mock;
 } {
-  return { signal: new AbortController().signal, onChange: jest.fn(), onStatus: jest.fn() };
+  return {
+    signal: new AbortController().signal,
+    onChange: jest.fn(),
+    onStatus: jest.fn(),
+    onResumed: jest.fn(),
+  };
 }
 
 const open: MultiplayerConnection[] = [];
@@ -114,6 +126,15 @@ describe("LocalAdapter connections", () => {
     const { openTab } = makeBrowser();
     const options = { ...connectOptions(), signal: AbortSignal.abort() };
     await expect(openTab().connect(options)).rejects.toThrow(/cancelled/);
+  });
+
+  test("getAll() returns each payload exactly as it was pushed", async () => {
+    const { openTab } = makeBrowser();
+    const { connection: a } = await connect(openTab({ participantId: "alice" }));
+    const { connection: b } = await connect(openTab({ participantId: "bob" }));
+    const payload = { $mp: { v: 1, instance: "i1", epoch: 2 }, session: { x: 1 }, scopes: {} };
+    await a.push(payload);
+    expect(b.getAll()).toEqual({ alice: payload });
   });
 
   test("push writes a slot every tab can read (REPLACE semantics)", async () => {
@@ -309,15 +330,11 @@ describe("LocalAdapter rejoining", () => {
     delete (document as { visibilityState?: string }).visibilityState;
   });
 
-  test("a tab whose heartbeat lapsed reports a drop and recovery, and rejoins", async () => {
+  test("a tab whose heartbeat lapsed reports that it resumed, and shows as connected again", async () => {
     jest.useFakeTimers();
     const { openTab } = makeBrowser();
-    const rejoined = jest.fn();
     const a = initJsPsych();
-    await a.multiplayer.connect(openTab({ participantId: "alice" }), {
-      dropoutTimeout: 1000,
-      onParticipantRejoined: rejoined,
-    });
+    await a.multiplayer.connect(openTab({ participantId: "alice" }), { dropoutTimeout: 60000 });
     const statuses: string[] = [];
     const b = initJsPsych();
     // A throttled background tab: bob's heartbeat timer never fires on its own
@@ -325,21 +342,33 @@ describe("LocalAdapter rejoining", () => {
     await b.multiplayer.connect(openTab({ participantId: "bob" }), {
       onStatusChange: (status) => statuses.push(status),
     });
-    await b.multiplayer.update({ score: 2 });
+    await b.multiplayer.update({ score: 2 }, { scope: "session" });
 
-    // Past the presence timeout and then the dropout timeout
-    jest.advanceTimersByTime(6000);
-    expect(a.multiplayer.presence().bob).toBe("left");
-    expect(rejoined).not.toHaveBeenCalled();
+    // Past the presence timeout, so alice's tab stops seeing bob
+    jest.advanceTimersByTime(4000);
+    expect(a.multiplayer.presence().bob).toBe("away");
 
     showPage();
-    expect(statuses).toEqual(["reconnecting", "connected"]);
+    await jest.advanceTimersByTimeAsync(0);
+    // localStorage never disconnected, so bob's own status never changed
+    expect(statuses).toEqual([]);
     expect(a.multiplayer.presence().bob).toBe("connected");
-    expect(rejoined).toHaveBeenCalledWith("bob");
-    expect(a.multiplayer.get("bob")).toEqual({ score: 2 });
+    expect(a.multiplayer.get("bob", { scope: "session" })).toEqual({ score: 2 });
 
     await b.multiplayer.disconnect();
     await a.multiplayer.disconnect();
+  });
+
+  test("a lapsed heartbeat calls onResumed() instead of reporting a status", async () => {
+    jest.useFakeTimers();
+    const { openTab } = makeBrowser();
+    jest.spyOn(global, "setInterval").mockImplementationOnce(() => 0 as never);
+    const { options } = await connect(openTab({ participantId: "alice" }));
+    jest.advanceTimersByTime(4000);
+    expect(options.onResumed).not.toHaveBeenCalled();
+    showPage();
+    expect(options.onResumed).toHaveBeenCalledTimes(1);
+    expect(options.onStatus).not.toHaveBeenCalled();
   });
 
   test("regular heartbeats never report a drop", async () => {
@@ -350,64 +379,92 @@ describe("LocalAdapter rejoining", () => {
     showPage();
     jest.advanceTimersByTime(60000);
     expect(options.onStatus).not.toHaveBeenCalled();
+    expect(options.onResumed).not.toHaveBeenCalled();
   });
 
-  test("a refresh with persistParticipant is a restart, not a rejoin", async () => {
+  test("a refresh keeps the participant id, and the group sees a restart", async () => {
     sessionStorage.clear();
     const { openTab } = makeBrowser();
-    const rejoined = jest.fn();
-    const restarted = jest.fn();
+    const left = jest.fn();
     const a = initJsPsych();
     await a.multiplayer.connect(openTab({ participantId: "alice" }), {
-      onParticipantRejoined: rejoined,
-      onParticipantRestarted: restarted,
+      onParticipantLeft: left,
     });
     const before = initJsPsych();
-    await before.multiplayer.connect(openTab({ persistParticipant: true }));
+    // The adapter's default: keep the id for this tab
+    await before.multiplayer.connect(openTab({ persistParticipant: undefined }));
     const bob = before.multiplayer.participantId!;
-    await before.multiplayer.update({ round: 3 });
+    await before.multiplayer.update({ round: 3 }, { scope: "session" });
 
     // The refresh: the old page goes away, and a new page keeps the id from sessionStorage
     await before.multiplayer.disconnect();
     const after = initJsPsych();
-    await after.multiplayer.connect(openTab({ persistParticipant: true }));
+    await after.multiplayer.connect(openTab({ persistParticipant: undefined }));
+    await flushPromises();
 
     expect(after.multiplayer.participantId).toBe(bob);
-    expect(after.multiplayer.previousInstance).not.toBeNull();
+    expect(after.multiplayer.restarted).toBe(true);
     expect(a.multiplayer.presence()[bob]).toBe("left");
-    expect(restarted).toHaveBeenCalledWith(bob);
-    expect(rejoined).not.toHaveBeenCalled();
+    expect(left).toHaveBeenCalledWith(bob);
 
     await after.multiplayer.disconnect();
     await a.multiplayer.disconnect();
+    sessionStorage.clear();
   });
 });
 
 describe("LocalAdapter configuration", () => {
-  test("distinct tabs get distinct random participant ids by default", () => {
-    const { openTab } = makeBrowser();
-    const a = openTab();
-    const b = openTab();
-    expect(a.participantId).toBeTruthy();
-    expect(a.participantId).not.toBe(b.participantId);
+  test("by default, the participant id is kept for this tab and session", () => {
+    const { storage } = makeBrowser();
+    sessionStorage.clear();
+    const first = new LocalAdapter({ sessionId: "sess", storage });
+    const second = new LocalAdapter({ sessionId: "sess", storage });
+    const otherSession = new LocalAdapter({ sessionId: "other", storage });
+    expect(first.participantId).toBeTruthy();
+    expect(second.participantId).toBe(first.participantId);
+    expect(otherSession.participantId).not.toBe(first.participantId);
+    sessionStorage.clear();
   });
 
-  test("persistParticipant reuses the id stored for this tab and session", () => {
-    const { openTab } = makeBrowser();
+  test("persistParticipant: false gives a fresh id on every load", () => {
+    const { storage } = makeBrowser();
     sessionStorage.clear();
-    const first = openTab({ persistParticipant: true });
-    const second = openTab({ persistParticipant: true });
-    expect(second.participantId).toBe(first.participantId);
-    sessionStorage.clear();
+    const a = new LocalAdapter({ sessionId: "sess", storage, persistParticipant: false });
+    const b = new LocalAdapter({ sessionId: "sess", storage, persistParticipant: false });
+    expect(a.participantId).toBeTruthy();
+    expect(a.participantId).not.toBe(b.participantId);
+    expect(sessionStorage.length).toBe(0);
+  });
+
+  test("namespace sets the prefix of every storage key", async () => {
+    const { storage, openTab } = makeBrowser();
+    const { connection } = await connect(openTab({ participantId: "alice", namespace: "study1" }));
+    await connection.push({ x: 1 });
+    expect(storage.getItem("study1:sess:alice")).toBe(JSON.stringify({ x: 1 }));
+    expect(storage.getItem("study1-presence:sess:alice")).not.toBeNull();
+    expect(storage.getItem("mp:sess:alice")).toBeNull();
   });
 
   test("constructor rejects a sessionId containing ':'", () => {
     const { openTab } = makeBrowser();
-    expect(() => openTab({ sessionId: "a:b" })).toThrow(/sessionId must not contain ":"/);
+    expect(() => openTab({ sessionId: "a:b" })).toThrow(/sessionId must be a non-empty string/);
   });
 
-  test("constructor rejects a participantId containing ':'", () => {
+  test("constructor rejects a participantId containing ':' or other unsafe characters", () => {
     const { openTab } = makeBrowser();
-    expect(() => openTab({ participantId: "a:b" })).toThrow(/participantId must not contain ":"/);
+    expect(() => openTab({ participantId: "a:b" })).toThrow(/participantId must be/);
+    expect(() => openTab({ participantId: "a.b" })).toThrow(/participantId must be/);
+  });
+
+  test("warns that keyPrefix was renamed namespace", () => {
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+    const { openTab } = makeBrowser();
+    openTab({ keyPrefix: "old" } as Partial<LocalAdapterOptions>);
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/keyPrefix.*namespace/));
+  });
+
+  test("constructor rejects a namespace containing ':'", () => {
+    const { openTab } = makeBrowser();
+    expect(() => openTab({ namespace: "a:b" })).toThrow(/namespace must be/);
   });
 });

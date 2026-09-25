@@ -33,7 +33,28 @@ await jsPsych.run(timeline);
 
 `firebase` is a **peer dependency** — install it in your experiment (`npm install firebase`) so you control its version and it isn't double-bundled.
 
-Each run is namespaced by a **session id** carried in the URL as `?mp_session=…`. On first load with no `mp_session`, the adapter mints one and writes it into the URL; **bring another participant into the same run by sharing that full URL.** A bare URL starts a different session.
+Each group is namespaced by a **session id** carried in the URL as `?mp_session=…`. On first load with no `mp_session`, the adapter mints one and writes it into the URL; **bring another participant into the same group by sharing that full URL.** A bare URL starts a different session. In this mode you form the groups (by handing out links), so the connection doesn't report a group: `jsPsych.multiplayer.group()` lists whoever has joined, and `sealGroup()` / `waitForGroup()` aren't available.
+
+### Matchmaking
+
+To group participants as they arrive from one shared link, pass `matchmaking`:
+
+```js
+new jsPsychAdapterMultiplayerFirebase({
+  firebaseConfig,
+  matchmaking: { lobby: "study-1", groupSize: 2 },
+});
+```
+
+Each arrival takes a free seat in the group that is filling, or the lobby starts a new group. The group is sealed when its last seat is taken, or earlier with `jsPsych.multiplayer.sealGroup()`; every member then sees `sealed: true` and the same final roster, including members who drop out later. Before the seal, a participant who leaves (or whose connection drops) frees their seat for someone new. Use `jsPsych.multiplayer.waitForGroup()` as a waiting room.
+
+### Participant ids and reloads
+
+By default each browser tab gets a random participant id, kept in the tab's `sessionStorage` (`persistParticipant: true`). A reload of the tab comes back as the **same** participant, in the same session (and, with matchmaking, the same group), so jsPsych reports it as a restart: `jsPsych.multiplayer.restarted` is `true` on the reloaded page, and the others see that participant as `left`. A new tab is a new participant. With `persistParticipant: false`, every page load is a new participant.
+
+Alternatively, pass your own `participantId` (e.g. a recruitment-platform id), or set `useUidAsParticipantId: true` to use the anonymous auth uid (which an adapter-owned app also keeps per tab). Read the id from `jsPsych.multiplayer.participantId` once `connect()` resolves.
+
+How long connecting may take is up to jsPsych: pass `connectTimeout` (and `reconnectTimeout`) to `jsPsych.multiplayer.connect()`.
 
 ## One-time Firebase setup
 
@@ -43,13 +64,9 @@ Each run is namespaced by a **session id** carried in the URL as `?mp_session=�
 4. Paste one of the rules blocks below (**Realtime Database → Rules**).
 5. Copy your web app's config object (**Project settings → General → Your apps**) into `firebaseConfig`.
 
-### Recommended rules — session-locked (use these for data collection)
+### Recommended rules (use these for data collection)
 
-These are the rules shipped as [`database.rules.json`](./database.rules.json). Pair them with `useUidAsParticipantId: true`:
-
-```js
-new jsPsychAdapterMultiplayerFirebase({ firebaseConfig, useUidAsParticipantId: true });
-```
+These are the rules shipped as [`database.rules.json`](./database.rules.json). They work with the default options, in every identity mode, with or without matchmaking:
 
 ```json
 {
@@ -57,8 +74,8 @@ new jsPsychAdapterMultiplayerFirebase({ firebaseConfig, useUidAsParticipantId: t
     "mp-sessions": {
       "$session": {
         ".read": "auth != null && root.child('mp-sessions-memberships').child(auth.uid).val() === $session",
-        "$slot": {
-          ".write": "auth != null && $slot === auth.uid && root.child('mp-sessions-memberships').child(auth.uid).val() === $session",
+        "$pid": {
+          ".write": "auth != null && root.child('mp-sessions-owners').child($session).child($pid).val() === auth.uid && root.child('mp-sessions-memberships').child(auth.uid).val() === $session",
           ".validate": "newData.isString() && newData.val().length < 131072"
         }
       }
@@ -67,8 +84,16 @@ new jsPsychAdapterMultiplayerFirebase({ firebaseConfig, useUidAsParticipantId: t
       "$session": {
         ".read": "auth != null && root.child('mp-sessions-memberships').child(auth.uid).val() === $session",
         "$pid": {
-          ".write": "auth != null && $pid === auth.uid && root.child('mp-sessions-memberships').child(auth.uid).val() === $session",
+          ".write": "auth != null && root.child('mp-sessions-owners').child($session).child($pid).val() === auth.uid && root.child('mp-sessions-memberships').child(auth.uid).val() === $session",
           ".validate": "newData.isString() && newData.val().length < 64"
+        }
+      }
+    },
+    "mp-sessions-owners": {
+      "$session": {
+        "$pid": {
+          ".write": "auth != null && newData.val() === auth.uid && (!data.exists() || data.val() === auth.uid) && root.child('mp-sessions-memberships').child(auth.uid).val() === $session",
+          ".validate": "newData.isString() && $pid.length < 128"
         }
       }
     },
@@ -78,51 +103,101 @@ new jsPsychAdapterMultiplayerFirebase({ firebaseConfig, useUidAsParticipantId: t
         ".write": "auth != null && $uid === auth.uid && (!data.exists() || data.val() === newData.val())",
         ".validate": "newData.isString() && newData.val().length < 256"
       }
+    },
+    "mp-sessions-lobby": {
+      "$lobby": {
+        ".read": "auth != null",
+        ".write": "auth != null && newData.isString() && newData.val().length < 128 && !root.child('mp-sessions-groups').child(newData.val()).exists() && (!data.exists() || root.child('mp-sessions-groups').child(data.val()).child('sealed').exists())"
+      }
+    },
+    "mp-sessions-groups": {
+      "$session": {
+        ".read": "auth != null",
+        "seats": {
+          "$seat": {
+            ".write": "auth != null && !data.parent().parent().child('sealed').exists() && ((!data.exists() && newData.child('uid').val() === auth.uid) || (data.child('uid').val() === auth.uid && !newData.exists()))",
+            ".validate": "$seat.matches(/^[0-9]{1,4}$/) && newData.hasChildren(['uid', 'id'])",
+            "uid": { ".validate": "newData.isString()" },
+            "id": { ".validate": "newData.isString() && newData.val().length < 128" },
+            "$other": { ".validate": false }
+          }
+        },
+        "sealed": {
+          ".write": "auth != null && !data.exists() && newData.child('by').isString() && data.parent().child('seats').child(newData.child('by').val()).child('uid').val() === auth.uid",
+          ".validate": "newData.hasChildren(['by', 'seats']) && newData.child('seats').child(newData.child('by').val()).exists()",
+          "by": { ".validate": "newData.isString()" },
+          "seats": {
+            "$seat": {
+              ".validate": "newData.child('uid').val() === data.parent().parent().parent().child('seats').child($seat).child('uid').val() && newData.child('id').val() === data.parent().parent().parent().child('seats').child($seat).child('id').val()"
+            }
+          },
+          "$other": { ".validate": false }
+        },
+        "$other": { ".validate": false }
+      }
     }
   }
 }
 ```
 
-They enforce three properties, all **server-side** (Firebase evaluates rules on its servers — a client that modifies or skips its half of the protocol is simply denied):
+The adapter keeps its data in six sibling nodes, all named after `namespace` (default `mp-sessions`):
 
-1. **Own-slot writes only.** A client may only write the slot whose key equals its own auth uid — no participant can forge another's offer or flip another's ready flag (`$slot === auth.uid`, which is why these rules require uid-as-key mode). The same holds for presence: a client can only mark itself as connected (`$pid === auth.uid`).
-2. **Session binding — a client can only touch the session it first joined.** During `connect()` the adapter registers `mp-sessions-memberships/<uid> = sessionId` *before* attaching the session listener. The membership rule is **first-write-wins**: only that uid can write its own record, and once set it can be re-asserted but never changed or deleted (`!data.exists() || data.val() === newData.val()`). Every session read and write then requires the membership to match (`…memberships/<uid> === $session`). So the same client identity cannot read or write any *other* session — rejoining its own session after a refresh works (same value, re-assertion passes), joining a different one is `PERMISSION_DENIED`.
-3. **Bounded writes.** Slot payloads are capped (128 KB) so a buggy or hostile client can't balloon your database.
+| Node | Holds | Who may write |
+| --- | --- | --- |
+| `<namespace>/<session>/<participant>` | each participant's data, JSON-encoded | the uid that claimed that participant id |
+| `<namespace>-presence/<session>/<participant>` | who is connected; the server removes an entry when its connection drops | the same uid |
+| `<namespace>-owners/<session>/<participant>` | the slot claim: which auth uid owns this participant id in this session | first write wins; only that uid can re-assert it, nobody can change or delete it |
+| `<namespace>-memberships/<uid>` | the session binding: the one session this uid may use | first write wins, by that uid only |
+| `<namespace>-lobby/<lobby>` | matchmaking: the session id of the group that is filling | anyone signed in, but only to start the first group, or to move the lobby off a **sealed** group onto a group that doesn't exist yet |
+| `<namespace>-groups/<session>` | matchmaking: `seats/<n> = {uid, id}` per place, and `sealed = {by, seats}`, the final roster | a seat: only its holder (take an empty seat as yourself, or free your own), never once sealed. The roster: once, by a member, and each entry must match the seat on the server |
 
-> **Why this is enforceable despite running only client-side code:** the client cannot be trusted, but it doesn't need to be. The rules are the enforcement point and they run on Firebase's servers; the client's only job is the one-time membership write, and the rules make that write self-limiting (own uid only, immutable once set). A client that lies, skips the write, or replays another session's id gets denied by the server.
+What the rules enforce, all **server-side** (Firebase evaluates rules on its servers — a client that modifies or skips its half of the protocol is simply denied):
 
-**What this does *not* buy:** joining is still controlled by the **unguessable session URL**, not by the rules — anyone who has the URL can sign in anonymously with a *fresh* uid and join that session as a new participant (and then read it, since members can read their session). Don't hand out short or predictable session ids, and treat session contents accordingly for IRB purposes. Blocking uninvited *fresh* identities requires real (non-anonymous) auth or a server tier (JATOS) — anonymous auth has no notion of an invite list.
+1. **Own-slot writes only.** During `connect()` the adapter claims `<namespace>-owners/<session>/<participant> = <uid>`. The claim is first-write-wins, and every write to a data slot or presence entry must come from the uid that holds the claim, so no participant can forge another's data or flip another's presence.
+2. **Session binding.** During `connect()` the adapter also registers `<namespace>-memberships/<uid> = <session>`, before it attaches any listener. Once set, the record can be re-asserted but never changed or deleted, and every read and write of a session requires it. So one anonymous identity can read and write only the session it first joined: a reload of its own session passes, joining a different one is `PERMISSION_DENIED`.
+3. **Matchmaking can't be hijacked.** A client can only take an empty seat as itself or free its own; it can't remove other members, write a seat for someone else, or add itself to a sealed group. Only a member can seal, only once, and only with a roster that matches the seats on the server. The lobby can't be pointed at an existing group, and it moves on only when its group is sealed.
+4. **Bounded writes.** Data slots are capped at 128 KB, and ids and presence values are short, so a buggy or hostile client can't balloon your database.
 
-Note: with per-tab auth persistence (the adapter's default for its owned app), every new tab is a fresh uid, so the one-session-per-uid binding never gets in a legitimate participant's way; a same-tab reload keeps both the uid and the `?mp_session=` URL and rejoins cleanly. Membership records are a few bytes per participant and are deliberately never deleted; clear them with your project's normal data-retention tooling if desired.
+What each identity mode gets from rule 1:
+
+| Identity mode | Enforced | Not enforced |
+| --- | --- | --- |
+| Default (`persistParticipant: true`): a random id kept for the tab | Nobody else can write the slot: the id is an unguessable UUID claimed by this tab's uid. A reload of the tab keeps both the id and (with an adapter-owned app) the uid, so it passes. | With an injected `database` whose auth doesn't keep the uid across a reload, the reloaded page can't reclaim its id and `connect()` rejects. |
+| `persistParticipant: false`: a new random id every page load | Same as above. A reload is a new participant. | — |
+| `useUidAsParticipantId: true` | The id *is* the uid, so nobody else can claim it. | — |
+| A supplied `participantId` (e.g. a recruitment-platform id) | The first uid to connect with an id owns it; nobody else can write that slot afterwards. | Someone who knows the id and connects first takes it, locking the real participant out (denial of service, not forgery). The same id can't be reused from a second device or browser. |
+
+**What the rules can't enforce:**
+
+- **Joining.** Who can join is controlled by the **unguessable session URL** (or the lobby name, with matchmaking), not by the rules — anyone who has the URL can sign in anonymously with a *fresh* uid and join as a new participant, and then read the session. Don't hand out short or predictable session ids, and treat session contents accordingly for IRB purposes. Blocking uninvited identities requires real (non-anonymous) auth or a server tier (JATOS).
+- **Reading.** Every member of a session can read every participant's data in it.
+- **A complete roster.** Rules can't loop over the seats, so they check that each roster entry matches a seat, not that every seat is on the roster. A hostile member could seal a roster that leaves someone out; that participant's connection is then closed. It can't add anyone who doesn't hold a seat.
+- **Payload contents.** The rules check that a slot is a string of bounded size, not what's in it.
+
+Membership records and slot claims are a few bytes per participant and are deliberately never deleted; clear them with your project's normal data-retention tooling if desired.
 
 ### Quick-start rules — prototyping only
 
-Any signed-in (anonymous) client may read and write **any** session. Fine for a first smoke test with the default constructor options (locally-minted participant id, no session binding); not for data collection — any participant can overwrite any slot in any session they can name.
+Any signed-in (anonymous) client may read and write **any** node. They cover the same nodes as the recommended rules, so the default options work with both, but they enforce nothing — any participant can overwrite any slot, seat, or lobby they can name. Fine for a first smoke test; not for data collection.
 
 ```json
 {
   "rules": {
-    "mp-sessions": {
-      "$session": {
-        ".read": "auth != null",
-        ".write": "auth != null"
-      }
-    },
-    "mp-sessions-presence": {
-      "$session": {
-        ".read": "auth != null",
-        ".write": "auth != null"
-      }
-    }
+    "mp-sessions": { "$session": { ".read": "auth != null", ".write": "auth != null" } },
+    "mp-sessions-presence": { "$session": { ".read": "auth != null", ".write": "auth != null" } },
+    "mp-sessions-owners": { "$session": { ".read": "auth != null", ".write": "auth != null" } },
+    "mp-sessions-memberships": { "$uid": { ".read": "auth != null", ".write": "auth != null" } },
+    "mp-sessions-lobby": { "$lobby": { ".read": "auth != null", ".write": "auth != null" } },
+    "mp-sessions-groups": { "$session": { ".read": "auth != null", ".write": "auth != null" } }
   }
 }
 ```
 
-These rules have no memberships node, so don't combine them with `useUidAsParticipantId: true` (which defaults `sessionBinding` on — the membership write would be denied). If you need uid-as-key without session binding for some reason, pass `sessionBinding: false` explicitly.
+If you rename the nodes with `namespace`, rename them in your rules too.
 
-In uid-as-key mode each connection uses the anonymous auth uid as its `participantId`, so read the id from `jsPsych.multiplayer.participantId` once `connect()` resolves. The mode is incompatible with a supplied `participantId` (constructing with both throws).
+### Choosing `sessionBinding`
 
-All three nodes are named after `pathPrefix`: `<pathPrefix>` holds the data slots, `<pathPrefix>-presence` records who is connected, and `<pathPrefix>-memberships` holds the session bindings. If you change `pathPrefix`, rename all three in your rules.
+`sessionBinding` is on by default, and both rule sets above allow its record, so you rarely need to change it. The cost of the binding is that one anonymous identity can join only one session. With an app the adapter owns, the identity lasts for one tab, so a participant who opens a *different* session link (or, with matchmaking, whose group filled up while they were away) in the **same tab** is refused and has to use a new tab. With an injected `database`, the identity lasts as long as that app's auth persistence says, often the whole browser profile. Set `sessionBinding: false` if you write your own rules without the memberships node, or for pilot testing where one tab visits many sessions.
 
 ## Options
 
@@ -130,14 +205,15 @@ All three nodes are named after `pathPrefix`: `<pathPrefix>` holds the data slot
 | --- | --- | --- |
 | `firebaseConfig` | — | Firebase config object; the adapter initializes and owns a dedicated app. |
 | `database` | — | An already-initialized RTDB `Database` (the caller owns the app + auth); use instead of `firebaseConfig`. |
-| `sessionId` | `?mp_session=` or a fresh id | Session namespace under `<pathPrefix>/<sessionId>`. Also the session ID that seeds jsPsych's shared randomness. |
-| `participantId` | a fresh random id | This participant's slot key. Incompatible with `useUidAsParticipantId`. |
-| `useUidAsParticipantId` | `false` | Adopt the auth uid as the id during connect (enables the recommended rules). |
-| `sessionBinding` | same as `useUidAsParticipantId` | Register the first-write-wins `mp-sessions-memberships/<uid>` record during connect (required by the recommended rules; must be `false` with the quick-start rules). |
-| `pathPrefix` | `"mp-sessions"` | RTDB path namespace (see the note on node names above). |
-| `connectTimeoutMs` | `20000` | Timeout for the await-first-snapshot step of `connect()`. |
+| `sessionId` | `?mp_session=` or a fresh id | The group's session. Also seeds jsPsych's shared randomness. Incompatible with `matchmaking`. |
+| `matchmaking` | — | `{ lobby, groupSize }`: group participants as they arrive (see [Matchmaking](#matchmaking)). |
+| `participantId` | an id kept for the tab | This participant's id. Incompatible with `useUidAsParticipantId`. |
+| `persistParticipant` | `true` | Keep the default participant id (and matchmaking group) in the tab's `sessionStorage`, so a reload is the same participant. |
+| `useUidAsParticipantId` | `false` | Use the anonymous auth uid as the participant id. |
+| `sessionBinding` | `true` | Register the first-write-wins `<namespace>-memberships/<uid>` record during connect (see [Choosing `sessionBinding`](#choosing-sessionbinding)). |
+| `namespace` | `"mp-sessions"` | Names the adapter's RTDB nodes (see the rules). Replaces `pathPrefix`. |
 
-Ids (`participantId`, `sessionId`, `pathPrefix`) must not contain `. # $ [ ] /` (RTDB key rules) or `:` (reserved for cross-adapter portability with the local adapter). The default generated ids comply.
+Ids (`participantId`, `sessionId`, `namespace`, `matchmaking.lobby`) must be non-empty and must not contain `: / . # $ [ ]`, so every jsPsych multiplayer adapter can store them. The default generated ids comply.
 
 ## Testing two tabs on one machine
 
@@ -156,10 +232,12 @@ npx firebase-tools emulators:start --project demo-local
 The adapter holds configuration only; each `connect()` opens a new connection with its own Firebase app (or your injected database), listeners, and state.
 
 - **Data.** jsPsych reads the shared data synchronously, but every Firebase read is async, so each connection keeps an in-memory **mirror** of the session node, kept live by an `onValue` listener. Each participant's slot is stored **JSON-encoded as a string**, so pushes round-trip exactly over RTDB's JSON coercion (empty arrays and nested arrays are otherwise mangled).
-- **Presence.** Each connection writes `<pathPrefix>-presence/<sessionId>/<participantId>` and arms `onDisconnect().remove()` on it, so the server removes it when the participant's connection drops. A second listener mirrors the presence node, which is how jsPsych learns that a participant is `away` or has `left`. Data slots are never removed: a participant who drops out keeps their last data, and presence tells the others they're gone.
-- **Connecting.** `connect()` resolves once both nodes have delivered a first snapshot, and rejects on a rules denial, a timeout, or when jsPsych cancels the attempt.
-- **Connection status.** When `.info/connected` goes false, the connection reports `reconnecting`. When it comes back, the connection re-arms and re-writes its presence node, then reports `connected`. If a listener is cancelled after connecting (for example, because the rules no longer grant read access), it reports `closed`.
-- **Rejoining.** A participant whose network drops and comes back on the same page keeps their participant id, so once their connection reports `connected` again the other participants see them as back (`onParticipantRejoined` if they had reached `left`). A reload is a new page load: it restarts the experiment, so even with the same id (uid mode, or a `participantId` you supply) the others report it through `onParticipantRestarted` and keep that participant `left`.
-- **Disconnecting.** `disconnect()` removes this participant's presence node, cancels the armed removal, and releases an app the adapter created. The data slot stays.
+- **Claims.** Before attaching any listener, `connect()` registers the session binding and the slot claim that the rules check (see above). Neither is removed on disconnect.
+- **Presence.** Each connection writes `<namespace>-presence/<sessionId>/<participantId>` and arms `onDisconnect().remove()` on it, so the server removes it when the participant's connection drops. A second listener mirrors the presence node, which is how jsPsych learns that a participant is `away` or has `left`. Data slots are never removed: a participant who drops out keeps their last data, and presence tells the others they're gone.
+- **Connecting.** `connect()` resolves once the session and presence nodes (and, with matchmaking, the group node) have delivered a first snapshot. It rejects on a rules denial, or when jsPsych cancels the attempt, including when jsPsych's `connectTimeout` runs out.
+- **Connection status.** When `.info/connected` goes false, the connection reports `reconnecting`. When it comes back, the connection re-arms and re-writes its presence node (and, with matchmaking, takes back its seat if the group is still filling), then reports `connected`. If the server removes its presence while the connection never saw a drop, it restores it and tells jsPsych, which re-announces the participant. If a listener is cancelled after connecting (for example, because the rules no longer grant read access), or its group filled up without it, it reports `closed`.
+- **Matchmaking.** Each seat is taken with a transaction on that seat alone, so the server settles who gets the last one, and the rules can check who writes it. The removal of a seat is armed right after it is taken; a tab that closes in between leaves a ghost seat, and the group seals with that participant as a dropout. A member who sees the group full but unsealed seals it, in case the last arrival couldn't.
+- **Rejoining.** A participant whose network drops and comes back on the same page keeps their participant id, so the others see them as back, unless they had already reached `left`, which is final. A reload is a new page load: it restarts the experiment, so jsPsych reports it as a restart and the others count that participant as `left`.
+- **Disconnecting.** `disconnect()` removes this participant's presence node (and a seat in a group that is still filling), cancels the armed removals, and releases an app the adapter created. The data slot stays.
 
 The network layer sits behind a small `FirebaseBackend` interface (`src/firebase-backend.ts`); the whole adapter is unit-tested against an in-memory fake with zero Firebase credentials.

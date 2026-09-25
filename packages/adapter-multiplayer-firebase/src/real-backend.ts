@@ -27,12 +27,7 @@ import {
   set,
 } from "firebase/database";
 
-import {
-  FirebaseBackend,
-  RawSessionSnapshot,
-  TransactionValue,
-  Unsubscribe,
-} from "./firebase-backend";
+import { FirebaseBackend, TransactionValue, Unsubscribe } from "./firebase-backend";
 
 /**
  * Build a real backend. Exactly one of `firebaseConfig` / `database` is used:
@@ -57,9 +52,9 @@ export async function createRealBackend(options: {
   const app = initializeApp(options.firebaseConfig, appName);
   const auth = getAuth(app);
   // Per-tab persistence: two tabs on one origin would otherwise share one anonymous uid, silently
-  // collapsing them into a single participant under uid-as-key mode. The design never relies on the
-  // uid surviving a full page reload (recovering from a network blip happens within one page), so
-  // per-tab is free. Only meaningful for an app WE own — a caller-injected app owns its own persistence.
+  // collapsing them into a single participant under uid-as-key mode. Session storage also survives a
+  // reload of the same tab, so a reloaded participant keeps the uid that owns their slot claim and
+  // group seat. Only meaningful for an app WE own — a caller-injected app owns its own persistence.
   await setPersistence(auth, browserSessionPersistence);
   return new RealBackend(getDatabase(app), auth, true, app);
 }
@@ -85,9 +80,8 @@ class RealBackend implements FirebaseBackend {
     return remove(ref(this.db, path));
   }
 
-  async get(path: string): Promise<string | null> {
-    const value: unknown = (await get(ref(this.db, path))).val();
-    return typeof value === "string" ? value : null;
+  async get(path: string): Promise<TransactionValue> {
+    return ((await get(ref(this.db, path))).val() as TransactionValue | undefined) ?? null;
   }
 
   async transaction(
@@ -105,13 +99,13 @@ class RealBackend implements FirebaseBackend {
 
   onValue(
     path: string,
-    onData: (snapshot: RawSessionSnapshot | null) => void,
+    onData: (value: TransactionValue) => void,
     onError: (error: Error) => void,
   ): Unsubscribe {
     const nodeRef = ref(this.db, path);
     const listener = onValue(
       nodeRef,
-      (snap) => onData((snap.val() as RawSessionSnapshot | null) ?? null),
+      (snap) => onData((snap.val() as TransactionValue | undefined) ?? null),
       (error) => onError(error),
     );
     return () => off(nodeRef, "value", listener);

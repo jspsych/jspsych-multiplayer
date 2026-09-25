@@ -3,8 +3,8 @@
     "mp-sessions": {
       "$session": {
         ".read": "auth != null && root.child('mp-sessions-memberships').child(auth.uid).val() === $session",
-        "$slot": {
-          ".write": "auth != null && $slot === auth.uid && root.child('mp-sessions-memberships').child(auth.uid).val() === $session",
+        "$pid": {
+          ".write": "auth != null && root.child('mp-sessions-owners').child($session).child($pid).val() === auth.uid && root.child('mp-sessions-memberships').child(auth.uid).val() === $session",
           ".validate": "newData.isString() && newData.val().length < 131072"
         }
       }
@@ -13,8 +13,16 @@
       "$session": {
         ".read": "auth != null && root.child('mp-sessions-memberships').child(auth.uid).val() === $session",
         "$pid": {
-          ".write": "auth != null && $pid === auth.uid && root.child('mp-sessions-memberships').child(auth.uid).val() === $session",
+          ".write": "auth != null && root.child('mp-sessions-owners').child($session).child($pid).val() === auth.uid && root.child('mp-sessions-memberships').child(auth.uid).val() === $session",
           ".validate": "newData.isString() && newData.val().length < 64"
+        }
+      }
+    },
+    "mp-sessions-owners": {
+      "$session": {
+        "$pid": {
+          ".write": "auth != null && newData.val() === auth.uid && (!data.exists() || data.val() === auth.uid) && root.child('mp-sessions-memberships').child(auth.uid).val() === $session",
+          ".validate": "newData.isString() && $pid.length < 128"
         }
       }
     },
@@ -28,17 +36,33 @@
     "mp-sessions-lobby": {
       "$lobby": {
         ".read": "auth != null",
-        ".write": "auth != null",
-        ".validate": "newData.isString() && newData.val().length < 128"
+        ".write": "auth != null && newData.isString() && newData.val().length < 128 && !root.child('mp-sessions-groups').child(newData.val()).exists() && (!data.exists() || root.child('mp-sessions-groups').child(data.val()).child('sealed').exists())"
       }
     },
     "mp-sessions-groups": {
       "$session": {
         ".read": "auth != null",
-        ".write": "auth != null && !data.child(':sealed').exists()",
-        "$member": {
-          ".validate": "newData.isString() && (($member === ':sealed' && newData.val().length < 16384) || newData.val() === '1')"
-        }
+        "seats": {
+          "$seat": {
+            ".write": "auth != null && !data.parent().parent().child('sealed').exists() && ((!data.exists() && newData.child('uid').val() === auth.uid) || (data.child('uid').val() === auth.uid && !newData.exists()))",
+            ".validate": "$seat.matches(/^[0-9]{1,4}$/) && newData.hasChildren(['uid', 'id'])",
+            "uid": { ".validate": "newData.isString()" },
+            "id": { ".validate": "newData.isString() && newData.val().length < 128" },
+            "$other": { ".validate": false }
+          }
+        },
+        "sealed": {
+          ".write": "auth != null && !data.exists() && newData.child('by').isString() && data.parent().child('seats').child(newData.child('by').val()).child('uid').val() === auth.uid",
+          ".validate": "newData.hasChildren(['by', 'seats']) && newData.child('seats').child(newData.child('by').val()).exists()",
+          "by": { ".validate": "newData.isString()" },
+          "seats": {
+            "$seat": {
+              ".validate": "newData.child('uid').val() === data.parent().parent().parent().child('seats').child($seat).child('uid').val() && newData.child('id').val() === data.parent().parent().parent().child('seats').child($seat).child('id').val()"
+            }
+          },
+          "$other": { ".validate": false }
+        },
+        "$other": { ".validate": false }
       }
     }
   }
