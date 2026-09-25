@@ -1,6 +1,6 @@
 {
   "name": "@jspsych-multiplayer/plugin-multiplayer-sync",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "jsPsych plugin: synchronization barrier (push → wait) for the multiplayer API",
   "type": "module",
   "main": "dist/index.cjs",
@@ -40,7 +40,7 @@
   },
   "homepage": "https://github.com/jspsych/jspsych-multiplayer/blob/main/packages/plugin-multiplayer-sync/README.md",
   "dependencies": {
-    "@jspsych-multiplayer/utils": "^0.0.0"
+    "@jspsych-multiplayer/utils": "^0.1.0"
   },
   "peerDependencies": {
     "jspsych": ">=8.0.0"
