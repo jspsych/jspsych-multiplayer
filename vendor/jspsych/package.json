@@ -34,5 +34,5 @@
     "seedrandom": "^3.0.5",
     "type-fest": "^2.9.0"
   },
-  "vendoredFrom": "local build of jspsych/jsPsych branch multiplayer-1.0-hardening @ 14b34bf2 (re-vendor from the PR #3694 preview once pushed)"
+  "vendoredFrom": "jspsych/jsPsych@4df7fbb672806086c7e118e53aba2262f27edf68 (preview build of PR #3694)"
 }
