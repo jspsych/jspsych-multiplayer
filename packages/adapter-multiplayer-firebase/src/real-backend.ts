@@ -15,6 +15,7 @@ import {
 } from "firebase/auth";
 import {
   Database,
+  get,
   getDatabase,
   goOffline,
   off,
@@ -22,10 +23,16 @@ import {
   onValue,
   ref,
   remove,
+  runTransaction,
   set,
 } from "firebase/database";
 
-import { FirebaseBackend, RawSessionSnapshot, Unsubscribe } from "./firebase-backend";
+import {
+  FirebaseBackend,
+  RawSessionSnapshot,
+  TransactionValue,
+  Unsubscribe,
+} from "./firebase-backend";
 
 /**
  * Build a real backend. Exactly one of `firebaseConfig` / `database` is used:
@@ -76,6 +83,24 @@ class RealBackend implements FirebaseBackend {
 
   remove(path: string): Promise<void> {
     return remove(ref(this.db, path));
+  }
+
+  async get(path: string): Promise<string | null> {
+    const value: unknown = (await get(ref(this.db, path))).val();
+    return typeof value === "string" ? value : null;
+  }
+
+  async transaction(
+    path: string,
+    update: (current: TransactionValue) => TransactionValue | undefined,
+  ): Promise<{ committed: boolean; value: TransactionValue }> {
+    const result = await runTransaction(ref(this.db, path), (current) =>
+      update((current as TransactionValue | undefined) ?? null),
+    );
+    return {
+      committed: result.committed,
+      value: (result.snapshot.val() as TransactionValue | undefined) ?? null,
+    };
   }
 
   onValue(

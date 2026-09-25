@@ -17,6 +17,9 @@ export type Unsubscribe = () => void;
 /** A session snapshot as RTDB hands it back: participantId -> that slot's raw JSON string. */
 export type RawSessionSnapshot = Record<string, string>;
 
+/** A value a transaction reads or writes: a string, an object of strings, or null for none. */
+export type TransactionValue = string | Record<string, string> | null;
+
 export interface FirebaseBackend {
   /** True when this backend created the Firebase app/database itself (vs. a caller-injected one).
    *  Gates `goOffline()` (app-global) and per-tab auth persistence — neither is touched when injected. */
@@ -31,6 +34,20 @@ export interface FirebaseBackend {
 
   /** Remove the value at `path`. */
   remove(path: string): Promise<void>;
+
+  /** Read the string at `path` once, or null if there is none. */
+  get(path: string): Promise<string | null>;
+
+  /**
+   * Run an RTDB transaction on `path`, whose value is a string or an object of strings (null when
+   * empty). `update` may run more than once, starting with a guess such as null, and must return
+   * the new value, null to delete, or undefined to abort. Resolves with whether the transaction
+   * committed and the value it saw last.
+   */
+  transaction(
+    path: string,
+    update: (current: TransactionValue) => TransactionValue | undefined,
+  ): Promise<{ committed: boolean; value: TransactionValue }>;
 
   /**
    * Listen to a session or presence node. `onData` fires with the current snapshot (or `null` when the node is

@@ -24,6 +24,22 @@
         ".write": "auth != null && $uid === auth.uid && (!data.exists() || data.val() === newData.val())",
         ".validate": "newData.isString() && newData.val().length < 256"
       }
+    },
+    "mp-sessions-lobby": {
+      "$lobby": {
+        ".read": "auth != null",
+        ".write": "auth != null",
+        ".validate": "newData.isString() && newData.val().length < 128"
+      }
+    },
+    "mp-sessions-groups": {
+      "$session": {
+        ".read": "auth != null",
+        ".write": "auth != null && !data.child(':sealed').exists()",
+        "$member": {
+          ".validate": "newData.isString() && (($member === ':sealed' && newData.val().length < 16384) || newData.val() === '1')"
+        }
+      }
     }
   }
 }
