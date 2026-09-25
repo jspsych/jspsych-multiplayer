@@ -5,14 +5,12 @@
  *
  * None of this touches jsPsych, the DOM, or the multiplayer API — it is plain data in, plain data
  * out, so it can be unit-tested in isolation. The `index.ts` trial wires these functions to
- * `subscribe`/`push` and the DOM.
+ * `subscribe`/`update` and the DOM.
  *
  * ## Data model
- * The multiplayer API's `push` REPLACES a participant's whole slot (it does not merge — verified
- * against the JATOS adapter's `groupSession.set(participantId, data)`). A participant therefore owns
- * exactly one slot, so chat history is modeled as an **append-only array each participant keeps
- * under a namespaced key**. The rendered transcript is the merge of every participant's array,
- * sorted and de-duplicated.
+ * Each participant writes only their own data, so chat history is modeled as an **append-only
+ * array each participant keeps under one key**. The rendered transcript is the merge of every
+ * participant's array, sorted and de-duplicated.
  */
 
 /** A single chat message. `id` is stable (`senderId#seq`) so renders are idempotent across replays. */

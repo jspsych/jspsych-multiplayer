@@ -1,7 +1,7 @@
 import { startTimeline } from "@jspsych/test-utils";
 import { ConnectOptions, GroupSessionData, PresenceData } from "jspsych";
 
-import { MemoryHub } from "../../../test-utils/memory-backend";
+import { MemoryHub, scopeData } from "../../../test-utils/memory-backend";
 import MultiplayerRolePlugin from ".";
 
 /**
@@ -29,9 +29,6 @@ async function setup(participantId = "p1", connect?: ConnectOptions) {
 const display = () => document.createElement("div");
 /** Resolve any pending microtasks so the wrapper's promise chain settles before assertions. */
 const flush = () => new Promise((r) => setTimeout(r, 0));
-
-// The accessor store is module-level. Tests that assert store state each run a trial that sets it
-// first, so there is no cross-test leakage to reset here.
 
 // ---------------------------------------------------------------------------------------------------
 describe("plugin-multiplayer-role — package surface", () => {
@@ -69,7 +66,7 @@ describe("plugin-multiplayer-role — trial wrapper", () => {
     );
   });
 
-  it("happy path (join_order): assigns over the ready snapshot, finishes, and updates the store", async () => {
+  it("happy path (join_order): assigns over the ready snapshot and finishes", async () => {
     const { api, jsPsych, finished } = await setup("p1");
     api.seed("p1", { joinedAt: 100 }); // p1 already joined (first); the wrapper keeps this first-seen value
     api.seed("p2", { joinedAt: 200 }); // p2 joined later
@@ -81,21 +78,18 @@ describe("plugin-multiplayer-role — trial wrapper", () => {
       strategy: "join_order",
       group_size: 2,
       round: 0,
-      push_data: {},
+      write_data: {},
       timeout: 30000,
     } as never);
     await flush();
 
     expect(finished).toHaveLength(1);
     const data = finished[0];
-    expect(data.timed_out).toBe(false);
+    expect(data.multiplayer_outcome).toBe("completed");
     expect(data.assigned_self).toBe(true);
     expect(data.role).toBe("proposer"); // p1 joined first (100 < 200)
     expect(data.role_map.p1.role).toBe("proposer");
     expect(data.role_map.p2.role).toBe("responder");
-    // store reflects the assignment for downstream trials
-    expect(MultiplayerRolePlugin.getMyRole()).toBe("proposer");
-    expect(MultiplayerRolePlugin.participantsByRole().responder).toEqual(["p2"]);
     // group not saved by default
     expect(data.group).toBeUndefined();
   });
@@ -111,7 +105,7 @@ describe("plugin-multiplayer-role — trial wrapper", () => {
       strategy: "join_order",
       group_size: 2,
       round: 0,
-      push_data: {},
+      write_data: {},
       save_group: true,
       timeout: 30000,
     } as never);
@@ -121,7 +115,7 @@ describe("plugin-multiplayer-role — trial wrapper", () => {
     expect(Object.keys(finished[0].group).sort()).toEqual(["p1", "p2"]);
   });
 
-  it("round-scoped write: joinedAt is first-seen-stable and per-round data is merged, not clobbered", async () => {
+  it("joinedAt is written once and never re-stamped; write_data merges into this participant's data", async () => {
     const { api, jsPsych } = await setup("p1");
     api.seed("p2", { joinedAt: 1 });
 
@@ -133,12 +127,14 @@ describe("plugin-multiplayer-role — trial wrapper", () => {
       strategy: "join_order",
       group_size: 2,
       round: 0,
-      push_data: { score: 10 },
+      write_data: { score: 10 },
       timeout: 30000,
     } as never);
     await flush();
     const afterR0 = { ...(api.get("p1") as any) };
+    expect(afterR0.score).toBe(10);
     const joinedAt0 = afterR0.joinedAt;
+    expect(typeof joinedAt0).toBe("number");
 
     // Round 1: re-run for the same client
     plugin.trial(display(), {
@@ -146,22 +142,20 @@ describe("plugin-multiplayer-role — trial wrapper", () => {
       strategy: "join_order",
       group_size: 2,
       round: 1,
-      push_data: { score: 20 },
+      write_data: { score: 20 },
       timeout: 30000,
     } as never);
     await flush();
     const afterR1 = api.get("p1") as any;
 
     expect(afterR1.joinedAt).toBe(joinedAt0); // never re-stamped
-    expect(afterR1.rounds[0]).toEqual({ score: 10 }); // round 0 survived
-    expect(afterR1.rounds[1]).toEqual({ score: 20 }); // round 1 added
+    expect(afterR1.score).toBe(20);
   });
 
-  it("regression: the round write preserves pre-existing top-level state (role_from over a prior field)", async () => {
-    // An earlier trial pushed a top-level `cond` field for each participant. A plain `push()` would
-    // REPLACE this client's whole entry and wipe `cond` — and role_from (which reads it) could then
-    // never resolve. The wrapper uses `update()`, which shallow-merges its two keys into the slot
-    // and leaves every other one alone. This runs the wrapper end-to-end over that exact flow.
+  it("regression: the write preserves pre-existing state (role_from over a prior field)", async () => {
+    // An earlier write stored a `cond` field for each participant. Replacing this client's whole
+    // entry would wipe `cond`, and role_from (which reads it) could then never resolve. The wrapper
+    // uses `update()`, which shallow-merges and leaves every other key alone.
     const { api, jsPsych, finished } = await setup("p1");
     api.seed("p1", { joinedAt: 100, cond: "high" }); // pre-seeded by an earlier trial
     api.seed("p2", { joinedAt: 200, cond: "low" });
@@ -173,21 +167,20 @@ describe("plugin-multiplayer-role — trial wrapper", () => {
       role_from: (entry: any) => entry.cond, // the role IS the carried field
       group_size: 2,
       round: 0,
-      push_data: {},
+      write_data: {},
       timeout: 30000,
     } as never);
     await flush();
 
     // The role resolved from the pre-seeded field…
     expect(finished).toHaveLength(1);
-    expect(finished[0].timed_out).toBe(false);
+    expect(finished[0].multiplayer_outcome).toBe("completed");
     expect(finished[0].role).toBe("high");
     expect(finished[0].role_map.p2.role).toBe("low");
     // …and the pre-existing top-level field survived this trial's own write.
     const mine = api.get("p1") as any;
     expect(mine.cond).toBe("high");
     expect(mine.joinedAt).toBe(100); // still first-seen, not re-stamped
-    expect(mine.rounds[0]).toEqual({}); // round data pushed alongside, not instead
   });
 
   it("rotate: returns the current round's role on re-run", async () => {
@@ -200,7 +193,7 @@ describe("plugin-multiplayer-role — trial wrapper", () => {
         strategy: "rotate",
         group_size: 2,
         round,
-        push_data: {},
+        write_data: {},
         timeout: 30000,
       } as never);
       await flush();
@@ -225,13 +218,13 @@ describe("plugin-multiplayer-role — trial wrapper", () => {
       strategy: "join_order",
       group_size: 3, // exactly 3 present (p1, p2, p3) — but only 2 slots
       round: 0,
-      push_data: {},
+      write_data: {},
       overflow_role: "spectator",
       timeout: 30000,
     } as never);
     await flush();
 
-    expect(finished[0].timed_out).toBe(false);
+    expect(finished[0].multiplayer_outcome).toBe("completed");
     expect(finished[0].role).toBe("spectator");
     expect(finished[0].assigned_self).toBe(true); // p3 IS in the map, as overflow
   });
@@ -248,12 +241,12 @@ describe("plugin-multiplayer-role — trial wrapper", () => {
       strategy: (snapshot: Record<string, unknown>) => ({ p2: { role: "x" } }),
       ready: (snapshot: Record<string, unknown>) => Object.keys(snapshot).length === 2,
       round: 0,
-      push_data: {},
+      write_data: {},
       timeout: 30000,
     } as never);
     await flush();
 
-    expect(finished[0].timed_out).toBe(false); // an assignment DID run
+    expect(finished[0].multiplayer_outcome).toBe("completed"); // an assignment DID run
     expect(finished[0].role).toBeNull(); // but I'm not in it
     expect(finished[0].assigned_self).toBe(false);
     expect(finished[0].role_map.p2.role).toBe("x"); // the map exists (unlike a timeout)
@@ -274,14 +267,14 @@ describe("plugin-multiplayer-role — trial wrapper", () => {
       strategy: "join_order",
       group_size: 2,
       round: 0,
-      push_data: {},
+      write_data: {},
       timeout: 30000,
       on_timeout: onTimeout,
     } as never) as Promise<void>;
 
     await expect(result).rejects.toThrow(/role slots/i);
     expect(onTimeout).not.toHaveBeenCalled(); // not the timeout path
-    expect(finished).toHaveLength(0); // trial did not finish as timed_out
+    expect(finished).toHaveLength(0); // trial did not finish as a timeout
   });
 
   it("propagates a non-timeout wait() rejection instead of mislabeling it a timeout", async () => {
@@ -298,7 +291,7 @@ describe("plugin-multiplayer-role — trial wrapper", () => {
       strategy: "join_order",
       group_size: 2,
       round: 0,
-      push_data: {},
+      write_data: {},
       timeout: 30000,
       on_timeout: onTimeout,
     } as never) as Promise<void>;
@@ -308,10 +301,42 @@ describe("plugin-multiplayer-role — trial wrapper", () => {
     expect(finished).toHaveLength(0);
   });
 
+  it("times out even while the backend keeps refusing this participant's write", async () => {
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+    const { jsPsych, finished, me } = await setup("p1");
+    me.connection.pushImpl = () => Promise.reject(new Error("backend unavailable"));
+
+    await new MultiplayerRolePlugin(jsPsych as never).trial(display(), {
+      roles: ["a", "b"],
+      strategy: "join_order",
+      group_size: 2,
+      round: 0,
+      write_data: {},
+      timeout: 40,
+    } as never);
+
+    expect(finished[0].multiplayer_outcome).toBe("timeout");
+    warn.mockRestore();
+  });
+
+  it("records connection_lost when the connection was already lost as the trial starts", async () => {
+    const { me, jsPsych, finished } = await setup("p1");
+    me.connection.options.onStatus("closed");
+
+    await new MultiplayerRolePlugin(jsPsych as never).trial(display(), {
+      roles: ["a", "b"],
+      group_size: 2,
+      write_data: {},
+      timeout: 30000,
+    } as never);
+
+    expect(finished[0]).toMatchObject({ role: null, multiplayer_outcome: "connection_lost" });
+  });
+
   it("returns quietly when the wait is cancelled (experiment ending or aborting)", async () => {
-    // Core cancels pending waits on cancelAllSubscriptions()/disconnect()/abortExperiment()/the end
-    // of jsPsych.run(). The trial is already being torn down, so a cancel is neither a timeout nor a
-    // failure: no on_timeout, no `timed_out: true` record, no rejection, nothing logged.
+    // Core cancels pending waits when the trial or experiment ends, and on disconnect(). The trial is
+    // already being torn down, so a cancel is neither a timeout nor a failure: no on_timeout, no
+    // record, no rejection, nothing logged.
     const { jsPsych, finished, multiplayer } = await setup("p1"); // alone, group_size 2 never satisfied
     const onTimeout = jest.fn();
     const errSpy = jest.spyOn(console, "error").mockImplementation(() => {});
@@ -323,7 +348,7 @@ describe("plugin-multiplayer-role — trial wrapper", () => {
       strategy: "join_order",
       group_size: 2,
       round: 0,
-      push_data: {},
+      write_data: {},
       timeout: 30000,
       on_timeout: onTimeout,
     } as never) as Promise<void>;
@@ -331,11 +356,11 @@ describe("plugin-multiplayer-role — trial wrapper", () => {
     await flush();
     expect(finished).toHaveLength(0); // still waiting for the second participant
 
-    multiplayer.cancelAllSubscriptions(); // the experiment ends / is aborted underneath the trial
+    await multiplayer.disconnect(); // the experiment ends underneath the trial
 
     await expect(result).resolves.toBeUndefined(); // stopped quietly, did not reject
     expect(onTimeout).not.toHaveBeenCalled();
-    expect(finished).toHaveLength(0); // no bogus timed_out record
+    expect(finished).toHaveLength(0); // no bogus timeout record
     expect(errSpy).not.toHaveBeenCalled();
     errSpy.mockRestore();
   });
@@ -350,7 +375,7 @@ describe("plugin-multiplayer-role — trial wrapper", () => {
       strategy: "join_order",
       group_size: 2,
       round: 0,
-      push_data: {},
+      write_data: {},
       timeout: 30000,
     } as never);
     await flush();
@@ -359,7 +384,7 @@ describe("plugin-multiplayer-role — trial wrapper", () => {
     api.seed("p2", { joinedAt: 99 }); // Nth participant arrives with required field
     await flush();
     expect(finished).toHaveLength(1);
-    expect(finished[0].timed_out).toBe(false);
+    expect(finished[0].multiplayer_outcome).toBe("completed");
   });
 
   it("in a sealed group, group_size defaults to the roster, without a warning", async () => {
@@ -372,7 +397,7 @@ describe("plugin-multiplayer-role — trial wrapper", () => {
       roles: ["a", "b"],
       strategy: "join_order",
       round: 0,
-      push_data: {},
+      write_data: {},
       timeout: 30000,
     } as never);
     await flush();
@@ -397,7 +422,7 @@ describe("plugin-multiplayer-role — trial wrapper", () => {
       roles: ["a", "b"],
       strategy: "join_order",
       round: 0,
-      push_data: {},
+      write_data: {},
       timeout: 30000,
     } as never);
     await flush();
@@ -422,7 +447,7 @@ describe("plugin-multiplayer-role — trial wrapper", () => {
       strategy: "join_order",
       group_size: 2,
       round: 0,
-      push_data: {},
+      write_data: {},
       timeout: 40,
       on_timeout: () => {
         throw new Error("hook boom");
@@ -433,12 +458,12 @@ describe("plugin-multiplayer-role — trial wrapper", () => {
 
     // The hook threw, but finishTrial must still run so the trial doesn't hang.
     expect(finished).toHaveLength(1);
-    expect(finished[0].timed_out).toBe(true);
+    expect(finished[0].multiplayer_outcome).toBe("timeout");
     expect(errSpy).toHaveBeenCalled();
     errSpy.mockRestore();
   });
 
-  it("timeout: rejects -> handleTimeout finishes role:null/timed_out:true, runs the hook, clears the store", async () => {
+  it("timeout: finishes role:null with a timeout outcome and runs the hook", async () => {
     const { api, jsPsych, finished } = await setup("p1"); // alone, group_size 2 never satisfied
 
     const onTimeout = jest.fn();
@@ -449,7 +474,7 @@ describe("plugin-multiplayer-role — trial wrapper", () => {
       strategy: "join_order",
       group_size: 2,
       round: 0,
-      push_data: {},
+      write_data: {},
       timeout: 40,
       on_timeout: onTimeout,
     } as never);
@@ -462,9 +487,9 @@ describe("plugin-multiplayer-role — trial wrapper", () => {
       role: null,
       role_map: null,
       assigned_self: false,
-      timed_out: true,
+      multiplayer_outcome: "timeout",
+      left_participant: null,
     });
-    expect(MultiplayerRolePlugin.getMyRole()).toBeUndefined(); // store cleared
   });
 });
 
@@ -474,8 +499,10 @@ describe("plugin-multiplayer-role — real jsPsych pipeline (startTimeline smoke
     // Real jsPsych instance connected to the in-memory backend.
     const hub = new MemoryHub();
     const { jsPsych } = await hub.join("p1");
+    // joinedAt is session data, e.g. written at connect time; p2 has also reached the trial
     await jsPsych.multiplayer.update({ joinedAt: 100 });
     hub.addPeer("p2", { joinedAt: 200 });
+    hub.seed("p2", {}, { scope: "#0" });
 
     // jsPsych's parameter pipeline warns when a FUNCTION-typed parameter receives a string — the
     // documented, deliberate tradeoff of typing `strategy` as FUNCTION (see info.parameters). Capture
@@ -502,8 +529,162 @@ describe("plugin-multiplayer-role — real jsPsych pipeline (startTimeline smoke
     expect(data.trial_type).toBe("multiplayer-role"); // jsPsych records info.name (sans plugin- prefix)
     expect(data.role).toBe("proposer"); // p1 joined first
     expect(data.role_map.p2.role).toBe("responder");
-    expect(data.timed_out).toBe(false);
+    expect(data.multiplayer_outcome).toBe("completed");
     expect(MultiplayerRolePlugin.getMyRole()).toBe("proposer");
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------
+describe("plugin-multiplayer-role — trial scope (real jsPsych timeline)", () => {
+  // jsPsych warns that the `strategy` default is a string; see the startTimeline smoke test
+  beforeEach(() => jest.spyOn(console, "warn").mockImplementation(() => {}));
+  afterEach(() => jest.restoreAllMocks());
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  const roleTrial = {
+    type: MultiplayerRolePlugin,
+    roles: ["first", "second"],
+    group_size: 2,
+    timeout: 1000,
+  };
+
+  it("writes joinedAt to the session scope and write_data to the trial's own scope", async () => {
+    const hub = new MemoryHub();
+    const { jsPsych } = await hub.join("p1");
+    hub.addPeer("p2", { joinedAt: 1 });
+    hub.seed("p2", { score: 3 }, { scope: "#0" });
+
+    const { expectFinished } = await startTimeline(
+      [
+        {
+          ...roleTrial,
+          strategy: undefined,
+          rank_by: (e: any) => e.score,
+          write_data: { score: 7 },
+        },
+      ],
+      jsPsych,
+    );
+    await expectFinished();
+
+    expect(scopeData(hub.data.p1)).toEqual({ joinedAt: expect.any(Number) });
+    expect(scopeData(hub.data.p1, "#0")).toEqual({ score: 7 });
+    expect(MultiplayerRolePlugin.getMyRole(jsPsych)).toBe("first"); // 7 > 3
+  });
+
+  it("orders by a joinedAt written before the trial, and only counts participants who reached it", async () => {
+    const hub = new MemoryHub();
+    const { jsPsych } = await hub.join("p1");
+    await jsPsych.multiplayer.update({ joinedAt: 200 }); // written at connect time, by the page
+    hub.addPeer("p2", { joinedAt: 100 }); // in the session, but not at this trial yet
+
+    const { getData, expectFinished } = await startTimeline([roleTrial], jsPsych);
+    await sleep(10);
+    expect(getData().values()).toHaveLength(0); // p2 hasn't reached the trial
+
+    hub.seed("p2", {}, { scope: "#0" });
+    await expectFinished();
+
+    const data = getData().values()[0];
+    expect(data.role).toBe("second"); // p2 joined first
+    expect(data.role_map.p2.role).toBe("first");
+  });
+
+  it("keeps each trial's write_data apart, while joinedAt carries over", async () => {
+    const hub = new MemoryHub();
+    const { jsPsych } = await hub.join("p1");
+    hub.addPeer("p2", { joinedAt: 1 });
+    hub.seed("p2", { cond: "b" }, { scope: "#0" });
+    const byCond = { ...roleTrial, roles: ["a", "b"], role_from: (e: any) => e.cond };
+
+    const { getData, finished } = await startTimeline(
+      [
+        { ...byCond, write_data: { cond: "a" } },
+        // p1 writes no cond here, so its cond from the first trial must not count
+        { ...byCond, timeout: 40 },
+      ],
+      jsPsych,
+    );
+    await finished;
+
+    const [first, second] = getData().values();
+    expect(first).toMatchObject({ role: "a", multiplayer_outcome: "completed" });
+    expect(second).toMatchObject({ role: null, multiplayer_outcome: "timeout" });
+    const joinedAt = scopeData(hub.data.p1)!.joinedAt;
+    expect(typeof joinedAt).toBe("number");
+    expect(scopeData(hub.data.p1, "#1")).toEqual({});
+  });
+
+  it("stops quietly when the experiment is aborted while it waits", async () => {
+    const hub = new MemoryHub();
+    const { jsPsych } = await hub.join("p1");
+    const on_timeout = jest.fn();
+    const errSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+
+    const { getData, expectFinished } = await startTimeline(
+      [{ ...roleTrial, on_timeout }],
+      jsPsych,
+    );
+    jsPsych.abortExperiment();
+    await expectFinished();
+    await sleep(0);
+
+    expect(on_timeout).not.toHaveBeenCalled();
+    expect(getData().filter({ multiplayer_outcome: "timeout" }).count()).toBe(0);
+    expect(errSpy).not.toHaveBeenCalled();
+    errSpy.mockRestore();
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------
+describe("plugin-multiplayer-role — accessors", () => {
+  // jsPsych warns that the `strategy` default is a string; see the startTimeline smoke test
+  beforeEach(() => jest.spyOn(console, "warn").mockImplementation(() => {}));
+  afterEach(() => jest.restoreAllMocks());
+  /** Run a two-player role trial for p1, with p2 as a peer who has reached the trial. */
+  async function runRoleTrial(hub: MemoryHub, p1JoinedAt: number) {
+    const { jsPsych } = await hub.join("p1");
+    await jsPsych.multiplayer.update({ joinedAt: p1JoinedAt });
+    hub.addPeer("p2", { joinedAt: 100 });
+    hub.seed("p2", {}, { scope: "#0" });
+    const { expectFinished } = await startTimeline(
+      [{ type: MultiplayerRolePlugin, roles: ["proposer", "responder"], group_size: 2 }],
+      jsPsych,
+    );
+    await expectFinished();
+    return jsPsych;
+  }
+
+  it("read the last role trial's data, per jsPsych instance", async () => {
+    const early = await runRoleTrial(new MemoryHub(), 50);
+    const late = await runRoleTrial(new MemoryHub(), 150);
+
+    expect(MultiplayerRolePlugin.getMyRole(early)).toBe("proposer");
+    expect(MultiplayerRolePlugin.getMyRole(late)).toBe("responder");
+    expect(MultiplayerRolePlugin.getMyAssignment(early)).toEqual({ role: "proposer" });
+    expect(MultiplayerRolePlugin.getRoleMap(late)).toEqual({
+      p1: { role: "responder" },
+      p2: { role: "proposer" },
+    });
+    expect(
+      MultiplayerRolePlugin.participantsByRole(MultiplayerRolePlugin.getRoleMap(early)),
+    ).toEqual({ proposer: ["p1"], responder: ["p2"] });
+    // Without an instance, they read the one that ran a role trial most recently
+    expect(MultiplayerRolePlugin.getMyRole()).toBe("responder");
+    expect(MultiplayerRolePlugin.participantsByRole().responder).toEqual(["p1"]);
+  });
+
+  it("read as unassigned after a role trial that ended without roles", async () => {
+    const hub = new MemoryHub();
+    const { jsPsych } = await hub.join("p1");
+    const { finished } = await startTimeline(
+      [{ type: MultiplayerRolePlugin, roles: ["a", "b"], group_size: 2, timeout: 20 }],
+      jsPsych,
+    );
+    await finished;
+
+    expect(MultiplayerRolePlugin.getMyRole(jsPsych)).toBeUndefined();
+    expect(MultiplayerRolePlugin.getRoleMap(jsPsych)).toBeUndefined();
+    expect(MultiplayerRolePlugin.participantsByRole(undefined)).toEqual({});
   });
 });
 
@@ -515,11 +696,11 @@ describe("plugin-multiplayer-role — departures", () => {
     strategy: "join_order",
     group_size: 2,
     round: 0,
-    push_data: {},
+    write_data: {},
     timeout: 30000,
   };
 
-  it("ends unassigned with partner_left when a participant leaves before the group is ready", async () => {
+  it("ends unassigned with participant_left when a participant leaves before the group is ready", async () => {
     const { hub, jsPsych, finished } = await setup("p1", { dropoutTimeout: 10 });
     const peer = await hub.join("p2");
     const onTimeout = jest.fn();
@@ -536,9 +717,8 @@ describe("plugin-multiplayer-role — departures", () => {
     expect(finished[0]).toMatchObject({
       role: null,
       role_map: null,
-      partner_left: true,
+      multiplayer_outcome: "participant_left",
       left_participant: "p2",
-      timed_out: false,
     });
     expect(onTimeout).not.toHaveBeenCalled();
   });
@@ -564,7 +744,7 @@ describe("plugin-multiplayer-role — departures", () => {
   });
 
   it("neither counts nor assigns participants who have left", async () => {
-    const { hub, api, jsPsych, finished } = await setup("p1", { dropoutTimeout: 0 });
+    const { hub, api, jsPsych, finished } = await setup("p1", { dropoutTimeout: 1 });
     const gone = await hub.join("p0");
     await gone.jsPsych.multiplayer.update({ joinedAt: 1 });
     await gone.jsPsych.multiplayer.disconnect();
@@ -584,7 +764,11 @@ describe("plugin-multiplayer-role — departures", () => {
     await sleep(0);
     me.connection.options.onStatus("closed");
     await done;
-    expect(finished[0]).toMatchObject({ connection_lost: true, role: null });
+    expect(finished[0]).toMatchObject({
+      multiplayer_outcome: "connection_lost",
+      left_participant: null,
+      role: null,
+    });
   });
 
   it("gives a custom ready (snapshot, presence) and logs its last error if the group never gets ready", async () => {
@@ -604,7 +788,7 @@ describe("plugin-multiplayer-role — departures", () => {
     } as never);
 
     expect(seen[0]).toMatchObject({ p1: "connected" });
-    expect(finished[0].timed_out).toBe(true);
+    expect(finished[0].multiplayer_outcome).toBe("timeout");
     expect(errSpy).toHaveBeenCalledTimes(1);
     expect(errSpy.mock.calls[0][1]).toBeInstanceOf(TypeError);
     errSpy.mockRestore();
@@ -615,12 +799,14 @@ describe("plugin-multiplayer-role — departures", () => {
     const { api, jsPsych, finished } = await setup("p1");
     const done = new MultiplayerRolePlugin(jsPsych as never).trial(display(), {
       ...trialBase,
-      push_data: { score: 5 },
+      write_data: { stats: { score: 5 } },
       strategy: undefined,
-      rank_by: (entry: any) => entry.rounds[0].score, // throws until p2's round data arrives
+      rank_by: (entry: any) => entry.stats.score, // throws until p2's stats arrive
     } as never) as Promise<void>;
     await sleep(0);
-    api.seed("p2", { joinedAt: 2, rounds: { 0: { score: 9 } } });
+    api.seed("p2", { joinedAt: 2 });
+    await sleep(0);
+    api.seed("p2", { joinedAt: 2, stats: { score: 9 } });
     await done;
 
     expect(finished[0].role).toBe("b");
@@ -650,7 +836,7 @@ describe("plugin-multiplayer-role — random draws from the session's shared ran
         strategy: "random",
         group_size: ids.length,
         round,
-        push_data: {},
+        write_data: {},
         timeout: 30000,
       } as never);
     }
@@ -694,7 +880,7 @@ describe("plugin-multiplayer-role — random draws from the session's shared ran
       group_size: 2,
       round: 3,
       seed: "s",
-      push_data: {},
+      write_data: {},
       timeout: 30000,
     } as never);
     await flush();

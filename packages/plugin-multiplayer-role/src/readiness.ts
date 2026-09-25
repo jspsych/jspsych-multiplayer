@@ -33,8 +33,8 @@ export type ReadinessPredicate = ((s: Snapshot, presence?: Presence) => boolean)
 
 /**
  * Build the readiness predicate for `api.wait(predicate)`. Accessors are called *speculatively*
- * during the propagation race, before round data lands, so the natural accessor
- * (`e => e.rounds[round].score`) will throw — treated here as "not ready yet" so researchers need
+ * during the propagation race, before every participant's data lands, so the natural accessor
+ * (`e => e.stats.score`) will throw — treated here as "not ready yet" so researchers need
  * not write null-safe accessors.
  */
 export function makeReadiness(opts: ReadinessOptions): ReadinessPredicate {

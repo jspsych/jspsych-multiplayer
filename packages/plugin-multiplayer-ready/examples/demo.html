@@ -75,12 +75,17 @@
       on_finish: () => jsPsych.data.displayData(), // dump the trial data so you can inspect rt/wait_time/etc.
     });
 
-    // Simulated peer: check in at the first ready gate a couple of seconds after load.
+    // Simulated peer: check in at the ready gate a couple of seconds after load. It writes its data
+    // in the multiplayer API's storage format: bookkeeping under `$mp`, and the flag in the trial's
+    // part of the shared data, which the gate below names "lobby" with `multiplayer_scope`.
     if (simulatePeer) {
       setTimeout(() => {
         localStorage.setItem(
           prefix + "sim-peer",
-          JSON.stringify({ ready: true, "ready-1": true, name: "Sim Player" }),
+          JSON.stringify({
+            $mp: { v: 1, instance: "sim-peer", epoch: 1 },
+            scopes: { lobby: { ready: true, name: "Sim Player" } },
+          }),
         );
         window.dispatchEvent(new StorageEvent("storage")); // nudge our own tab
       }, 2500);
@@ -88,6 +93,7 @@
 
     const readyGate = {
       type: jsPsychMultiplayerReady,
+      multiplayer_scope: "lobby", // names the trial's shared data, so the simulated peer can write to it
       expected_players: 2, // this participant + one other
       stimulus: "<p>You'll be matched with another player.</p>",
       prompt:

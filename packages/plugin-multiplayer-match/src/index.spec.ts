@@ -1,7 +1,7 @@
 import { startTimeline } from "@jspsych/test-utils";
 import { ConnectOptions, GroupSessionData, PresenceData } from "jspsych";
 
-import { MemoryHub } from "../../../test-utils/memory-backend";
+import { MemoryHub, scopeData } from "../../../test-utils/memory-backend";
 import MultiplayerMatchPlugin from ".";
 
 /**
@@ -39,7 +39,7 @@ const base = {
   round: 0,
   leftover: "error",
   ready: null,
-  push_data: {},
+  write_data: {},
   save_group: false,
   timeout: 30000,
   on_timeout: null,
@@ -74,7 +74,7 @@ describe("plugin-multiplayer-match — trial wrapper", () => {
     );
   });
 
-  it("partitions the group into pairs, exposes partners, and publishes the store", async () => {
+  it("partitions the group into pairs and records the partners", async () => {
     const { api, jsPsych, finished } = await setup("a");
     api.seed("b", {});
     api.seed("c", {});
@@ -87,7 +87,8 @@ describe("plugin-multiplayer-match — trial wrapper", () => {
 
     expect(finished).toHaveLength(1);
     const data = finished[0];
-    expect(data.timed_out).toBe(false);
+    expect(data.multiplayer_outcome).toBe("completed");
+    expect(data.left_participant).toBeNull();
     expect(data.matched_self).toBe(true);
     expect(data.match_group).toBe(0); // a,b -> group 0
     expect(data.partners).toEqual(["b"]);
@@ -96,9 +97,6 @@ describe("plugin-multiplayer-match — trial wrapper", () => {
     // The full agreed map covers everyone.
     expect(Object.keys(data.match_map).sort()).toEqual(["a", "b", "c", "d"]);
     expect(data.match_map.c.partners).toEqual(["d"]);
-    // Store is published for downstream trials.
-    expect(MultiplayerMatchPlugin.getMyPartners()).toEqual(["b"]);
-    expect(MultiplayerMatchPlugin.getMyGroup()).toBe(0);
   });
 
   it("holds at the barrier until expected_players are present", async () => {
@@ -246,13 +244,12 @@ describe("plugin-multiplayer-match — trial wrapper", () => {
 
     const data = finished[0];
     expect(data.matched_self).toBe(false); // c is a spectator
-    expect(data.timed_out).toBe(false); // ...distinct from a timeout
+    expect(data.multiplayer_outcome).toBe("completed"); // ...distinct from a timeout
     expect(data.match_group).toBeNull();
     expect(data.partners).toEqual([]); // a spectator has zero partners, not null (null = timeout)
     expect(data.members).toBeNull();
     expect(data.match_map.c).toBeUndefined(); // absent from the map
     expect(data.match_map.a.partners).toEqual(["b"]); // a,b still matched
-    expect(MultiplayerMatchPlugin.getMyMatch()).toBeUndefined();
   });
 
   it("a non-divisible group with leftover 'error' rejects (config error, NOT relabeled a timeout)", async () => {
@@ -285,16 +282,15 @@ describe("plugin-multiplayer-match — trial wrapper", () => {
 
     expect(on_timeout).toHaveBeenCalledTimes(1);
     const data = finished[0];
-    expect(data.timed_out).toBe(true);
-    expect(data.partner_left).toBe(false);
+    expect(data.multiplayer_outcome).toBe("timeout");
+    expect(data.left_participant).toBeNull();
     expect(data.matched_self).toBe(false);
     expect(data.match_map).toBeNull();
-    expect(MultiplayerMatchPlugin.getMyMatch()).toBeUndefined(); // stale assignment cleared
   });
 
-  it("propagates a non-timeout rejection (e.g. write failure) instead of masking it as a timeout", async () => {
-    const { jsPsych, finished, me } = await setup("a");
-    me.connection.pushImpl = () => Promise.reject(new Error("backend unavailable"));
+  it("propagates an unexpected wait() rejection instead of masking it as a timeout", async () => {
+    const { jsPsych, finished, multiplayer } = await setup("a");
+    jest.spyOn(multiplayer, "wait").mockRejectedValue(new Error("backend unavailable"));
     const on_timeout = jest.fn();
 
     const done = new MultiplayerMatchPlugin(jsPsych as never).trial(display(), {
@@ -306,12 +302,27 @@ describe("plugin-multiplayer-match — trial wrapper", () => {
 
     await expect(done).rejects.toThrow(/backend unavailable/);
     expect(on_timeout).not.toHaveBeenCalled(); // NOT routed to the graceful timeout path
-    expect(finished).toHaveLength(0); // trial halts loudly rather than finishing timed_out
+    expect(finished).toHaveLength(0); // trial halts loudly rather than finishing as a timeout
+  });
+
+  it("times out even while the backend keeps refusing this participant's write", async () => {
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+    const { jsPsych, finished, me } = await setup("a");
+    me.connection.pushImpl = () => Promise.reject(new Error("backend unavailable"));
+
+    await new MultiplayerMatchPlugin(jsPsych as never).trial(display(), {
+      ...base,
+      expected_players: 2,
+      timeout: 40,
+    } as never);
+
+    expect(finished[0].multiplayer_outcome).toBe("timeout");
+    warn.mockRestore();
   });
 
   it("stops quietly when the wait is cancelled (experiment ending), without timing out", async () => {
-    // jsPsych cancels pending waits at the end of run()/on abortExperiment(). That is a teardown,
-    // not a readiness expiry: the trial must not run on_timeout, finish a timed_out record, or log.
+    // jsPsych cancels pending waits when the trial or experiment ends, and so does disconnect(). That
+    // is a teardown, not a readiness expiry: the trial must not run on_timeout, finish, or log.
     const errSpy = jest.spyOn(console, "error").mockImplementation(() => {});
     const { jsPsych, finished, multiplayer } = await setup("a"); // alone; 4 never reached
     const on_timeout = jest.fn();
@@ -324,7 +335,7 @@ describe("plugin-multiplayer-match — trial wrapper", () => {
     } as never);
     await flush(); // the write has landed and the wait is pending
 
-    multiplayer.cancelAllSubscriptions();
+    await multiplayer.disconnect();
     await expect(done).resolves.toBeUndefined(); // returns, rather than rejecting
 
     expect(on_timeout).not.toHaveBeenCalled();
@@ -393,6 +404,7 @@ describe("plugin-multiplayer-match — real jsPsych pipeline (startTimeline smok
     const hub = new MemoryHub();
     const { jsPsych } = await hub.join("p1");
     hub.addPeer("p2", {});
+    hub.seed("p2", {}, { scope: "#0" }); // p2 has reached the trial
 
     const { getData, expectFinished } = await startTimeline(
       [{ type: MultiplayerMatchPlugin, expected_players: 2, group_size: 2 }],
@@ -404,7 +416,158 @@ describe("plugin-multiplayer-match — real jsPsych pipeline (startTimeline smok
     expect(data.trial_type).toBe("multiplayer-match");
     expect(data.match_group).toBe(0);
     expect(data.partners).toEqual(["p2"]);
-    expect(MultiplayerMatchPlugin.getMyPartners()).toEqual(["p2"]);
+    expect(data.multiplayer_outcome).toBe("completed");
+    for (const removed of ["timed_out", "partner_left", "connection_lost"]) {
+      expect(data).not.toHaveProperty(removed);
+    }
+    expect(MultiplayerMatchPlugin.getMyPartners(jsPsych)).toEqual(["p2"]);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------
+describe("plugin-multiplayer-match — trial scope (real jsPsych timeline)", () => {
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  it("writes joinedAt to the session scope and write_data to the trial's own scope", async () => {
+    const hub = new MemoryHub();
+    const { jsPsych } = await hub.join("p1");
+    hub.addPeer("p2", { joinedAt: 1 });
+    hub.seed("p2", {}, { scope: "#0" });
+
+    const { expectFinished } = await startTimeline(
+      [{ type: MultiplayerMatchPlugin, expected_players: 2, write_data: { team: "red" } }],
+      jsPsych,
+    );
+    await expectFinished();
+
+    expect(scopeData(hub.data.p1)).toEqual({ joinedAt: expect.any(Number) });
+    expect(scopeData(hub.data.p1, "#0")).toEqual({ team: "red" });
+  });
+
+  it("orders join_order by a joinedAt written before the trial, and waits for arrivals", async () => {
+    const hub = new MemoryHub();
+    const { jsPsych } = await hub.join("p1");
+    await jsPsych.multiplayer.update({ joinedAt: 300 }); // written at connect time, by the page
+    hub.addPeer("p2", { joinedAt: 200 });
+    hub.addPeer("p3", { joinedAt: 100 });
+    hub.seed("p2", {}, { scope: "#0" });
+
+    const { getData, expectFinished } = await startTimeline(
+      [
+        {
+          type: MultiplayerMatchPlugin,
+          strategy: "join_order",
+          expected_players: 3,
+          leftover: "spectator",
+        },
+      ],
+      jsPsych,
+    );
+    await sleep(10);
+    expect(getData().values()).toHaveLength(0); // p3 is in the session, but not at this trial yet
+
+    hub.seed("p3", {}, { scope: "#0" });
+    await expectFinished();
+
+    const data = getData().values()[0];
+    expect(data.match_map.p3.members).toEqual(["p3", "p2"]); // earliest joiners pair up
+    expect(data.matched_self).toBe(false); // p1 joined last: the spectator
+  });
+
+  it("keeps each trial's write_data apart", async () => {
+    const hub = new MemoryHub();
+    const { jsPsych } = await hub.join("p1");
+    hub.addPeer("p2", {});
+    hub.seed("p2", { ok: true }, { scope: "#0" });
+    const gate = {
+      type: MultiplayerMatchPlugin,
+      expected_players: 2,
+      ready: (s: GroupSessionData) => Object.values(s).every((e) => e.ok === true),
+    };
+
+    const { getData, finished } = await startTimeline(
+      [
+        { ...gate, write_data: { ok: true } },
+        // p1 writes no `ok` here, so its value from the first trial must not count
+        { ...gate, timeout: 40 },
+      ],
+      jsPsych,
+    );
+    await finished;
+
+    const [first, second] = getData().values();
+    expect(first.multiplayer_outcome).toBe("completed");
+    expect(second.multiplayer_outcome).toBe("timeout");
+  });
+
+  it("stops quietly when the experiment is aborted while it waits", async () => {
+    const hub = new MemoryHub();
+    const { jsPsych } = await hub.join("p1");
+    const on_timeout = jest.fn();
+    const errSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+
+    const { getData, expectFinished } = await startTimeline(
+      [{ type: MultiplayerMatchPlugin, expected_players: 2, on_timeout }],
+      jsPsych,
+    );
+    jsPsych.abortExperiment();
+    await expectFinished();
+    await sleep(0);
+
+    expect(on_timeout).not.toHaveBeenCalled();
+    expect(getData().filter({ multiplayer_outcome: "timeout" }).count()).toBe(0);
+    expect(errSpy).not.toHaveBeenCalled();
+    errSpy.mockRestore();
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------
+describe("plugin-multiplayer-match — accessors", () => {
+  /** Run a two-player match trial as `me`, with `other` as a peer who has reached the trial. */
+  async function runMatchTrial(me: string, other: string) {
+    const hub = new MemoryHub();
+    const { jsPsych } = await hub.join(me);
+    hub.addPeer(other, {});
+    hub.seed(other, {}, { scope: "#0" });
+    const { expectFinished } = await startTimeline(
+      [{ type: MultiplayerMatchPlugin, expected_players: 2 }],
+      jsPsych,
+    );
+    await expectFinished();
+    return jsPsych;
+  }
+
+  it("read the last match trial's data, per jsPsych instance", async () => {
+    const first = await runMatchTrial("a", "b");
+    const second = await runMatchTrial("d", "c");
+
+    expect(MultiplayerMatchPlugin.getMyPartners(first)).toEqual(["b"]);
+    expect(MultiplayerMatchPlugin.getMyPosition(first)).toBe(0);
+    expect(MultiplayerMatchPlugin.getMyPosition(second)).toBe(1);
+    expect(MultiplayerMatchPlugin.getMyGroup(second)).toBe(0);
+    expect(MultiplayerMatchPlugin.getMyMatch(second)).toEqual({
+      group: 0,
+      members: ["c", "d"],
+      partners: ["c"],
+      position: 1,
+    });
+    expect(Object.keys(MultiplayerMatchPlugin.getMatchMap(first)!).sort()).toEqual(["a", "b"]);
+    // Without an instance, they read the one that ran a match trial most recently
+    expect(MultiplayerMatchPlugin.getMyPartners()).toEqual(["c"]);
+  });
+
+  it("read as unmatched after a match trial that ended without a match", async () => {
+    const hub = new MemoryHub();
+    const { jsPsych } = await hub.join("a");
+    const { finished } = await startTimeline(
+      [{ type: MultiplayerMatchPlugin, expected_players: 2, timeout: 20 }],
+      jsPsych,
+    );
+    await finished;
+
+    expect(MultiplayerMatchPlugin.getMyMatch(jsPsych)).toBeUndefined();
+    expect(MultiplayerMatchPlugin.getMyPartners(jsPsych)).toEqual([]);
+    expect(MultiplayerMatchPlugin.getMatchMap(jsPsych)).toBeUndefined();
   });
 });
 
@@ -412,7 +575,7 @@ describe("plugin-multiplayer-match — real jsPsych pipeline (startTimeline smok
 describe("plugin-multiplayer-match — departures", () => {
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-  it("ends unmatched with partner_left when a participant leaves before the group is ready", async () => {
+  it("ends unmatched with participant_left when a participant leaves before the group is ready", async () => {
     const { hub, jsPsych, finished } = await setup("a", { dropoutTimeout: 10 });
     const peer = await hub.join("b");
     const on_timeout = jest.fn();
@@ -427,9 +590,8 @@ describe("plugin-multiplayer-match — departures", () => {
     await done;
 
     expect(finished[0]).toMatchObject({
-      partner_left: true,
+      multiplayer_outcome: "participant_left",
       left_participant: "b",
-      timed_out: false,
       matched_self: false,
       match_map: null,
     });
@@ -454,7 +616,7 @@ describe("plugin-multiplayer-match — departures", () => {
   });
 
   it("neither counts nor partitions participants who have left", async () => {
-    const { hub, api, jsPsych, finished } = await setup("a", { dropoutTimeout: 0 });
+    const { hub, api, jsPsych, finished } = await setup("a", { dropoutTimeout: 1 });
     const gone = await hub.join("z");
     await gone.jsPsych.multiplayer.update({ joinedAt: 1 });
     await gone.jsPsych.multiplayer.disconnect();
@@ -479,7 +641,11 @@ describe("plugin-multiplayer-match — departures", () => {
     await sleep(0);
     me.connection.options.onStatus("closed");
     await done;
-    expect(finished[0]).toMatchObject({ connection_lost: true, matched_self: false });
+    expect(finished[0]).toMatchObject({
+      multiplayer_outcome: "connection_lost",
+      left_participant: null,
+      matched_self: false,
+    });
   });
 
   it("gives a custom ready predicate (snapshot, presence) and logs its error if never ready", async () => {
@@ -500,7 +666,7 @@ describe("plugin-multiplayer-match — departures", () => {
     } as never);
 
     expect(seen[0]).toMatchObject({ a: "connected" });
-    expect(finished[0].timed_out).toBe(true);
+    expect(finished[0].multiplayer_outcome).toBe("timeout");
     expect(errSpy).toHaveBeenCalledTimes(1);
     expect(errSpy.mock.calls[0][1]).toBeInstanceOf(TypeError);
     errSpy.mockRestore();

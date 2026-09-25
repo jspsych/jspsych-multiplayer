@@ -1,4 +1,12 @@
 import {
+  getMultiplayer,
+  isMultiplayerError,
+  MultiplayerOutcome,
+  outcomeOf,
+  pluginTimeout,
+  remainingParticipants,
+} from "@jspsych-multiplayer/utils";
+import {
   GroupSessionData,
   JsPsych,
   JsPsychPlugin,
@@ -8,28 +16,28 @@ import {
 } from "jspsych";
 
 import { version } from "../package.json";
-import { getMultiplayer, isMultiplayerError, remainingParticipants } from "./multiplayer";
 
 const info = <const>{
   name: "multiplayer-sync",
   version: version,
   parameters: {
     /**
-     * Predicate evaluated against the group session on every update. The trial ends as soon as it
-     * returns true. Receives `(group, presence)`: the group session data (keyed by participantId)
-     * and each participant's presence status. Both are frozen; don't modify them. This is the same
-     * condition you would pass to `jsPsych.multiplayer.wait()`.
+     * Predicate evaluated against this trial's shared data on every update. The trial ends as soon
+     * as it returns true. Receives `(group, presence)`: the data participants wrote during this
+     * trial (keyed by participantId) and each participant's presence status. Both are frozen; don't
+     * modify them. This is the same condition you would pass to `jsPsych.multiplayer.wait()`.
      */
     wait_for: {
       type: ParameterType.FUNCTION,
       default: undefined,
     },
     /**
-     * Data to push into the shared group session when the trial starts, before waiting. Leave
-     * null to wait without pushing. As with any jsPsych parameter, you may supply a function that
-     * returns the object — useful for reading state set by earlier trials, e.g. `() => ({ offer })`.
+     * Data to write to this participant's part of the trial's shared data when the trial starts,
+     * before waiting. It is merged in with `jsPsych.multiplayer.update()`, never replacing what is
+     * there. Leave null to wait without writing. As with any jsPsych parameter, you may supply a
+     * function that returns the object, e.g. `() => ({ offer })`.
      */
-    push_data: {
+    write_data: {
       type: ParameterType.OBJECT,
       default: null,
     },
@@ -40,8 +48,8 @@ const info = <const>{
     },
     /**
      * Maximum time to wait, in milliseconds, before giving up. When the timeout elapses the trial
-     * ends with `timed_out: true` and `on_timeout` is called. Null (or a non-positive value) waits
-     * indefinitely.
+     * ends with `multiplayer_outcome: "timeout"` and `on_timeout` is called. Null (or a
+     * non-positive value) waits indefinitely.
      */
     timeout: {
       type: ParameterType.INT,
@@ -54,14 +62,15 @@ const info = <const>{
     },
     /**
      * Participants the barrier depends on. If one of them leaves the session before `wait_for` is
-     * satisfied, the trial ends with `partner_left: true`. The default, `[]`, ignores departures,
-     * which suits lobbies that keep waiting for others to join. Pass `null` to depend on every other
-     * participant who is connected when the wait starts.
+     * satisfied, the trial ends with `multiplayer_outcome: "participant_left"`. Null (the default)
+     * means the other members of a sealed group who haven't left, or else every other participant
+     * who is connected when the wait starts. Pass `[]` to ignore departures, e.g. for a lobby that
+     * keeps waiting for others to join.
      */
     participants: {
       // An array of participant IDs, or null; COMPLEX because array parameters can't be null
       type: ParameterType.COMPLEX,
-      default: [],
+      default: null,
     },
     /**
      * Minimum time, in milliseconds, to keep the waiting message on screen. Prevents the screen
@@ -72,9 +81,17 @@ const info = <const>{
       type: ParameterType.INT,
       default: 0,
     },
+    /** Save the trial's shared data, as it was when the trial ended, in the `group` data field. */
+    save_group: {
+      type: ParameterType.BOOL,
+      default: false,
+    },
   },
   data: {
-    /** The full group session snapshot at the moment the trial ended. */
+    /**
+     * The trial's shared data (keyed by participantId) at the moment the trial ended. Only saved
+     * when `save_group` is true.
+     */
     group: {
       type: ParameterType.OBJECT,
       default: undefined,
@@ -84,32 +101,16 @@ const info = <const>{
       type: ParameterType.INT,
       default: undefined,
     },
-    /** True if the trial ended because `timeout` elapsed rather than because `wait_for` was met. */
-    timed_out: {
-      type: ParameterType.BOOL,
-      default: false,
-    },
-    /** True if the trial ended because a participant in `participants` left the session. */
-    partner_left: {
-      type: ParameterType.BOOL,
-      default: false,
-    },
-    /** The ID of the participant who left, when `partner_left` is true; otherwise null. */
-    left_participant: {
-      type: ParameterType.STRING,
-      default: null,
-    },
-    /** True if the trial ended because this participant's connection was lost for good. */
-    connection_lost: {
-      type: ParameterType.BOOL,
-      default: false,
-    },
     /**
-     * The message of the error that ended the wait early (a timeout, a participant leaving, or a
-     * lost connection); null when `wait_for` was satisfied. Other `wait()` failures, such as a
-     * throwing `wait_for`, are not recorded here: they fail the trial instead.
+     * How the trial ended: `"completed"` when `wait_for` was met, `"timeout"`,
+     * `"participant_left"` (a participant in `participants` left), or `"connection_lost"`.
      */
-    wait_error: {
+    multiplayer_outcome: {
+      type: ParameterType.STRING,
+      default: "completed",
+    },
+    /** The ID of the participant who left, when `multiplayer_outcome` is `"participant_left"`. */
+    left_participant: {
       type: ParameterType.STRING,
       default: null,
     },
@@ -120,28 +121,20 @@ const info = <const>{
 
 type Info = typeof info;
 
-interface Outcome {
-  timed_out?: boolean;
-  partner_left?: boolean;
-  left_participant?: string | null;
-  connection_lost?: boolean;
-  wait_error?: string | null;
-}
-
 /**
  * **multiplayer-sync**
  *
- * A synchronization barrier for multiplayer experiments. Optionally pushes this participant's data
- * into the shared group session, displays a waiting message, and ends the trial once a condition
- * over the group session is met, a timeout elapses, a participant the barrier depends on leaves, or
- * the connection is lost. It packages the common push → wait pattern as a single declarative trial
- * so experiments don't have to shoehorn waiting into `call-function` or a `NO_KEYS`
- * keyboard-response trial.
+ * A synchronization barrier for multiplayer experiments. Optionally writes this participant's data
+ * to the trial's shared data, displays a waiting message, and ends the trial once a condition over
+ * that data is met, a timeout elapses, a participant the barrier depends on leaves, or the
+ * connection is lost. It packages the common write → wait pattern as a single declarative trial so
+ * experiments don't have to shoehorn waiting into `call-function` or a `NO_KEYS` keyboard-response
+ * trial.
  *
  * Requires a connected multiplayer adapter — call `await jsPsych.multiplayer.connect(adapter)` before
- * `jsPsych.run()`. The group session is stored in the trial's `group` data so peer reads and role
- * assignment can happen in a normal `on_finish`. If the experiment ends or aborts while the barrier
- * is holding, the wait is cancelled and the trial stops quietly, recording nothing.
+ * `jsPsych.run()`. Each trial has its own part of the shared data, so values written in an earlier
+ * trial never satisfy this one. If the experiment ends or aborts while the barrier is holding, the
+ * wait is cancelled and the trial stops quietly, recording nothing.
  *
  * @author Hannah Tsukamoto
  * @see {@link https://github.com/jspsych/jspsych-multiplayer/tree/main/packages/plugin-multiplayer-sync multiplayer-sync plugin documentation}
@@ -152,12 +145,12 @@ class MultiplayerSyncPlugin implements JsPsychPlugin<Info> {
   constructor(private jsPsych: JsPsych) {}
 
   async trial(display_element: HTMLElement, trial: TrialType<Info>, on_load?: () => void) {
-    const multiplayer = getMultiplayer(this.jsPsych);
+    const multiplayer = getMultiplayer(this.jsPsych, "multiplayer-sync");
 
     if (typeof trial.wait_for !== "function") {
       throw new Error(
         "multiplayer-sync: the `wait_for` parameter is required and must be a function " +
-          "(a predicate over the group session).",
+          "(a predicate over the trial's shared data).",
       );
     }
     const waitFor = trial.wait_for as (group: GroupSessionData, presence: PresenceData) => boolean;
@@ -179,70 +172,50 @@ class MultiplayerSyncPlugin implements JsPsychPlugin<Info> {
       }
     };
 
-    /**
-     * Read the latest group snapshot without letting a failure mask the outcome. After a
-     * disconnect() there is no session, so getAll() throws; fall back to an empty snapshot.
-     */
-    const safeGetAll = (): GroupSessionData => {
-      try {
-        return multiplayer.getAll();
-      } catch {
-        return {};
-      }
-    };
-
-    const finish = async (group: GroupSessionData, outcome: Outcome = {}) => {
+    const finish = async (
+      group: GroupSessionData,
+      outcome: MultiplayerOutcome,
+      leftParticipant: string | null = null,
+    ) => {
       await holdMinimumWait();
       this.jsPsych.finishTrial({
-        group,
+        ...(trial.save_group ? { group } : {}),
         wait_time: Math.round(performance.now() - start),
-        timed_out: outcome.timed_out ?? false,
-        partner_left: outcome.partner_left ?? false,
-        left_participant: outcome.left_participant ?? null,
-        connection_lost: outcome.connection_lost ?? false,
-        wait_error: outcome.wait_error ?? null,
+        multiplayer_outcome: outcome,
+        left_participant: leftParticipant,
       });
     };
 
-    // Only a positive timeout bounds the wait; null/0/negative means wait indefinitely. Core reads
-    // null and negative values as "no timeout" itself, but treats 0 as "time out immediately".
-    const timeout =
-      typeof trial.timeout === "number" && trial.timeout > 0 ? trial.timeout : undefined;
-
     try {
-      // A push failure is an infrastructure error, not a timeout: it fails the trial below unless
-      // it's a lost connection, which ends the trial like any other lost connection.
-      if (trial.push_data != null) {
-        await multiplayer.push(trial.push_data as Record<string, unknown>);
+      if (trial.write_data != null) {
+        // The write shows up in this participant's own reads at once, and the core keeps retrying
+        // it until the backend has it, so don't hold the wait (and its timeout) for the
+        // confirmation. It only fails if the session closes, which the wait reports too.
+        multiplayer.update(trial.write_data as Record<string, unknown>).catch(() => {});
       }
       const participants =
         (trial.participants as string[] | null) ?? remainingParticipants(multiplayer);
-      const group = await multiplayer.wait(waitFor, { timeout, participants });
-      await finish(group);
+      const group = await multiplayer.wait(waitFor, {
+        timeout: pluginTimeout(trial.timeout),
+        participants,
+      });
+      await finish(group, "completed");
     } catch (e) {
-      // A cancelled wait (abortExperiment, disconnect, or the end of jsPsych.run) means the trial is
-      // being torn down: jsPsych has already moved on, so stop quietly — no on_timeout, no
-      // finishTrial into a trial that no longer exists, and nothing recorded as a failure.
-      if (isMultiplayerError(e, "MultiplayerCancelledError")) return;
+      const outcome = outcomeOf(e);
+      // A bug in `wait_for` or an adapter/backend failure. Surface it loudly instead of recording
+      // it as an outcome.
+      if (outcome === null) throw e;
+      // A cancelled wait (abortExperiment, or the end of the trial or of jsPsych.run) means the
+      // trial is being torn down: jsPsych has already moved on, so stop quietly — no on_timeout,
+      // no finishTrial into a trial that no longer exists, and nothing recorded as a failure.
+      if (outcome === "cancelled") return;
 
-      if (isMultiplayerError(e, "MultiplayerTimeoutError")) {
-        if (typeof trial.on_timeout === "function") {
-          trial.on_timeout(e);
-        }
-        await finish(safeGetAll(), { timed_out: true, wait_error: e.message });
-      } else if (isMultiplayerError(e, "MultiplayerParticipantLeftError")) {
-        await finish(safeGetAll(), {
-          partner_left: true,
-          left_participant: e.participantId ?? null,
-          wait_error: e.message,
-        });
-      } else if (isMultiplayerError(e, "MultiplayerConnectionClosedError")) {
-        await finish(safeGetAll(), { connection_lost: true, wait_error: e.message });
-      } else {
-        // A bug in `wait_for` or an adapter/backend failure. Surface it loudly instead of
-        // recording it as one of the outcomes above.
-        throw e;
+      if (outcome === "timeout" && typeof trial.on_timeout === "function") {
+        trial.on_timeout(e);
       }
+      const left = isMultiplayerError(e, "participant_left") ? (e.participantId ?? null) : null;
+      // Reads keep working after the connection is lost; they return the last state seen.
+      await finish(multiplayer.getAll(), outcome, left);
     }
   }
 }

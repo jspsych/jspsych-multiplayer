@@ -33,13 +33,14 @@
     //      import JatosAdapter from "@jspsych-multiplayer/adapter-multiplayer-jatos";
     //      await jsPsych.multiplayer.connect(new JatosAdapter());
 
-    // 2. A synchronization barrier (a "waiting room"): push this client's readiness into the shared
-    //    group session, show a waiting message, and end the trial only once every expected
+    // 2. A synchronization barrier (a "waiting room"): write this client's readiness to the trial's
+    //    shared data, show a waiting message, and end the trial only once every expected
     //    participant has arrived. `wait_for` is the same predicate you would pass to
     //    jsPsych.multiplayer.wait().
     const lobby = {
       type: jsPsychMultiplayerSync,
-      push_data: { ready: true },
+      write_data: { ready: true },
+      participants: [], // keep waiting if someone joins and leaves again
       wait_for: (group) => Object.keys(group).length >= 2, // hold until both players are present
       message: "<p>Waiting for the other player to join…</p>",
       timeout: 60000, // give up after 60s

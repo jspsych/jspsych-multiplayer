@@ -3,7 +3,7 @@
  * logic, and point decimation. None of this touches jsPsych, the DOM, or the multiplayer API — it
  * is plain data in, plain data out, so it can be unit-tested in isolation (mirroring `chat-core.ts`
  * in `plugin-multiplayer-chat`). The thin `index.ts` trial wires these functions to
- * `subscribe`/`push`, the canvas, and pointer events.
+ * `subscribe`/`update`, the canvas, and pointer events.
  *
  * Design rationale details why:
  *  - points are normalized against a FIXED-aspect-ratio canvas, not independently per axis;

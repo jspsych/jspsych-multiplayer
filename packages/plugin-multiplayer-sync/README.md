@@ -1,6 +1,6 @@
 # @jspsych-multiplayer/plugin-multiplayer-sync
 
-A synchronization-barrier plugin for multiplayer jsPsych experiments, built on the multiplayer plugin API. It packages the common **push → wait** pattern into a single declarative trial: optionally push this participant's data into the shared group session, show a waiting message, and end the trial once a condition over the group session is met (or an optional timeout elapses).
+A synchronization-barrier plugin for multiplayer jsPsych experiments, built on the multiplayer plugin API. It packages the common **write → wait** pattern into a single declarative trial: optionally write this participant's data to the trial's shared data, show a waiting message, and end the trial once a condition over that data is met (or an optional timeout elapses, or a participant it depends on leaves).
 
 This replaces the awkward idioms previously needed for synchronization points — a `call-function` trial with `async`/`done`, or an `html-keyboard-response` trial with `choices: "NO_KEYS"`, an `on_start` that awaits `jsPsych.multiplayer.wait()`, and a manual `jsPsych.finishTrial()`.
 
@@ -18,68 +18,49 @@ await jsPsych.run(timeline);
 
 ## Parameters
 
-| Parameter      | Type                    | Default                               | Description                                                                                                                                                                                                                         |
-| -------------- | ----------------------- | ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `wait_for`     | function                | _undefined_ (required)                | Predicate `(group, presence) => boolean` evaluated on every update. The trial ends when it returns true. Both arguments are frozen; don't modify them. Same condition you would pass to `jsPsych.multiplayer.wait()`.               |
-| `push_data`    | object \| function      | `null`                                | Data pushed into the group session when the trial starts, before waiting. `null` waits without pushing. May be a function returning the object, e.g. `() => ({ offer })`.                                                           |
-| `message`      | HTML string \| function | `"<p>Waiting for other players…</p>"` | Shown while waiting.                                                                                                                                                                                                                |
-| `timeout`      | integer                 | `null`                                | Max time to wait, in ms. On elapse the trial ends with `timed_out: true` and `on_timeout` is called. `null` — or any non-positive value — waits indefinitely.                                                                       |
-| `on_timeout`   | function                | `null`                                | Called if `timeout` elapses before `wait_for` is satisfied.                                                                                                                                                                         |
-| `participants` | array \| null           | `[]`                                  | Participants the barrier depends on. If one of them leaves the session first, the trial ends with `partner_left: true`. The default, `[]`, ignores departures, which suits lobbies that keep waiting for others to join; `null` means every other participant who is connected when the wait starts. |
-| `minimum_wait` | integer                 | `0`                                   | Minimum time, in ms, to keep the message on screen so it doesn't flash by — applies whether the trial ends because the condition is met or because the timeout elapses.                                                             |
+| Parameter      | Type                    | Default                               | Description                                                                                                                                                                                                                                                   |
+| -------------- | ----------------------- | ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `wait_for`     | function                | _undefined_ (required)                | Predicate `(group, presence) => boolean` over this trial's shared data, evaluated on every update. The trial ends when it returns true. Both arguments are frozen; don't modify them. Same condition you would pass to `jsPsych.multiplayer.wait()`.          |
+| `write_data`   | object \| function      | `null`                                | Data written to this participant's part of the trial's shared data when the trial starts. It is merged in with `jsPsych.multiplayer.update()`, never replacing what is there. `null` waits without writing. May be a function returning the object, e.g. `() => ({ offer })`. |
+| `message`      | HTML string \| function | `"<p>Waiting for other players…</p>"` | Shown while waiting.                                                                                                                                                                                                                                          |
+| `timeout`      | integer                 | `null`                                | Max time to wait, in ms. On elapse the trial ends with `multiplayer_outcome: "timeout"` and `on_timeout` is called. `null`, `0`, or a negative value waits indefinitely.                                                                                     |
+| `on_timeout`   | function                | `null`                                | Called if `timeout` elapses before `wait_for` is satisfied.                                                                                                                                                                                                   |
+| `participants` | array \| null           | `null`                                | Participants the barrier depends on. If one of them leaves the session first, the trial ends with `multiplayer_outcome: "participant_left"`. `null` means the other members of a sealed group who haven't left, or else every other participant connected when the wait starts. Pass `[]` to ignore departures, e.g. in a lobby that keeps waiting for others to join. |
+| `minimum_wait` | integer                 | `0`                                   | Minimum time, in ms, to keep the message on screen so it doesn't flash by — applies whether the trial ends because the condition is met or because the timeout elapses.                                                                                       |
+| `save_group`   | boolean                 | `false`                               | Save the trial's shared data, as it was when the trial ended, in the `group` data field.                                                                                                                                                                      |
 
 ## Data Generated
 
-| Name               | Type           | Description                                                                                                                                                                                                                     |
-| ------------------ | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `group`            | object         | The full group session snapshot at the moment the trial ended. Read peers / assign roles from here in `on_finish`. The object is frozen; copy it before modifying.                                                              |
-| `wait_time`        | integer        | Time spent waiting, in ms, from trial start until the trial ended.                                                                                                                                                              |
-| `timed_out`        | boolean        | True if the trial ended because `timeout` elapsed rather than because `wait_for` was met.                                                                                                                                       |
-| `partner_left`     | boolean        | True if the trial ended because a participant in `participants` left the session.                                                                                                                                               |
-| `left_participant` | string \| null | The ID of the participant who left, when `partner_left` is true.                                                                                                                                                                |
-| `connection_lost`  | boolean        | True if the trial ended because this participant's connection was lost for good.                                                                                                                                                |
-| `wait_error`       | string \| null | The message of the error that ended the wait early (timeout, departure, or lost connection); `null` when the condition was satisfied. Other `wait()` failures (a throwing `wait_for`, an adapter error) fail the trial instead. |
+| Name                  | Type           | Description                                                                                                                                                                              |
+| --------------------- | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `wait_time`           | integer        | Time spent waiting, in ms, from trial start until the trial ended.                                                                                                                       |
+| `multiplayer_outcome` | string         | How the trial ended: `"completed"` (`wait_for` was met), `"timeout"`, `"participant_left"` (a participant in `participants` left), or `"connection_lost"` (this participant's connection was lost for good). |
+| `left_participant`    | string \| null | The ID of the participant who left, when `multiplayer_outcome` is `"participant_left"`.                                                                                                  |
+| `group`               | object         | Only with `save_group: true`. The trial's shared data, keyed by participant ID, when the trial ended. Read it in `on_finish`, e.g. to assign roles. The object is frozen; copy it before modifying. |
 
-If the experiment ends or aborts while the barrier is holding (`jsPsych.abortExperiment()`, or the end of `jsPsych.run()`), jsPsych cancels the pending wait. That is neither a timeout nor a failure: the trial stops quietly, `on_timeout` does not fire, and no data is recorded.
+A throwing `wait_for` fails the trial rather than being recorded as an outcome. If the experiment ends or aborts while the barrier is holding (`jsPsych.abortExperiment()`, or the end of `jsPsych.run()`), jsPsych cancels the pending wait. That is neither a timeout nor a failure: the trial stops quietly, `on_timeout` does not fire, and no data is recorded.
 
-## Writing robust `wait_for` predicates
+## Each trial has its own shared data
 
-`push` uses **overwrite-per-participant** semantics: each participant has a single entry in the group session, and every push replaces it. A fast peer that clears a barrier and pushes again in a later trial can therefore overwrite the very entry your `wait_for` predicate is still checking — and the condition you were waiting for may never (re)appear. The multiplayer API also combines writes that a participant makes while an earlier write is still being sent, so other participants may never see a value that was replaced quickly.
+During a trial, `jsPsych.multiplayer` reads and writes that trial's own part of the shared data. So `write_data` lands in this trial's part, `wait_for` sees only what participants wrote during this trial, and a value written in an earlier barrier can never satisfy a later one. Two participants running the same timeline share each trial's data because the part is named by the trial's position in the timeline (or by the trial's `multiplayer_scope` parameter).
 
-Prefer predicates that are **monotone**: once true, they stay true under any later push. For example:
+To use a value in a later trial, save it in the trial's data (e.g. in `on_finish`), or write it to the session's shared data, which lasts the whole session: `jsPsych.multiplayer.update({ name }, { scope: "session" })`.
 
-```js
-// Fragile: p2's next push may not include `status`, so this can flicker back to false
-wait_for: (group) => group["p2"] !== undefined && group["p2"].status === "ready",
-
-// Robust: data slots are monotone — a participant's slot stays even after they leave
-wait_for: (group) => Object.keys(group).length >= 2,
-
-// Robust: carry a monotone counter/phase forward in every push and compare with >=
-wait_for: (group) => {
-  // True once every participant has reached trial 5
-  for (const id in group) {
-    if (group[id].trial_index === undefined || group[id].trial_index < 5) {
-      return false;
-    }
-  }
-  return true;
-},
-```
-
-If a barrier must key on transient fields, include them in every subsequent push (so they are never overwritten away), or advance a `phase`/counter field that only increases.
+The multiplayer API combines writes that a participant makes while an earlier write is still being sent, so other participants may never see a value that was replaced quickly. Prefer conditions that stay true once they are met, such as "every participant has written `ready`", over ones that key on a value that may change again.
 
 ## Example: a lobby that waits for two players
 
 ```js
 const lobby = {
   type: jsPsychMultiplayerSync,
-  push_data: { status: "ready" },
+  write_data: { status: "ready" },
   wait_for: (group) => Object.keys(group).length >= 2,
+  participants: [], // keep waiting if someone joins and leaves again
   message: "<p>Waiting for another player to join…</p>",
+  save_group: true,
   on_finish: (data) => {
-    // Role assignment stays experiment-specific — do it here off data.group, or hand the snapshot
-    // to @jspsych-multiplayer/plugin-multiplayer-role for deterministic consensus.
+    // Role assignment stays experiment-specific — do it here off data.group, or use
+    // @jspsych-multiplayer/plugin-multiplayer-role for deterministic consensus.
     // Sort the IDs so both players agree on who is first
     const ids = Object.keys(data.group).sort();
     myRole = jsPsych.multiplayer.participantId === ids[0] ? "proposer" : "responder";
@@ -89,4 +70,4 @@ const lobby = {
 
 ## Scope
 
-A jsPsych plugin is a trial, so this plugin covers synchronization points that are their own timeline step (barriers, lobbies, send-then-wait handoffs). For communication _in the middle_ of another interactive trial, use `jsPsych.multiplayer` (`push`, `update`, `get`, `getAll`, `presence`, `subscribe`, `wait`) directly.
+A jsPsych plugin is a trial, so this plugin covers synchronization points that are their own timeline step (barriers, lobbies, send-then-wait handoffs). For communication _in the middle_ of another interactive trial, use `jsPsych.multiplayer` (`update`, `replace`, `get`, `getAll`, `presence`, `subscribe`, `wait`) directly.

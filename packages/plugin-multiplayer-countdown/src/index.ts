@@ -1,14 +1,15 @@
 import { GroupSessionData, JsPsych, JsPsychPlugin, ParameterType, TrialType } from "jspsych";
+import { MultiplayerOutcome, getMultiplayer, isMultiplayerError } from "@jspsych-multiplayer/utils";
 
 import { version } from "../package.json";
 import {
+  STARTED_AT_KEY,
   computeElapsed,
   computeRemaining,
   formatTime,
   resolveStartedAt,
   startedAtKey,
 } from "./countdown-core";
-import { getMultiplayer } from "./multiplayer";
 
 const info = <const>{
   name: "multiplayer-countdown",
@@ -27,21 +28,6 @@ const info = <const>{
     mode: {
       type: ParameterType.STRING,
       default: "countdown",
-    },
-    /**
-     * Names the group-session slot key this countdown stores its start timestamp under
-     * (`countdown_<name>_startedAt`). REQUIRED and must be unique per countdown in a timeline: the
-     * key must be identical across clients (so they resolve the same consensus start) yet distinct
-     * from any other countdown (or a later countdown silently reuses this one's timestamp and ends
-     * instantly). No default can satisfy both, so a missing/empty name throws.
-     *
-     * Declared `STRING` (not `FUNCTION`) so jsPsych auto-evaluates a function passed for it — e.g.
-     * ``name: () => `round_${round}` `` or `jsPsych.timelineVariable(...)` — which is how a loop
-     * generates a fresh name per iteration.
-     */
-    name: {
-      type: ParameterType.STRING,
-      default: undefined,
     },
     /** HTML content shown above the timer (e.g. "Time left to draw:"). Null shows nothing. */
     stimulus: {
@@ -63,8 +49,8 @@ const info = <const>{
       default: null,
     },
     /**
-     * Store the full group-session snapshot at trial end in the `group` data field. Off by default:
-     * the snapshot is mostly timestamps and low-value here, so it is opt-in (role-plugin precedent).
+     * Store the trial's snapshot of the group's data at trial end in the `group` data field. Off by
+     * default: the snapshot is mostly timestamps and low-value here, so it is opt-in.
      */
     save_group: {
       type: ParameterType.BOOL,
@@ -72,12 +58,12 @@ const info = <const>{
     },
   },
   data: {
-    /** The resolved canonical (minimum-across-slots) start timestamp the display was derived from. */
+    /** The resolved canonical (minimum-across-participants) start timestamp the display was derived from. */
     started_at: {
       type: ParameterType.INT,
       default: undefined,
     },
-    /** This client's own pushed start timestamp; its gap vs. `started_at` estimates entry skew. */
+    /** This client's own start timestamp; its gap vs. `started_at` estimates entry skew. */
     own_started_at: {
       type: ParameterType.INT,
       default: undefined,
@@ -93,14 +79,20 @@ const info = <const>{
       default: undefined,
     },
     /**
-     * True if this participant's connection was lost for good during the countdown. The countdown
-     * still runs to the end locally, from the start time it had already agreed on.
+     * `"completed"`, or `"connection_lost"` if this participant's connection was lost for good by
+     * the end of the countdown. The countdown still runs to the end locally, from the start time it
+     * had already agreed on.
      */
-    connection_lost: {
-      type: ParameterType.BOOL,
-      default: false,
+    multiplayer_outcome: {
+      type: ParameterType.STRING,
+      default: undefined,
     },
-    /** Full group-session snapshot at trial end (frozen). Only stored when `save_group` is true. */
+    /** Always null: the countdown doesn't depend on any other participant. */
+    left_participant: {
+      type: ParameterType.STRING,
+      default: undefined,
+    },
+    /** The trial's snapshot of the group's data at trial end. Only stored when `save_group` is true. */
     group: {
       type: ParameterType.OBJECT,
       default: undefined,
@@ -116,13 +108,12 @@ type Mode = "countdown" | "countup";
 /**
  * **multiplayer-countdown**
  *
- * A synchronized group timer for multiplayer experiments. Every participant pushes its own start
- * timestamp into its own slot on trial start, and each client derives the displayed time from the
- * **minimum** timestamp across all slots — a coordination-free consensus (no elected anchor, no
- * single point of failure) in the same spirit as `plugin-multiplayer-role`'s ordering. Because `push`
- * replaces a whole slot, the timestamp is written with `update()`, which merges it into this
- * participant's existing slot so it never clobbers role/`joinedAt` metadata, and the write is
- * idempotent on refresh (keep-if-present), so a reload resumes at the group's actual remaining time.
+ * A synchronized group timer for multiplayer experiments. Every participant writes its own start
+ * timestamp into the trial's scope on trial start, and each client derives the displayed time from
+ * the **minimum** timestamp across participants — a coordination-free consensus (no elected anchor,
+ * no single point of failure) in the same spirit as `plugin-multiplayer-role`'s ordering. The trial's
+ * scope keeps each countdown's timestamps apart, so every countdown starts fresh. The write is
+ * keep-if-present, so trials that share a scope through `multiplayer_scope` share one clock.
  *
  * The trial re-resolves the consensus start on every group update (via `subscribe`) and re-renders
  * the clock on a ~100 ms tick, ending when its own derived time reaches `duration`. It is NOT a
@@ -158,18 +149,10 @@ class MultiplayerCountdownPlugin implements JsPsychPlugin<Info> {
   // would end the trial immediately. A sync `trial` makes jsPsych fire `on_load` itself and wait for
   // `finishTrial()`. (Same footgun the chat/sync plugins fixed — see chat/src/index.ts:131.)
   trial(display_element: HTMLElement, trial: TrialType<Info>) {
-    const multiplayer = getMultiplayer(this.jsPsych);
+    const multiplayer = getMultiplayer(this.jsPsych, "multiplayer-countdown");
     const me = multiplayer.participantId;
 
     // --- Validate required params (the pure core deliberately does not) -----------------------
-    const name = trial.name;
-    if (typeof name !== "string" || name.trim() === "") {
-      throw new Error(
-        "multiplayer-countdown: the `name` parameter is required and must be a non-empty string. " +
-          "It namespaces this countdown's start timestamp and must be unique per countdown in a " +
-          "timeline (identical across clients, distinct from other countdowns).",
-      );
-    }
     const duration = trial.duration;
     if (typeof duration !== "number" || !Number.isFinite(duration) || duration <= 0) {
       throw new Error(
@@ -178,31 +161,35 @@ class MultiplayerCountdownPlugin implements JsPsychPlugin<Info> {
       );
     }
     const mode: Mode = trial.mode === "countup" ? "countup" : "countdown";
-    const key = startedAtKey(name);
+    const key = STARTED_AT_KEY;
 
     // --- Register this client's start timestamp (update, keep-if-present) ---------------------
-    // The read of our own slot is the keep-if-present check, NOT a merge base: if we already carry a
-    // timestamp for this key (a reload, or a reused name), KEEP it instead of writing a fresh
-    // Date.now() — that makes refreshes resume at the true remaining time without depending on
-    // peers, and makes a reused name fail deterministically (the started-expired warning below
-    // catches it). The write itself is a one-key `update()`, which merges into our slot, so other
-    // keys (role, joinedAt, …) survive without us spreading them back ourselves.
+    // Reads and writes use the trial's own scope, so each countdown starts fresh. If we already
+    // carry a timestamp there, KEEP it instead of writing a fresh Date.now(): that happens when the
+    // researcher gives several trials the same `multiplayer_scope` to run one clock across them.
+    // The write is a one-key `update()`, which merges, so other keys in the scope survive.
     const existing = multiplayer.get(me)?.[key];
     const alreadyRegistered = typeof existing === "number" && Number.isFinite(existing);
     const ownStartedAt = alreadyRegistered ? (existing as number) : Date.now();
 
     if (!alreadyRegistered) {
-      // Fire-and-forget: a sync subscribe-trial has no trial-promise to reject, so a failed one-shot
-      // registration is surfaced loudly via console.error rather than being silently swallowed. The
-      // display still continues from whatever timestamps remain readable; this client's own view
-      // always includes its own timestamp.
-      multiplayer.update({ [key]: ownStartedAt }).catch((err) => {
-        console.error(
-          "multiplayer-countdown: failed to push this participant's start timestamp; this client " +
-            "will not contribute to the shared consensus start time.",
-          err,
-        );
-      });
+      // Fire-and-forget: a sync subscribe-trial has no trial-promise to reject. A write only
+      // rejects when the session closes (the core retries failed pushes itself), and a closed
+      // session throws at once; either way the display continues from this client's own
+      // timestamp, and the outcome is recorded at the end.
+      try {
+        multiplayer.update({ [key]: ownStartedAt }).catch((err) => {
+          if (!isMultiplayerError(err)) {
+            console.error(
+              "multiplayer-countdown: failed to write this participant's start timestamp; this " +
+                "client will not contribute to the shared consensus start time.",
+              err,
+            );
+          }
+        });
+      } catch (err) {
+        if (!isMultiplayerError(err)) throw err;
+      }
     }
 
     // --- Render shell -------------------------------------------------------------------------
@@ -274,23 +261,19 @@ class MultiplayerCountdownPlugin implements JsPsychPlugin<Info> {
       ended = true;
       if (tickTimer != null) clearTimeout(tickTimer);
       controller.abort();
+      // The countdown never waits on anyone, so the only way it can fail is losing the connection
+      const outcome: MultiplayerOutcome =
+        multiplayer.status === "closed" ? "connection_lost" : "completed";
       this.jsPsych.finishTrial({
         started_at: currentStartedAt,
         own_started_at: ownStartedAt,
         displayed_duration: Math.round(performance.now() - start),
         mode,
-        connection_lost: multiplayer.status === "closed",
-        ...(trial.save_group ? { group: safeGetAll() } : {}),
+        multiplayer_outcome: outcome,
+        left_participant: null,
+        // Reads keep answering from the last state after the connection closes
+        ...(trial.save_group ? { group: multiplayer.getAll() } : {}),
       });
-    };
-
-    /** The latest snapshot, or `{}` if there is no session anymore (after disconnect()). */
-    const safeGetAll = (): GroupSessionData => {
-      try {
-        return multiplayer.getAll();
-      } catch {
-        return {};
-      }
     };
 
     // Resolve from the current snapshot first, so an already-expired countdown is caught (and
@@ -298,14 +281,14 @@ class MultiplayerCountdownPlugin implements JsPsychPlugin<Info> {
     resolve(multiplayer.getAll());
     renderTime();
 
-    // Already expired at start ⇒ a reused `name` (its timestamp is still in the session) or this
-    // participant joined after the group's countdown ended. Warn (dev diagnostic) and end at once.
+    // Already expired at start ⇒ this participant reached the trial after the group's countdown
+    // ended, or an earlier trial with the same `multiplayer_scope` already ran this clock out. Warn
+    // (dev diagnostic) and end at once.
     if (isExpired(Date.now())) {
       console.warn(
-        `multiplayer-countdown: the countdown named "${name}" had already expired when this trial ` +
-          "started. This usually means the `name` was reused by an earlier countdown in the " +
-          "timeline (its start timestamp persists in the group session), or this participant joined " +
-          "after the group's countdown had already ended.",
+        "multiplayer-countdown: the countdown had already expired when this trial started. This " +
+          "usually means this participant reached the trial after the group's countdown had " +
+          "ended, or an earlier trial with the same `multiplayer_scope` already ran the clock out.",
       );
       end();
       return;
@@ -314,7 +297,8 @@ class MultiplayerCountdownPlugin implements JsPsychPlugin<Info> {
     // subscribe re-resolves the consensus min on every group change; a newly-arrived lower timestamp
     // can move `currentStartedAt` earlier (converging down) and may itself push us past expiry.
     // The session keeps running the countdown locally if the connection is lost: the consensus
-    // start time is already known, so the display and the end time stay correct.
+    // start time is already known, so the display and the end time stay correct. The subscription
+    // uses the trial's scope, so jsPsych also removes it when the trial ends.
     multiplayer.subscribe(
       (group) => {
         if (ended) return;
@@ -336,8 +320,8 @@ class MultiplayerCountdownPlugin implements JsPsychPlugin<Info> {
     //
     // A self-rescheduling `pluginAPI.setTimeout`, NOT a raw `setInterval`: jsPsych clears the
     // timers it registered when a trial is ended from the outside (abortExperiment /
-    // endCurrentTimeline / a forced finishTrial), and it cancels multiplayer subscriptions there
-    // too. A raw interval would survive all of that and keep firing after the run is over — up to
+    // endCurrentTimeline / a forced finishTrial), and it cancels the trial's multiplayer
+    // subscriptions there too. A raw interval would survive all of that and keep firing after the run is over — up to
     // calling `end()` → `finishTrial()` on a finished experiment. Rescheduling from inside the tick
     // (rather than one registration up front) keeps every future tick inside that registry.
     const scheduleTick = () => {

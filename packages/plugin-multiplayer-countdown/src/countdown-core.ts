@@ -5,30 +5,37 @@
  * None of this touches jsPsych, the DOM, or the multiplayer API — it is plain data in, plain data
  * out, so it can be unit-tested in isolation (mirroring `assignRoles` in `plugin-multiplayer-role`
  * and `mergeMessages` in `plugin-multiplayer-chat`). The thin `index.ts` trial wires these functions
- * to `subscribe`/`push` and the DOM, and re-exports them as statics on the default export so demos
+ * to `subscribe`/`update` and the DOM, and re-exports them as statics on the default export so demos
  * (e.g. `draw-room.html`) can render their own synced display from the same logic.
  *
- * ## Consensus model: min-across-slots (no anchor)
- * `push` REPLACES a participant's whole slot, so there is no shared slot an "anchor" could own.
- * Instead every participant writes its own start timestamp under a namespaced key into its own slot,
- * and the canonical group start time is the **minimum** timestamp across all slots. Min is
+ * ## Consensus model: min-across-participants (no anchor)
+ * Each participant can only write its own data, so there is no shared value an "anchor" could own.
+ * Instead every participant writes its own start timestamp under a key in its own data, and the
+ * canonical group start time is the **minimum** timestamp across all participants. Min is
  * order-independent, so every client converges on the same value with no coordination, and no single
  * participant dropping out can break the clock. As more (or lower) timestamps arrive, the min can
  * only decrease — displayed remaining time only ticks *down* while the group converges, never up.
  * See the README's "Limitations" section for the clock-skew failure analysis.
  */
 
-/** A group-session snapshot: participantId -> that participant's pushed data. */
+/** A group-session snapshot: participantId -> that participant's data. */
 export type GroupSessionData = Record<string, Record<string, unknown>>;
 
-/** Build the namespaced slot key a countdown stores its start timestamp under. */
+/** The key the countdown trial stores this participant's start timestamp under, in its own scope. */
+export const STARTED_AT_KEY = "countdown_started_at";
+
+/**
+ * Build a namespaced key for a start timestamp. The trial doesn't need one (its scope keeps each
+ * countdown apart), but a page that runs its own synced clock alongside other data, e.g. during
+ * another trial, can use it to keep several clocks apart.
+ */
 export function startedAtKey(name: string): string {
   return `countdown_${name}_startedAt`;
 }
 
 /**
  * The canonical group start time: the MINIMUM valid timestamp stored under `key` across every
- * participant's slot. Returns `null` if no participant has pushed a valid timestamp yet.
+ * participant's data. Returns `null` if no participant has written a valid timestamp yet.
  *
  * Slots without the key, or carrying a non-finite / non-number value, are ignored — a malformed or
  * absent entry must never poison the consensus (it simply doesn't participate in the min).

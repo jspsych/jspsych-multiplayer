@@ -1,13 +1,15 @@
 import { startTimeline } from "@jspsych/test-utils";
 import { ConnectOptions, GroupSessionData, PresenceData } from "jspsych";
 
-import { MemoryHub } from "../../../test-utils/memory-backend";
+import { MemoryHub, scopeData } from "../../../test-utils/memory-backend";
 import MultiplayerChoicePlugin from ".";
 
 /**
  * A jsPsych stand-in whose `multiplayer` is a real session on an in-memory hub, so the plugin runs
  * against the actual core (frozen snapshots, presence, errors) while `finishTrial` is captured.
- * `api.seed(id, data)` writes another participant's slot, as if they had written it.
+ * `api.seed(id, data)` writes a participant's data, as if they had written it; another participant
+ * is added as a connected peer. No trial is running in the core, so the plugin's reads and writes
+ * use the session scope here; the startTimeline tests cover the trial scope.
  */
 async function setup(participantId = "p1", connect?: ConnectOptions) {
   const hub = new MemoryHub();
@@ -23,7 +25,11 @@ async function setup(participantId = "p1", connect?: ConnectOptions) {
   };
   const api = {
     seed: (id: string, data: Record<string, unknown>) =>
-      id === participantId ? void multiplayer.update(data) : hub.seed(id, data),
+      id === participantId
+        ? void multiplayer.update(data)
+        : hub.peers.has(id)
+          ? hub.seed(id, data)
+          : hub.addPeer(id, data),
     get: (id: string) => multiplayer.get(id),
   };
   return { hub, me, multiplayer, jsPsych, finished, api };
@@ -58,7 +64,6 @@ const base = {
   choices: ["Cooperate", "Defect"],
   prompt: null,
   button_html: null,
-  data_key: "choice",
   expected_players: 2,
   waiting_message: "<p>waiting…</p>",
   timeout: null,
@@ -198,8 +203,8 @@ describe("plugin-multiplayer-choice — happy path", () => {
     expect(typeof data.rt).toBe("number");
     expect(typeof data.wait_time).toBe("number");
     expect(data.n_players).toBe(2);
-    expect(data.timed_out).toBe(false);
-    expect(data.wait_error).toBeNull();
+    expect(data.multiplayer_outcome).toBe("completed");
+    expect(data.left_participant).toBeNull();
     expect(data.my_payoff).toBeNull(); // no payoff hook
     expect(data.choices_by_player).toEqual({
       p1: { index: 0, label: "Cooperate" },
@@ -254,7 +259,7 @@ describe("plugin-multiplayer-choice — reveal:false, timeout, payoff, and robus
     expect(finished[0].n_players).toBe(2);
   });
 
-  it("times out waiting for the group: proceeds partial, flags timed_out, calls on_timeout", async () => {
+  it("times out waiting for the group: proceeds partial, records the timeout, calls on_timeout", async () => {
     const { jsPsych, finished } = await setup("p1");
     const on_timeout = jest.fn();
     const el = display();
@@ -272,8 +277,7 @@ describe("plugin-multiplayer-choice — reveal:false, timeout, payoff, and robus
 
     expect(on_timeout).toHaveBeenCalledTimes(1);
     expect(finished).toHaveLength(1);
-    expect(finished[0].timed_out).toBe(true);
-    expect(finished[0].wait_error).toMatch(/timed out/);
+    expect(finished[0].multiplayer_outcome).toBe("timeout");
     expect(finished[0].n_players).toBe(1); // only p1 chose
   });
 
@@ -334,9 +338,9 @@ describe("plugin-multiplayer-choice — reveal:false, timeout, payoff, and robus
     errSpy.mockRestore();
   });
 
-  it("propagates a write failure instead of masking it as a timeout", async () => {
-    const { api, jsPsych, finished, me } = await setup("p1");
-    api.seed("p2", { choice: { index: 0, label: "Cooperate" } });
+  it("doesn't hold the barrier or its timeout for a write the backend hasn't confirmed", async () => {
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+    const { jsPsych, finished, me } = await setup("p1");
     me.connection.pushImpl = async () => {
       throw new Error("write rejected");
     };
@@ -345,20 +349,43 @@ describe("plugin-multiplayer-choice — reveal:false, timeout, payoff, and robus
 
     const done = new MultiplayerChoicePlugin(jsPsych as never).trial(el, {
       ...base,
+      timeout: 40,
       on_timeout,
+      reveal: false,
     } as never);
     await flush();
     clickOption(el, 0);
+    await done;
 
-    await expect(done).rejects.toThrow(/write rejected/);
-    expect(on_timeout).not.toHaveBeenCalled(); // a write failure is not a timeout
-    expect(finished).toHaveLength(0); // trial never finished
+    // The core keeps retrying the write; the trial still ends when its timeout elapses
+    expect(on_timeout).toHaveBeenCalledTimes(1);
+    expect(finished[0]).toMatchObject({ multiplayer_outcome: "timeout", n_players: 1 });
+    await me.jsPsych.multiplayer.disconnect();
+    warn.mockRestore();
+  });
+
+  it("treats a timeout of 0 as no limit", async () => {
+    const { api, jsPsych, finished } = await setup("p1");
+    const el = display();
+
+    const done = new MultiplayerChoicePlugin(jsPsych as never).trial(el, {
+      ...base,
+      timeout: 0,
+      reveal: false,
+    } as never);
+    await flush();
+    clickOption(el, 0);
+    await new Promise((r) => setTimeout(r, 30));
+    expect(finished).toHaveLength(0);
+    api.seed("p2", { choice: { index: 1, label: "Defect" } });
+    await done;
+    expect(finished[0].multiplayer_outcome).toBe("completed");
   });
 
   it("stops quietly when the wait is cancelled (experiment ending), without timing out", async () => {
-    // jsPsych cancels pending waits at the end of run()/on abortExperiment(). That is a teardown,
-    // not a barrier expiry: the trial must not flag timed_out, run on_timeout, render a reveal,
-    // finish, or log — it just stops.
+    // jsPsych cancels pending waits when the trial or experiment ends. That is a teardown, not a
+    // barrier expiry: the trial must not record a timeout, run on_timeout, render a reveal, finish,
+    // or log — it just stops.
     const errSpy = jest.spyOn(console, "error").mockImplementation(() => {});
     const { jsPsych, finished, multiplayer } = await setup("p1");
     const on_timeout = jest.fn();
@@ -374,7 +401,7 @@ describe("plugin-multiplayer-choice — reveal:false, timeout, payoff, and robus
     clickOption(el, 0);
     await flush(); // the write has landed and the wait is pending
 
-    multiplayer.cancelAllSubscriptions();
+    await multiplayer.disconnect();
     await expect(done).resolves.toBeUndefined(); // returns, rather than rejecting
 
     expect(on_timeout).not.toHaveBeenCalled();
@@ -405,9 +432,9 @@ describe("plugin-multiplayer-choice — reveal:false, timeout, payoff, and robus
     expect(finished).toHaveLength(0); // trial halts loudly
   });
 
-  it("preserves other keys already in this client's slot (update MERGES the choice in)", async () => {
+  it("preserves other keys already in this client's data (update MERGES the choice in)", async () => {
     const { api, jsPsych } = await setup("p1");
-    api.seed("p1", { role: "proposer" }); // an earlier trial wrote a role
+    api.seed("p1", { role: "proposer" }); // written earlier
     api.seed("p2", { choice: { index: 0, label: "Cooperate" } });
 
     const el = display();
@@ -418,7 +445,7 @@ describe("plugin-multiplayer-choice — reveal:false, timeout, payoff, and robus
     await flush();
 
     const mine = api.get("p1") as any;
-    expect(mine.role).toBe("proposer"); // survived the choice push
+    expect(mine.role).toBe("proposer"); // survived the choice write
     expect(mine.choice).toEqual({ index: 1, label: "Defect" });
     clickContinue(el);
     await done;
@@ -652,10 +679,10 @@ describe("plugin-multiplayer-choice — tally mode (anonymous poll)", () => {
     ]);
   });
 
-  it("does not let a stale, out-of-range choice lift the barrier or inflate n_players", async () => {
-    // p3's slot holds a leftover pick for index 5 — e.g. a previous choice trial with more options
-    // reused the default data_key. It is not a valid pick for THIS 3-option trial, so it must count
-    // toward neither the barrier nor the tally (the barrier count and n_players stay in agreement).
+  it("does not let an out-of-range choice lift the barrier or inflate n_players", async () => {
+    // p3's data holds a pick for index 5 — e.g. written by a peer running a different version of
+    // the trial. It is not a valid pick for THIS 3-option trial, so it must count toward neither
+    // the barrier nor the tally (the barrier count and n_players stay in agreement).
     const { api, jsPsych, finished } = await setup("p1");
     api.seed("p2", { choice: { index: 0, label: "Red" } });
     api.seed("p3", { choice: { index: 5, label: "stale" } }); // out of range for choices.length === 3
@@ -673,7 +700,7 @@ describe("plugin-multiplayer-choice — tally mode (anonymous poll)", () => {
     await done; // resolves only when the 40ms barrier timeout fires (the group is never completed)
 
     expect(on_timeout).toHaveBeenCalledTimes(1);
-    expect(finished[0].timed_out).toBe(true);
+    expect(finished[0].multiplayer_outcome).toBe("timeout");
     expect(finished[0].n_players).toBe(2); // p1 + p2 only; the out-of-range pick is excluded
     expect(finished[0].tally).toEqual([
       { index: 0, label: "Red", count: 2 },
@@ -711,10 +738,19 @@ describe("plugin-multiplayer-choice — real jsPsych pipeline (startTimeline smo
   it("runs through jsPsych's parameter pipeline, records trial_type and the decision", async () => {
     const hub = new MemoryHub();
     const { jsPsych } = await hub.join("p1");
-    hub.seed("p2", { "choice-1": { index: 1, label: "Defect" } });
+    // p2 writes its choice to the trial's scope, which this trial names with multiplayer_scope
+    hub.addPeer("p2");
+    hub.seed("p2", { choice: { index: 1, label: "Defect" } }, { scope: "round" });
 
     const { displayElement, expectFinished, getData } = await startTimeline(
-      [{ type: MultiplayerChoicePlugin, choices: ["Cooperate", "Defect"], expected_players: 2 }],
+      [
+        {
+          type: MultiplayerChoicePlugin,
+          choices: ["Cooperate", "Defect"],
+          expected_players: 2,
+          multiplayer_scope: "round",
+        },
+      ],
       jsPsych,
     );
 
@@ -728,54 +764,60 @@ describe("plugin-multiplayer-choice — real jsPsych pipeline (startTimeline smo
     expect(data.trial_type).toBe("multiplayer-choice");
     expect(data.choice).toBe("Cooperate");
     expect(data.n_players).toBe(2);
+    expect(data.multiplayer_outcome).toBe("completed");
+    for (const removed of [
+      "data_key",
+      "timed_out",
+      "partner_left",
+      "connection_lost",
+      "wait_error",
+    ]) {
+      expect(data).not.toHaveProperty(removed);
+    }
+    // The choice went to the trial's own shared data, not the session's
+    expect(scopeData(hub.data.p1, "round")).toEqual({ choice: { index: 0, label: "Cooperate" } });
+    expect(scopeData(hub.data.p1)).toBeUndefined();
   });
 });
 
 // ---------------------------------------------------------------------------------------------------
-describe("plugin-multiplayer-choice — gate keys and departures", () => {
-  const gateBase = { ...base, data_key: null, reveal: false };
+describe("plugin-multiplayer-choice — trial scope and departures", () => {
+  const gateBase = { ...base, reveal: false };
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-  it("generates choice-1, choice-2, … and a later trial ignores earlier choices", async () => {
-    const { api, jsPsych, finished } = await setup("p1");
-    const plugin = new MultiplayerChoicePlugin(jsPsych as never);
+  it("a later choice trial ignores choices made in an earlier one", async () => {
+    const hub = new MemoryHub();
+    const elements = [document.createElement("div"), document.createElement("div")];
+    elements.forEach((el) => document.body.appendChild(el));
+    const a = await hub.join("p1", { jsPsych: { display_element: elements[0] } });
+    const b = await hub.join("p2", { jsPsych: { display_element: elements[1] } });
+    const round = {
+      type: MultiplayerChoicePlugin,
+      choices: ["Cooperate", "Defect"],
+      expected_players: 2,
+      reveal: false,
+    };
 
-    api.seed("p2", { "choice-1": { index: 0, label: "Cooperate" } });
-    const el1 = display();
-    const first = plugin.trial(el1, { ...gateBase } as never);
-    await flush();
-    clickOption(el1, 0);
-    await first;
-    expect(finished[0]).toMatchObject({ data_key: "choice-1", n_players: 2 });
+    const runA = await startTimeline([round, { ...round, timeout: 40 }], a.jsPsych);
+    const runB = await startTimeline([round], b.jsPsych);
 
-    // p2's choice-1 must not count toward choice-2
-    const el2 = display();
-    const second = plugin.trial(el2, { ...gateBase, timeout: 40 } as never);
-    await flush();
-    clickOption(el2, 1);
-    await second;
-    expect(finished[1]).toMatchObject({ data_key: "choice-2", n_players: 1, timed_out: true });
+    // Round 1: both choose
+    clickOption(elements[0], 0);
+    clickOption(elements[1], 1);
+    await sleep(10);
+    await runB.expectFinished();
+
+    // Round 2: only p1 chooses; p2's round-1 choice must not count
+    clickOption(elements[0], 1);
+    await sleep(80);
+    await runA.expectFinished();
+    const [first, second] = runA.getData().values();
+    expect(first).toMatchObject({ multiplayer_outcome: "completed", n_players: 2 });
+    expect(second).toMatchObject({ multiplayer_outcome: "timeout", n_players: 1 });
+    elements.forEach((el) => el.remove());
   });
 
-  it("uses an explicit data_key as-is without advancing the default count", async () => {
-    const { api, jsPsych, finished } = await setup("p1");
-    const plugin = new MultiplayerChoicePlugin(jsPsych as never);
-    api.seed("p2", {
-      vote: { index: 0, label: "Cooperate" },
-      "choice-1": { index: 1, label: "Defect" },
-    });
-
-    for (const data_key of ["vote", null]) {
-      const el = display();
-      const done = plugin.trial(el, { ...gateBase, data_key } as never);
-      await flush();
-      clickOption(el, 0);
-      await done;
-    }
-    expect(finished.map((d) => d.data_key)).toEqual(["vote", "choice-1"]);
-  });
-
-  it("proceeds partial with partner_left when a participant leaves", async () => {
+  it("proceeds partial with participant_left when a participant leaves", async () => {
     const { hub, jsPsych, finished } = await setup("p1", { dropoutTimeout: 10 });
     const peer = await hub.join("p2");
     const on_timeout = jest.fn();
@@ -792,19 +834,17 @@ describe("plugin-multiplayer-choice — gate keys and departures", () => {
     await done;
 
     expect(finished[0]).toMatchObject({
-      partner_left: true,
+      multiplayer_outcome: "participant_left",
       left_participant: "p2",
-      timed_out: false,
-      connection_lost: false,
       n_players: 1,
     });
     expect(on_timeout).not.toHaveBeenCalled();
   });
 
   it("does not count a participant who left toward the barrier", async () => {
-    const { hub, jsPsych, finished } = await setup("p1", { dropoutTimeout: 0 });
+    const { hub, jsPsych, finished } = await setup("p1", { dropoutTimeout: 1 });
     const peer = await hub.join("p2");
-    await peer.jsPsych.multiplayer.update({ "choice-1": { index: 0, label: "Cooperate" } });
+    await peer.jsPsych.multiplayer.update({ choice: { index: 0, label: "Cooperate" } });
     await peer.jsPsych.multiplayer.disconnect();
     await sleep(5);
 
@@ -816,9 +856,9 @@ describe("plugin-multiplayer-choice — gate keys and departures", () => {
     await flush();
     clickOption(el, 1);
     await done;
-    // The barrier never lifted on p2's choice, but the outcome still reports every choice made
-    expect(finished[0].timed_out).toBe(true);
-    expect(finished[0].n_players).toBe(2);
+    // p2 left, so their choice counts toward neither the barrier nor the data
+    expect(finished[0].multiplayer_outcome).toBe("timeout");
+    expect(finished[0].n_players).toBe(1);
   });
 
   it("proceeds partial with connection_lost when this participant's connection closes", async () => {
@@ -832,6 +872,8 @@ describe("plugin-multiplayer-choice — gate keys and departures", () => {
     me.connection.options.onStatus("closed");
     await done;
 
-    expect(finished[0]).toMatchObject({ connection_lost: true, partner_left: false });
+    expect(finished[0]).toMatchObject({ multiplayer_outcome: "connection_lost" });
+    // Reads keep working after the connection is lost
+    expect(finished[0].choices_by_player).toEqual({ p1: { index: 0, label: "Cooperate" } });
   });
 });

@@ -1,4 +1,12 @@
 import {
+  getMultiplayer,
+  isMultiplayerError,
+  MultiplayerOutcome,
+  outcomeOf,
+  sealedGroupSize,
+  waitForAll,
+} from "@jspsych-multiplayer/utils";
+import {
   GroupSessionData,
   JsPsych,
   JsPsychPlugin,
@@ -8,13 +16,9 @@ import {
 } from "jspsych";
 
 import { version } from "../package.json";
-import {
-  getMultiplayer,
-  isMultiplayerError,
-  nextGateKey,
-  remainingParticipants,
-  sealedGroupSize,
-} from "./multiplayer";
+
+/** The key that marks a participant as ready in the trial's shared data. */
+const READY_KEY = "ready";
 
 const info = <const>{
   name: "multiplayer-ready",
@@ -56,31 +60,19 @@ const info = <const>{
       default: "<p>Waiting for other players…</p>",
     },
     /**
-     * Extra fields written to this participant's slot along with the ready flags (for example a
-     * display name). May be a function returning the object. The fields are merged into the slot,
-     * so data from earlier trials is kept. Leave null to write only the ready flags.
+     * Extra fields written to this participant's part of the trial's shared data along with
+     * `ready: true`, when they click ready. May be a function returning the object. The fields are
+     * merged in with `jsPsych.multiplayer.update()`. Leave null to write only the ready flag.
      */
-    push_data: {
+    write_data: {
       type: ParameterType.OBJECT,
       default: null,
     },
     /**
-     * The key that marks this participant as ready at THIS gate. Each gate needs its own key, so
-     * that flags left over from an earlier gate can't make a later one pass. Null (the default)
-     * generates `ready-1`, `ready-2`, … in the order this participant reaches ready gates, which
-     * matches across participants as long as everyone passes the same gates. A gate that only some
-     * participants reach (e.g. inside a `conditional_function`) needs an explicit key. The count
-     * starts over if the page reloads.
-     */
-    data_key: {
-      type: ParameterType.STRING,
-      default: null,
-    },
-    /**
      * Maximum time to wait for the rest of the group AFTER clicking ready, in milliseconds. When it
-     * elapses the trial ends with `timed_out: true` and `on_timeout` is called. Null (or a
-     * non-positive value) waits indefinitely. Note: this bounds only the wait for others — it does
-     * not bound how long this participant takes to click ready.
+     * elapses the trial ends with `multiplayer_outcome: "timeout"` and `on_timeout` is called. Null
+     * (or a non-positive value) waits indefinitely. Note: this bounds only the wait for others — it
+     * does not bound how long this participant takes to click ready.
      */
     timeout: {
       type: ParameterType.INT,
@@ -93,9 +85,9 @@ const info = <const>{
     },
     /**
      * Participants the gate depends on. If one of them leaves the session before the group is
-     * ready, the trial ends with `partner_left: true`. Null (the default) means every other
-     * participant who is connected when this participant clicks ready. Pass `[]` to ignore
-     * departures.
+     * ready, the trial ends with `multiplayer_outcome: "participant_left"`. Null (the default)
+     * means the other members of a sealed group who haven't left, or else every other participant
+     * who is connected when this participant clicks ready. Pass `[]` to ignore departures.
      */
     participants: {
       // An array of participant IDs, or null; COMPLEX because array parameters can't default to null
@@ -112,6 +104,11 @@ const info = <const>{
       type: ParameterType.INT,
       default: 0,
     },
+    /** Save the trial's shared data, as it was when the trial ended, in the `group` data field. */
+    save_group: {
+      type: ParameterType.BOOL,
+      default: false,
+    },
   },
   data: {
     /** Time from the ready button appearing to this participant clicking it, in milliseconds. */
@@ -122,45 +119,27 @@ const info = <const>{
     wait_time: {
       type: ParameterType.INT,
     },
-    /**
-     * Number of group members ready at this gate, and still in the session, at the moment the
-     * trial ended.
-     */
+    /** Number of group members ready, and still in the session, at the moment the trial ended. */
     n_ready: {
       type: ParameterType.INT,
     },
-    /** The key that marked readiness at this gate (`data_key`, or the generated `ready-N`). */
-    data_key: {
+    /**
+     * How the trial ended: `"completed"` when everyone was ready, `"timeout"`,
+     * `"participant_left"` (a participant in `participants` left), or `"connection_lost"`.
+     */
+    multiplayer_outcome: {
       type: ParameterType.STRING,
     },
-    /** The full group session snapshot at the moment the trial ended. Frozen. */
-    group: {
-      type: ParameterType.OBJECT,
-    },
-    /** True if the trial ended because `timeout` elapsed rather than because everyone was ready. */
-    timed_out: {
-      type: ParameterType.BOOL,
-    },
-    /** True if the trial ended because a participant in `participants` left the session. */
-    partner_left: {
-      type: ParameterType.BOOL,
-    },
-    /** The ID of the participant who left, when `partner_left` is true; otherwise null. */
+    /** The ID of the participant who left, when `multiplayer_outcome` is `"participant_left"`. */
     left_participant: {
       type: ParameterType.STRING,
     },
-    /** True if the trial ended because this participant's connection was lost for good. */
-    connection_lost: {
-      type: ParameterType.BOOL,
-    },
     /**
-     * The message of the error that ended the wait early (a timeout, a participant leaving, or a
-     * lost connection); null when everyone was ready. Other failures (an adapter/backend error)
-     * fail the trial instead. A wait CANCELLED by the experiment ending or aborting produces no
-     * record at all: the trial stops quietly.
+     * The trial's shared data (keyed by participantId) at the moment the trial ended. Only saved
+     * when `save_group` is true. Frozen.
      */
-    wait_error: {
-      type: ParameterType.STRING,
+    group: {
+      type: ParameterType.OBJECT,
     },
   },
   // prettier-ignore
@@ -173,19 +152,17 @@ type Info = typeof info;
  * **multiplayer-ready**
  *
  * A participant-facing ready / check-in barrier for multiplayer experiments. Shows a stimulus and a
- * ready button; when this participant clicks it, the plugin marks them ready at this gate in the
- * shared group session, swaps to a waiting message, and ends the trial once `expected_players`
- * members are ready at this gate, a timeout elapses, a participant the gate depends on leaves, or
- * the connection is lost.
+ * ready button; when this participant clicks it, the plugin writes `ready: true` to the trial's
+ * shared data, swaps to a waiting message, and ends the trial once `expected_players` members are
+ * ready, a timeout elapses, a participant the gate depends on leaves, or the connection is lost.
  *
  * It differs from `plugin-multiplayer-sync` by owning the check-in UI and the explicit "everyone is
- * ready" condition, rather than taking an arbitrary `wait_for` predicate. Each gate has its own key
- * (`data_key`), so readiness at one gate never carries over to the next. The plugin also sets
- * `ready: true` for experiments that only need to know a participant has checked in at least once.
+ * ready" condition, rather than taking an arbitrary `wait_for` predicate. Each trial has its own
+ * part of the shared data, so readiness at one gate never carries over to the next.
  *
  * Requires a connected multiplayer adapter — call `await jsPsych.multiplayer.connect(adapter)` before
- * `jsPsych.run()`. The resolved group session is stored in the trial's `group` data so peer reads
- * and role assignment can happen in a normal `on_finish`.
+ * `jsPsych.run()`. With `save_group: true`, the trial's shared data is stored in the trial's `group`
+ * data so peer reads can happen in a normal `on_finish`.
  *
  * @author Mandy Liao
  * @see {@link https://github.com/jspsych/jspsych-multiplayer/tree/main/packages/plugin-multiplayer-ready multiplayer-ready plugin documentation}
@@ -196,7 +173,7 @@ class MultiplayerReadyPlugin implements JsPsychPlugin<Info> {
   constructor(private jsPsych: JsPsych) {}
 
   async trial(display_element: HTMLElement, trial: TrialType<Info>, on_load?: () => void) {
-    const multiplayer = getMultiplayer(this.jsPsych);
+    const multiplayer = getMultiplayer(this.jsPsych, "multiplayer-ready");
 
     const expected = trial.expected_players ?? sealedGroupSize(multiplayer);
     if (expected === null) {
@@ -212,9 +189,6 @@ class MultiplayerReadyPlugin implements JsPsychPlugin<Info> {
           "including this participant).",
       );
     }
-
-    // Take the key now, at the gate, so it doesn't depend on how long the click takes
-    const key = trial.data_key ?? nextGateKey(this.jsPsych);
 
     const start = performance.now();
 
@@ -258,94 +232,59 @@ class MultiplayerReadyPlugin implements JsPsychPlugin<Info> {
       }
     };
 
-    /**
-     * Read the latest group snapshot and presence without letting a failure mask the outcome.
-     * After a disconnect() there is no session, so the reads throw; fall back to empty snapshots.
-     */
-    const safeRead = (): [GroupSessionData, PresenceData] => {
-      try {
-        return [multiplayer.getAll(), multiplayer.presence()];
-      } catch {
-        return [{}, {}];
-      }
-    };
-
     const finish = async (
-      [group, presence]: [GroupSessionData, PresenceData],
-      outcome: {
-        timed_out?: boolean;
-        partner_left?: boolean;
-        left_participant?: string | null;
-        connection_lost?: boolean;
-        wait_error?: string | null;
-      } = {},
+      group: GroupSessionData,
+      outcome: MultiplayerOutcome,
+      leftParticipant: string | null = null,
     ) => {
+      const nReady = countReady(group, multiplayer.presence());
       await holdMinimumWait();
       this.jsPsych.finishTrial({
         rt,
         wait_time: Math.round(performance.now() - waitStart),
-        n_ready: countReady(group, presence, key),
-        data_key: key,
-        group,
-        timed_out: outcome.timed_out ?? false,
-        partner_left: outcome.partner_left ?? false,
-        left_participant: outcome.left_participant ?? null,
-        connection_lost: outcome.connection_lost ?? false,
-        wait_error: outcome.wait_error ?? null,
+        n_ready: nReady,
+        multiplayer_outcome: outcome,
+        left_participant: leftParticipant,
+        ...(trial.save_group ? { group } : {}),
       });
     };
 
-    // Core reads null, negative and non-finite timeouts as "no timeout", but times out
-    // IMMEDIATELY at 0, and this plugin documents any non-positive value as "wait indefinitely".
-    const timeout =
-      typeof trial.timeout === "number" && trial.timeout > 0 ? trial.timeout : undefined;
-
-    const everyoneReady = (group: GroupSessionData, presence: PresenceData) =>
-      countReady(group, presence, key) >= expected;
-
     try {
-      // Merge rather than replace, so this gate's flag never removes an earlier gate's flag that a
-      // slower participant may still be counting. A write failure is an infrastructure error, not
-      // a timeout: it fails the trial below unless it's a lost connection.
-      await multiplayer.update({
-        ...(trial.push_data as Record<string, unknown> | null),
-        ready: true,
-        [key]: true,
+      // Merge the flag into this participant's data. It shows up in their own reads at once, and
+      // the core keeps retrying it until the backend has it, so don't hold the wait (and its
+      // timeout) for the confirmation. It only fails if the session closes, which the wait reports.
+      multiplayer
+        .update({ ...(trial.write_data as Record<string, unknown> | null), [READY_KEY]: true })
+        .catch(() => {});
+      const group = await waitForAll(multiplayer, READY_KEY, {
+        count: expected,
+        participants: trial.participants as string[] | null,
+        timeout: trial.timeout,
       });
-      const participants =
-        (trial.participants as string[] | null) ?? remainingParticipants(multiplayer);
-      const group = await multiplayer.wait(everyoneReady, { timeout, participants });
-      await finish([group, multiplayer.presence()]);
+      await finish(group, "completed");
     } catch (e) {
+      const outcome = outcomeOf(e);
+      // An adapter/backend failure. Surface it loudly instead of recording it as an outcome.
+      if (outcome === null) throw e;
       // A cancelled wait is neither a timeout nor a failure: jsPsych cancels pending waits when the
-      // experiment ends or is aborted, so the trial is already being torn down. Return quietly.
-      if (isMultiplayerError(e, "MultiplayerCancelledError")) return;
+      // trial or experiment ends or is aborted, so the trial is already being torn down. Return
+      // quietly.
+      if (outcome === "cancelled") return;
 
-      if (isMultiplayerError(e, "MultiplayerTimeoutError")) {
-        if (typeof trial.on_timeout === "function") {
-          trial.on_timeout(e);
-        }
-        await finish(safeRead(), { timed_out: true, wait_error: e.message });
-      } else if (isMultiplayerError(e, "MultiplayerParticipantLeftError")) {
-        await finish(safeRead(), {
-          partner_left: true,
-          left_participant: e.participantId ?? null,
-          wait_error: e.message,
-        });
-      } else if (isMultiplayerError(e, "MultiplayerConnectionClosedError")) {
-        await finish(safeRead(), { connection_lost: true, wait_error: e.message });
-      } else {
-        // An adapter/backend failure. Surface it loudly instead of recording it as an outcome.
-        throw e;
+      if (outcome === "timeout" && typeof trial.on_timeout === "function") {
+        trial.on_timeout(e);
       }
+      const left = isMultiplayerError(e, "participant_left") ? (e.participantId ?? null) : null;
+      // Reads keep working after the connection is lost; they return the last state seen.
+      await finish(multiplayer.getAll(), outcome, left);
     }
   }
 }
 
-/** Count group members who are ready at this gate and haven't left the session. */
-function countReady(group: GroupSessionData, presence: PresenceData, key: string): number {
+/** Count group members who are ready and haven't left the session. */
+function countReady(group: GroupSessionData, presence: PresenceData): number {
   return Object.entries(group).filter(
-    ([id, entry]) => entry?.[key] === true && presence[id] !== "left",
+    ([id, entry]) => entry?.[READY_KEY] === true && presence[id] !== "left",
   ).length;
 }
 

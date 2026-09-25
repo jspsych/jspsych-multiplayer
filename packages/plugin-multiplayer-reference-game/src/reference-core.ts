@@ -12,8 +12,7 @@
  *    matcher different-but-stable layouts;
  *  - the slot-assignment model (the matcher's `slot -> objectId` map, 1-based slots);
  *  - scoring (`per_slot`, `all_or_nothing`, or a custom function; ordered vs unordered comparison);
- *  - per-round group-session data read/merge helpers (namespaced under `data_key[round]`, mirroring
- *    the role plugin's `rounds[round]` approach so successive rounds never clobber each other).
+ *  - reading the matcher's submission out of the round's shared data, and the running score.
  */
 
 /** One object in the shared set. Exactly one of `src` (image URL) / `html` (inline SVG/HTML/emoji) is used; `label` is a text fallback/caption. */
@@ -374,57 +373,24 @@ function countCorrect(assignment: SlotAssignment, targets: string[], ordered: bo
 }
 
 // ---------------------------------------------------------------------------------------------------
-// Per-round group-session data helpers
+// Round data helpers
 // ---------------------------------------------------------------------------------------------------
 
-/** Read one participant's round-scoped data out of their slot, tolerating anything malformed. */
-export function readRoundData(
-  slot: Record<string, unknown> | undefined,
-  dataKey: string,
-  round: number,
-): Record<string, unknown> | undefined {
-  const rounds = slot?.[dataKey];
-  if (typeof rounds !== "object" || rounds === null || Array.isArray(rounds)) return undefined;
-  const data = (rounds as Record<string, unknown>)[String(round)];
-  if (typeof data !== "object" || data === null || Array.isArray(data)) return undefined;
-  return data as Record<string, unknown>;
-}
-
 /**
- * Merge round-scoped data into this participant's slot, returning the NEW slot object to push.
- *
- * `push` REPLACES the whole slot, so `prev` is spread first: every top-level key pushed by earlier
- * trials (`joinedAt` from the lobby/role trial, chat arrays, earlier data) survives, and per-round
- * data is namespaced under `dataKey[round]` so a later round never clobbers an earlier one —
- * mirroring the role plugin's `rounds[round]` approach.
- */
-export function mergeRoundData(
-  prev: Record<string, unknown>,
-  dataKey: string,
-  round: number,
-  data: Record<string, unknown>,
-): Record<string, unknown> {
-  const rounds = prev[dataKey];
-  const existing =
-    typeof rounds === "object" && rounds !== null && !Array.isArray(rounds)
-      ? (rounds as Record<string, unknown>)
-      : {};
-  return { ...prev, [dataKey]: { ...existing, [round]: data } };
-}
-
-/**
- * Read the matcher's SUBMITTED assignment for this round out of the group snapshot. Returns
- * undefined until a well-formed assignment is present — this is the shared trigger both clients'
- * subscriptions watch for.
+ * Read the matcher's SUBMITTED assignment out of the round's shared data (each round's trial has
+ * its own). Returns undefined until a well-formed assignment is present — this is the shared
+ * trigger both clients' subscriptions watch for.
  */
 export function readSubmission(
   group: Record<string, Record<string, unknown>>,
   participantId: string,
-  dataKey: string,
-  round: number,
 ): Submission | undefined {
-  const roundData = readRoundData(group[participantId], dataKey, round);
-  const raw = roundData?.assignment;
+  const submission = group[participantId]?.submission;
+  if (typeof submission !== "object" || submission === null || Array.isArray(submission)) {
+    return undefined;
+  }
+  const data = submission as Record<string, unknown>;
+  const raw = data.assignment;
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return undefined;
 
   const assignment: SlotAssignment = {};
@@ -436,21 +402,17 @@ export function readSubmission(
   }
   return {
     assignment,
-    rt: typeof roundData!.rt === "number" ? (roundData!.rt as number) : undefined,
-    timed_out: roundData!.timed_out === true,
+    rt: typeof data.rt === "number" ? data.rt : undefined,
+    timed_out: data.timed_out === true,
   };
 }
 
-/** Cumulative n_correct across every round stored under `dataKey` in a (matcher's) slot. */
-export function runningScore(slot: Record<string, unknown> | undefined, dataKey: string): number {
-  const rounds = slot?.[dataKey];
-  if (typeof rounds !== "object" || rounds === null || Array.isArray(rounds)) return 0;
+/** Cumulative n_correct across earlier rounds' trial data, skipping rounds without a score. */
+export function runningScore(rows: ReadonlyArray<Record<string, unknown>>): number {
   let total = 0;
-  for (const value of Object.values(rounds as Record<string, unknown>)) {
-    if (typeof value === "object" && value !== null) {
-      const n = (value as Record<string, unknown>).n_correct;
-      if (typeof n === "number" && Number.isFinite(n)) total += n;
-    }
+  for (const row of rows) {
+    const n = row?.n_correct;
+    if (typeof n === "number" && Number.isFinite(n)) total += n;
   }
   return total;
 }

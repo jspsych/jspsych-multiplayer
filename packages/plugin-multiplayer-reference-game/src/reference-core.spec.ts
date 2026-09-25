@@ -5,9 +5,7 @@ import {
   hashSeed,
   independentOrders,
   isComplete,
-  mergeRoundData,
   nextUnfilledSlot,
-  readRoundData,
   readSubmission,
   runningScore,
   scoreAssignment,
@@ -168,52 +166,32 @@ describe("reference-core: scoring", () => {
   });
 });
 
-describe("reference-core: per-round group-session helpers", () => {
-  it("mergeRoundData preserves other keys and keeps rounds separate", () => {
-    const slot = { joinedAt: 5, reference_game: { 0: { assignment: { 1: "x" } } } };
-    const merged = mergeRoundData(slot, "reference_game", 1, { assignment: { 1: "y" } });
-    expect(merged.joinedAt).toBe(5); // unrelated key survives
-    expect(merged.reference_game).toEqual({
-      0: { assignment: { 1: "x" } }, // earlier round untouched
-      1: { assignment: { 1: "y" } },
-    });
-  });
-
-  it("readRoundData returns the round's data and tolerates malformed slots", () => {
-    const slot = { reference_game: { 2: { rt: 100 } } };
-    expect(readRoundData(slot, "reference_game", 2)).toEqual({ rt: 100 });
-    expect(readRoundData(undefined, "reference_game", 2)).toBeUndefined();
-    expect(readRoundData({ reference_game: "nope" }, "reference_game", 2)).toBeUndefined();
-    expect(readRoundData({ reference_game: {} }, "reference_game", 9)).toBeUndefined();
-  });
-
+describe("reference-core: round data helpers", () => {
   it("readSubmission parses a valid assignment and ignores malformed entries", () => {
     const group = {
       matcher: {
-        reference_game: {
-          0: { assignment: { 1: "c", 2: "a", bogus: 7, 0: "skip" }, rt: 250, timed_out: true },
+        submission: {
+          assignment: { 1: "c", 2: "a", bogus: 7, 0: "skip" },
+          rt: 250,
+          timed_out: true,
         },
       },
     };
-    expect(readSubmission(group, "matcher", "reference_game", 0)).toEqual({
+    expect(readSubmission(group, "matcher")).toEqual({
       assignment: { 1: "c", 2: "a" }, // non-string / slot<1 entries dropped
       rt: 250,
       timed_out: true,
     });
-    expect(readSubmission(group, "matcher", "reference_game", 5)).toBeUndefined();
-    expect(readSubmission({}, "matcher", "reference_game", 0)).toBeUndefined();
+    expect(readSubmission(group, "director")).toBeUndefined();
+    expect(readSubmission({}, "matcher")).toBeUndefined();
+    expect(readSubmission({ matcher: { submission: "nope" } }, "matcher")).toBeUndefined();
+    expect(readSubmission({ matcher: { submission: { rt: 5 } } }, "matcher")).toBeUndefined();
   });
 
-  it("runningScore sums n_correct across rounds, tolerating gaps", () => {
-    const slot = {
-      reference_game: {
-        0: { n_correct: 1 },
-        1: { n_correct: 3 },
-        2: { assignment: {} }, // no score yet
-      },
-    };
-    expect(runningScore(slot, "reference_game")).toBe(4);
-    expect(runningScore(undefined, "reference_game")).toBe(0);
+  it("runningScore sums n_correct across earlier rounds' data, tolerating gaps", () => {
+    const rows = [{ n_correct: 1 }, { n_correct: 3 }, { n_correct: null }, {}];
+    expect(runningScore(rows)).toBe(4);
+    expect(runningScore([])).toBe(0);
   });
 });
 
