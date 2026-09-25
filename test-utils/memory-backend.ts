@@ -11,20 +11,25 @@
 import {
   AdapterConnectOptions,
   ConnectOptions,
-  GroupSessionData,
   GroupState,
   initJsPsych,
   JsPsych,
   MultiplayerAdapter,
-  MULTIPLAYER_RESERVED_KEY,
   MultiplayerConnection,
 } from "jspsych";
+
+/** A participant's data as the session pushes it: bookkeeping plus the session and trial scopes. */
+export interface WireSlot {
+  $mp: { v: number; instance: string; epoch: number; left?: string[] };
+  session?: Record<string, unknown>;
+  scopes: Record<string, Record<string, unknown>>;
+}
 
 export class MemoryHub {
   /** Every connection to this hub reports this session ID. */
   sessionId = "memory-session";
 
-  data: GroupSessionData = {};
+  data: Record<string, unknown> = {};
   connections = new Set<MemoryConnection>();
 
   /** Participants with no jsPsych instance in the test who count as connected. See addPeer(). */
@@ -50,15 +55,27 @@ export class MemoryHub {
   }
 
   /**
-   * Write a participant's slot directly, as if a participant with no jsPsych
-   * instance in the test had pushed it. The participant isn't connected, so
-   * sessions see them as `away`, like a slot left over from an earlier member;
+   * Write a participant's data directly, as if a participant with no jsPsych
+   * instance in the test had pushed it. `data` goes in the session scope, or in
+   * the trial scope named by `scope`. The participant isn't connected, so
+   * sessions see them as `away`, like data left over from an earlier member;
    * use addPeer() for a participant who is present. Seeding the ID of a
    * participant who has a session in the test has no visible effect, because
-   * that session owns its own slot.
+   * that session owns its own data.
    */
-  seed(participantId: string, data: Record<string, unknown>) {
-    this.data = { ...this.data, [participantId]: data };
+  seed(participantId: string, data: Record<string, unknown>, options: { scope?: string } = {}) {
+    const previous = this.data[participantId] as WireSlot | undefined;
+    const slot: WireSlot = previous ?? { $mp: { v: 1, instance: "seeded", epoch: 1 }, scopes: {} };
+    const next: WireSlot =
+      options.scope === undefined
+        ? { ...slot, session: data }
+        : { ...slot, scopes: { ...slot.scopes, [options.scope]: data } };
+    this.store(participantId, next as unknown as Record<string, unknown>);
+  }
+
+  /** Store a participant's pushed data exactly as given, and broadcast it. */
+  store(participantId: string, payload: Record<string, unknown>) {
+    this.data = { ...this.data, [participantId]: payload };
     this.broadcast();
   }
 
@@ -121,7 +138,7 @@ export class MemoryConnection implements MultiplayerConnection {
 
   /** Store data on the hub and broadcast it, as a confirmed push does. */
   write(data: Record<string, unknown>) {
-    this.hub.seed(this.participantId, data);
+    this.hub.store(this.participantId, data);
   }
 
   getAll() {
@@ -186,13 +203,13 @@ export class MemoryAdapter implements MultiplayerAdapter {
 }
 
 /**
- * A slot as stored on the backend, without the bookkeeping the session keeps
- * under the reserved key. Use it when asserting on hub.data or pushes.
+ * A participant's data in one scope as stored on the backend: the session
+ * scope by default, or the trial scope named by `scope`. Use it when asserting
+ * on hub.data or pushes.
  */
-export function stripMeta(slot: Record<string, unknown> | undefined) {
-  if (!slot) return slot;
-  const { [MULTIPLAYER_RESERVED_KEY]: _meta, ...data } = slot;
-  return data;
+export function scopeData(slot: unknown, scope?: string): Record<string, unknown> | undefined {
+  const wire = slot as WireSlot | undefined;
+  return scope === undefined ? wire?.session : wire?.scopes?.[scope];
 }
 
 export function deferred<T = void>() {

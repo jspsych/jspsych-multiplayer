@@ -1,14 +1,16 @@
 import { startTimeline } from "@jspsych/test-utils";
-import { ConnectOptions, GroupSessionData, PresenceData } from "jspsych";
+import { ConnectOptions, GroupSessionData, initJsPsych, PresenceData } from "jspsych";
 
-import { MemoryHub } from "../../../test-utils/memory-backend";
+import { MemoryHub, deferred, flushPromises } from "../../../test-utils/memory-backend";
 import * as drawCore from "./draw-core";
 import MultiplayerDrawPlugin from ".";
 
 // ---------------------------------------------------------------------------------------------------
 // Every test runs the real jsPsych multiplayer session over the in-memory backend in test-utils, so
 // reads are frozen snapshots, own writes show up at once (and notify subscribers synchronously),
-// and presence is real. `makeApi` wraps that session with a few test conveniences:
+// and presence is real. No trial is running in the core, so the plugin's reads and writes use the
+// session scope; the startTimeline tests cover the trial scope. `makeApi` wraps that session with a
+// few test conveniences:
 //   - `pushAs(id, data)` writes a peer's slot, as if another connected participant had written it.
 //   - `failNextWrite = true` makes this participant's next write to the backend reject.
 // ---------------------------------------------------------------------------------------------------
@@ -26,7 +28,6 @@ async function makeApi(participantId = "me", connect?: ConnectOptions) {
     participantId,
     get: (id: string) => multiplayer.get(id),
     getAll: () => multiplayer.getAll(),
-    push: (data: Record<string, unknown>) => multiplayer.push(data),
     update: (data: Record<string, unknown>) => multiplayer.update(data),
     pushAs(id: string, data: Record<string, unknown>) {
       if (![...hub.connections].some((c) => c.participantId === id)) {
@@ -112,7 +113,6 @@ function drawStroke(el: HTMLElement, from: [number, number], to: [number, number
 
 const base = {
   prompt: "",
-  data_key: "draw_strokes",
   aspect_ratio: 4 / 3,
   colors: ["#111", "#222"],
   brush_sizes: [0.004, 0.01, 0.02],
@@ -199,7 +199,7 @@ describe("multiplayer-draw plugin", () => {
 
   it("drawing preserves unrelated keys in my own slot (the push-replaces-slot crux)", async () => {
     const api = await makeApi();
-    await api.push({ role: "proposer" });
+    await api.update({ role: "proposer" });
     const { jsPsych } = makeJsPsych(api);
     const el = display();
 
@@ -213,7 +213,7 @@ describe("multiplayer-draw plugin", () => {
 
   it("seeds the seq counter past a gap in existing own strokes (no id collision)", async () => {
     const api = await makeApi();
-    await api.push({
+    await api.update({
       draw_strokes: [
         {
           id: "me#0",
@@ -788,7 +788,8 @@ describe("multiplayer-draw plugin", () => {
     expect(finished).toHaveLength(0);
   });
 
-  it("shows a connection-trouble note on a failed push, and the next tick's push self-heals", async () => {
+  it("leaves a failed write to the core's retries, and the next write carries everything", async () => {
+    jest.spyOn(console, "warn").mockImplementation(() => {}); // the core logs the failed write
     const api = await makeApi();
     api.failNextWrite = true;
     const { jsPsych } = makeJsPsych(api);
@@ -797,15 +798,14 @@ describe("multiplayer-draw plugin", () => {
     await new MultiplayerDrawPlugin(jsPsych as never).trial(el, { ...base } as never);
     drawStroke(el, [10, 10], [50, 50]); // the flush on pointerup fails
     await flush();
+    expect(el.querySelector(".jspsych-multiplayer-draw-error")).toBeNull();
 
-    const note = el.querySelector(".jspsych-multiplayer-draw-error") as HTMLElement;
-    expect(note).not.toBeNull();
-    expect(note.textContent).toMatch(/retrying/i);
-
-    // A second, successful action re-pushes the FULL current array (self-healing) — nothing is lost.
+    // The next write sends the FULL current array — nothing is lost.
     drawStroke(el, [20, 20], [60, 60]);
     await flush();
-    expect((api.getAll().me.draw_strokes as any[]).length).toBe(2);
+    const stored = api.hub.data.me as { session: Record<string, unknown> };
+    expect((stored.session.draw_strokes as any[]).length).toBe(2);
+    jest.restoreAllMocks();
   });
 
   it("runs through the real jsPsych parameter pipeline (startTimeline smoke test)", async () => {
@@ -825,15 +825,43 @@ describe("multiplayer-draw plugin", () => {
 
     const data = getData().values()[0];
     expect(data.ended_by).toBe("button");
+    expect(data.multiplayer_outcome).toBe("completed");
     expect(data.stroke_count).toBe(1);
     expect(data.strokes_drawn).toBe(1);
   });
 
+  it("starts each draw trial with a blank canvas, unless they share a multiplayer_scope", async () => {
+    const hub = new MemoryHub();
+    const { jsPsych } = await hub.join("me");
+    const end = (el: HTMLElement) =>
+      (el.querySelector(".jspsych-multiplayer-draw-end") as HTMLButtonElement).click();
+    const trialDef = { type: MultiplayerDrawPlugin, end_button_label: "Done" };
+    const shared = { ...trialDef, multiplayer_scope: "canvas" };
+
+    const { displayElement, expectFinished, getData } = await startTimeline(
+      [trialDef, trialDef, shared, shared],
+      jsPsych,
+    );
+    for (let i = 0; i < 4; i++) {
+      if (i !== 3) drawStroke(displayElement, [10, 10], [50, 50]);
+      await flush();
+      end(displayElement);
+      await flush();
+    }
+    await expectFinished();
+
+    expect(
+      getData()
+        .values()
+        .map((d: any) => d.stroke_count),
+    ).toEqual([1, 1, 1, 1]);
+  });
+
   describe("presence and the session closing", () => {
-    it("ends with ended_by 'participant_left' when a participant who was there leaves", async () => {
-      const api = await makeApi("me", { dropoutTimeout: 0 });
+    it("ends with outcome 'participant_left' when a participant who was there leaves", async () => {
+      const api = await makeApi("me", { dropoutTimeout: 1 });
       const peer = await api.hub.join("peer");
-      await peer.jsPsych.multiplayer.push({ draw_strokes: [peerStroke] });
+      await peer.jsPsych.multiplayer.update({ draw_strokes: [peerStroke] });
       const { jsPsych, finished } = makeJsPsych(api);
       new MultiplayerDrawPlugin(jsPsych as never).trial(display(), { ...base } as never);
 
@@ -841,17 +869,18 @@ describe("multiplayer-draw plugin", () => {
       await sleep(5);
 
       expect(finished).toHaveLength(1);
+      // The peer's data drops out of the unsealed group when they leave; their stroke stays
       expect(finished[0]).toMatchObject({
-        ended_by: "participant_left",
-        partner_left: true,
+        multiplayer_outcome: "participant_left",
         left_participant: "peer",
-        connection_lost: false,
+        ended_by: null,
         stroke_count: 1,
       });
+      expect(finished[0]).not.toHaveProperty("partner_left");
     });
 
     it("keeps going when end_on_participant_left is false, marking them in the roster", async () => {
-      const api = await makeApi("me", { dropoutTimeout: 0 });
+      const api = await makeApi("me", { dropoutTimeout: 1 });
       const peer = await api.hub.join("peer");
       const { jsPsych, finished } = makeJsPsych(api);
       const el = display();
@@ -888,7 +917,7 @@ describe("multiplayer-draw plugin", () => {
       expect(seen[seen.length - 1]).toEqual({ me: "connected", peer: "connected" });
     });
 
-    it("ends with ended_by 'connection_lost' and keeps this client's strokes", async () => {
+    it("ends with outcome 'connection_lost' and keeps this client's strokes", async () => {
       const api = await makeApi();
       const { jsPsych, finished } = makeJsPsych(api);
       const el = display();
@@ -896,45 +925,51 @@ describe("multiplayer-draw plugin", () => {
       drawStroke(el, [10, 10], [50, 50]);
 
       api.connection.options.onStatus("closed");
+      await flushPromises();
 
       expect(finished).toHaveLength(1);
       expect(finished[0]).toMatchObject({
-        ended_by: "connection_lost",
-        connection_lost: true,
+        multiplayer_outcome: "connection_lost",
+        left_participant: null,
+        ended_by: null,
         strokes_drawn: 1,
       });
       expect(el.querySelector(".jspsych-multiplayer-draw-error")).toBeNull();
     });
 
-    it("also ends cleanly when the experiment calls disconnect() mid-trial", async () => {
+    it("ends as cancelled when the experiment calls disconnect() mid-trial", async () => {
       const api = await makeApi();
       const { jsPsych, finished } = makeJsPsych(api);
       new MultiplayerDrawPlugin(jsPsych as never).trial(display(), { ...base } as never);
       await api.multiplayer.disconnect();
-      expect(finished[0].ended_by).toBe("connection_lost");
+      await flushPromises();
+      expect(finished).toHaveLength(1);
+      expect(finished[0].multiplayer_outcome).toBe("cancelled");
     });
 
-    it("says the connection was lost instead of 'retrying' after it closes", async () => {
+    it("keeps a stroke whose write was still unsent when the connection closed", async () => {
       const api = await makeApi();
-      const { jsPsych } = makeJsPsych(api);
+      const { jsPsych, finished } = makeJsPsych(api);
       const el = display();
-      new MultiplayerDrawPlugin(jsPsych as never).trial(el, {
-        ...base,
-        end_button_label: "Done",
-      } as never);
-      api.connection.pushImpl = async () => {
-        throw Object.assign(new Error("gone"), { name: "MultiplayerConnectionClosedError" });
-      };
+      new MultiplayerDrawPlugin(jsPsych as never).trial(el, { ...base } as never);
+      api.connection.pushImpl = () => deferred().promise; // the write never settles
       drawStroke(el, [10, 10], [50, 50]);
-      await flush();
-      expect(el.querySelector(".jspsych-multiplayer-draw-error")!.textContent).toMatch(/lost/);
+
+      api.connection.options.onStatus("closed");
+      await flushPromises();
+
+      expect(finished).toHaveLength(1);
+      expect(finished[0]).toMatchObject({
+        multiplayer_outcome: "connection_lost",
+        strokes_drawn: 1,
+      });
     });
   });
 
   describe("frozen snapshots", () => {
     it("can redo a stroke that was restored from the slot (e.g. after a reload)", async () => {
       const api = await makeApi();
-      await api.push({ draw_strokes: [{ ...peerStroke, id: "me#0", authorId: "me" }] });
+      await api.update({ draw_strokes: [{ ...peerStroke, id: "me#0", authorId: "me" }] });
       const { jsPsych } = makeJsPsych(api);
       const el = display();
       new MultiplayerDrawPlugin(jsPsych as never).trial(el, { ...base } as never);
@@ -965,14 +1000,12 @@ describe("multiplayer-draw plugin", () => {
   });
 
   it("throws a clear error when the adapter isn't connected yet, or jsPsych has no multiplayer module", async () => {
-    const hub = new MemoryHub();
-    const { jsPsych } = await hub.join("me");
-    await jsPsych.multiplayer.disconnect();
+    const jsPsych = initJsPsych();
     expect(() => new MultiplayerDrawPlugin(jsPsych).trial(display(), base as never)).toThrow(
       "no participantId",
     );
     expect(() => new MultiplayerDrawPlugin({} as never).trial(display(), base as never)).toThrow(
-      "no multiplayer module",
+      "needs a version of jsPsych with the multiplayer API",
     );
   });
 });

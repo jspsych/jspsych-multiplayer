@@ -74,10 +74,10 @@ Create `my-experiment/first-trial.html`:
 <html>
   <head>
     <!-- jsPsych: the #3694 preview build (see "Before the release") -->
-    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@5cb6b05bec8ca0e409145453220803b408cd7e50/packages/jspsych/dist/index.browser.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@4df7fbb672806086c7e118e53aba2262f27edf68/packages/jspsych/dist/index.browser.min.js"></script>
     <link
       rel="stylesheet"
-      href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@5cb6b05bec8ca0e409145453220803b408cd7e50/packages/jspsych/css/jspsych.css"
+      href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@4df7fbb672806086c7e118e53aba2262f27edf68/packages/jspsych/css/jspsych.css"
     />
     <script src="https://unpkg.com/@jspsych/plugin-html-button-response@2"></script>
 
@@ -106,9 +106,9 @@ const adapter = new jsPsychAdapterMultiplayerLocal();
 ```
 
 The local adapter shares data between tabs of one browser. It is for building and testing
-only; it cannot connect participants on different computers. A tab that reloads joins as a
-new participant: reloading restarts the experiment, so it can't rejoin the game it left (see
-[Rejoining](guides/handling-dropouts#rejoining)).
+only; it cannot connect participants on different computers. A tab that reloads keeps its
+participant ID, but reloading restarts the experiment, so it can't rejoin the game it left:
+the other tab counts it as having left (see [Rejoining](guides/handling-dropouts#rejoining)).
 
 You will hand the adapter to jsPsych in the last step, just before the timeline runs.
 
@@ -138,7 +138,7 @@ const choose = {
 ### Share it and wait for the partner
 
 This is the multiplayer trial. [`multiplayer-sync`](reference/plugin-multiplayer-sync) does
-two things in order: it saves `push_data` where everyone in the group can read it, then it
+two things in order: it saves `write_data` where everyone in the group can read it, then it
 waits until `wait_for` returns `true`.
 
 ```js
@@ -146,14 +146,15 @@ let partnerColour;
 
 const waitForPartner = {
   type: jsPsychMultiplayerSync,
-  push_data: () => ({ colour: myColour }),
-  wait_for: (group, presence) => {
+  write_data: () => ({ colour: myColour }),
+  participants: [], // don't end the trial if the partner leaves before choosing
+  wait_for: (data, presence) => {
     let connected = 0;
     for (const id in presence) {
       if (presence[id] === "connected") {
         connected++;
-        // A participant's entry in group is undefined until they share something
-        if (group[id] === undefined || group[id].colour === undefined) {
+        // A participant's entry in data is undefined until they share something in this trial
+        if (data[id] === undefined || data[id].colour === undefined) {
           return false; // someone connected hasn't chosen yet
         }
       }
@@ -161,6 +162,7 @@ const waitForPartner = {
     return connected >= 2;
   },
   message: "<p>Waiting for your partner to choose…</p>",
+  save_group: true,
   on_finish: (data) => {
     // The partner is whoever in the group isn't this participant
     for (const id in data.group) {
@@ -174,8 +176,10 @@ const waitForPartner = {
 
 `wait_for` gets two arguments:
 
-- `group`, what each participant has shared, keyed by participant ID. Here, after both have
-  chosen, it looks like `{ "a1b2…": { colour: "red" }, "c3d4…": { colour: "blue" } }`.
+- `data`, what each participant has shared **in this trial**, keyed by participant ID. Here,
+  after both have chosen, it looks like `{ "a1b2…": { colour: "red" }, "c3d4…": { colour: "blue" } }`.
+  Each trial starts with its own empty shared data, so nothing from an earlier trial can
+  satisfy the condition by accident.
 - `presence`, whether each participant is `"connected"`, `"away"` (their connection dropped)
   or `"left"`.
 
@@ -183,9 +187,10 @@ Read the condition aloud: _at least two participants are connected, and each of 
 shared a colour._ Both tabs check the same condition against the same data, so both move on
 at the same moment.
 
-`push_data` is a function because `myColour` only has a value once the previous trial has
-finished. When the wait ends, the trial saves the group's data in `data.group`, which is
-where `on_finish` finds the partner's colour.
+`write_data` is a function because `myColour` only has a value once the previous trial has
+finished. `participants: []` tells the trial not to depend on any particular participant: at
+this point nobody knows who the partner will be. `save_group: true` saves the trial's shared
+data in `data.group` when the wait ends, which is where `on_finish` finds the partner's colour.
 
 </Step>
 <Step>
@@ -199,13 +204,17 @@ const result = {
   choices: ["Finish"],
 };
 
-jsPsych.multiplayer.connect(adapter).then(() => {
-  jsPsych.run([choose, waitForPartner, result]);
-});
+async function runExperiment() {
+  await jsPsych.multiplayer.connect(adapter);
+  await jsPsych.run([choose, waitForPartner, result]);
+}
+
+runExperiment();
 ```
 
 `connect()` must finish before `jsPsych.run()`, because the multiplayer trials need the
-connection from their first moment.
+connection from their first moment. The `async` function lets you use `await` in an ordinary
+`<script>` tag.
 
 </Step>
 </Steps>
@@ -234,25 +243,26 @@ The sync trial adds these fields to the usual jsPsych data:
 ```jsonc
 {
   "trial_type": "multiplayer-sync",
-  "group": {
+  "wait_time": 2310,                   // ms this participant waited
+  "multiplayer_outcome": "completed",  // or "timeout", "participant_left", "connection_lost"
+  "left_participant": null,            // who left, if someone did
+  "group": {                           // because of save_group: true
     "a1b2…": { "colour": "red" },
     "c3d4…": { "colour": "blue" }
   },
-  "wait_time": 2310,        // ms this participant waited
-  "timed_out": false,
-  "partner_left": false,    // true if a participant it depended on left
-  "left_participant": null,
-  "connection_lost": false,
-  "wait_error": null
+  "multiplayer_participant_id": "a1b2…",
+  "multiplayer_session_id": "k7x9…"
 }
 ```
 
 The data from each participant's own browser holds the choices of the whole group, so you
-can analyse a session from either participant's file.
+can analyse a session from either participant's file. Every row of the data, not only the
+multiplayer trials, carries `multiplayer_participant_id` and `multiplayer_session_id`, so you
+can match up the files from the members of each group.
 
 ## Next steps
 
-- Read [How it works](guides/how-it-works) for the rules behind `group` and `presence`.
+- Read [How it works](guides/how-it-works) for the rules behind the shared data and `presence`.
 - Build the [ultimatum game](guides/ultimatum-game): a complete two-player study with roles,
   a partner who might leave, and a real backend.
 - Browse the <Link to="/examples">examples</Link> for chat, polls, pairing, scoreboards and

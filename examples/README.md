@@ -14,29 +14,37 @@ drive **entirely from two browser tabs**, no server.
 | Package                                          | Role in the demo                                                                                                        |
 | ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------- |
 | `@jspsych-multiplayer/adapter-multiplayer-local` | The network backend — `localStorage` + cross-tab signalling. Connected once, before `jsPsych.run`. **Dev/demo only.**   |
-| `@jspsych-multiplayer/plugin-multiplayer-sync`   | The lobby: one declarative barrier — push your name, wait until at least `MIN_PLAYERS` participants are present.         |
+| `@jspsych-multiplayer/plugin-multiplayer-sync`   | The lobby: one declarative barrier — mark yourself as here, wait until at least `MIN_PLAYERS` participants are.         |
 | `@jspsych-multiplayer/plugin-multiplayer-chat`   | The room: a continuously-open trial that renders the merged transcript and lets this participant send messages.         |
 
-Two small composition details are worth copying:
+Three small composition details are worth copying:
 
-1. **Names are published in the lobby and reused by the chat.** The lobby's `push_data` writes
-   `{ name, joinedAt }` into the participant's slot. The chat plugin updates only its own key when
-   it sends a message, so `name` stays available. The chat trial's `sender_label` then labels each
-   message by name (and this client's own messages as "You", by comparing `senderId` against
-   `jsPsych.multiplayer.participantId`).
-2. **The lobby counts connected participants who carry a name.** `wait_for` receives presence as its
-   second argument and counts participants who are `connected` and have published a name. Counting
-   slots would be wrong: a slot stays in the group after its participant leaves, and a peer still
-   mid-handshake has no name yet. The lobby also sets `participants: []`, so someone leaving means
-   waiting longer rather than ending the lobby with `partner_left`. Every lobby in these examples
-   follows the same pattern.
+1. **Names are written to the session scope and reused by the chat.** During a trial, reads and
+   writes default to that trial's own part of the shared data, which the next trial can't see. So
+   the name trial's `on_finish` writes the name with
+   `jsPsych.multiplayer.update({ name }, { scope: "session" })`, and the chat trial's `sender_label`
+   reads it back with `jsPsych.multiplayer.get(senderId, { scope: "session" })` (labelling this
+   client's own messages "You", by comparing `senderId` against `jsPsych.multiplayer.participantId`).
+2. **The lobby counts connected participants who reached it.** The lobby's `write_data: { here: true }`
+   goes to the lobby trial's own data, which is what `wait_for` sees. `wait_for` receives presence as
+   its second argument and counts participants who are `connected` and wrote `here`. Counting entries
+   alone would be wrong: data stays after its participant leaves. The lobby also sets
+   `participants: []`, so someone leaving means waiting longer rather than ending the lobby with
+   `multiplayer_outcome: "participant_left"`. Every link-based lobby in these examples follows the
+   same pattern; where the backend forms the groups (JATOS, Firebase matchmaking), wait with
+   `jsPsych.multiplayer.waitForGroup()` instead, as `ultimatum-game-jatos.html` does.
+3. **Connecting can fail, and a reloaded tab can't rejoin.** The `connect()` call has a `.catch` that
+   shows a message instead of a blank page, and the page checks `jsPsych.multiplayer.restarted`
+   before running the timeline (see "Running it" below). Every example does both.
 
 ### Swapping in a real backend
 
 The demo connects `adapter-multiplayer-local` because it needs no infrastructure. To run a real,
 cross-device study, change the one adapter line to `adapter-multiplayer-jatos` (and load `jatos.js` /
-wrap `jsPsych.run` in `jatos.onLoad`, as in `ultimatum-game-jatos.html`). Nothing else in the timeline is
-backend-specific — the lobby and chat trials are identical either way.
+wrap `jsPsych.run` in `jatos.onLoad`, as in `ultimatum-game-jatos.html`). JATOS forms the groups
+itself, so the link-based lobby can become `await jsPsych.multiplayer.waitForGroup()` before
+`jsPsych.run`, as in that file. Nothing else in the timeline is backend-specific — the chat trial is
+identical either way.
 
 ### Running it
 
@@ -86,14 +94,15 @@ When #3694's API changes, update both together:
    `?mp_session=…`) into a second tab to bring another player into the same room. Opening the bare
    URL again would start a different session.
 
-   **Refreshing a tab joins as a new participant.** A page that reloads has restarted its
-   experiment, so it can't rejoin the group it left (see "Rejoining" in the dropouts guide). The
-   ultimatum examples keep the participant ID across a refresh with `persistParticipant: true` and
-   show a "you can't rejoin" screen instead. The adapter tracks presence itself, so the other tabs
-   see a closed tab as `left` without any unload handler in the page.
+   **A refreshed tab can't rejoin.** The local adapter keeps the tab's participant ID across a
+   refresh (`persistParticipant` defaults to `true`), but a page that reloads has restarted its
+   experiment, so the group counts it as having left (see "Rejoining" in the dropouts guide). The
+   page sees `jsPsych.multiplayer.restarted === true` and shows a "you can't rejoin" message
+   instead of starting over. The adapter tracks presence itself, so the other tabs see a closed tab
+   as `left` without any unload handler in the page.
 
-The examples were updated for the current API (sessions and presence) and have not yet been
-re-verified end to end in a browser since.
+The examples were updated for the 1.0 API (trial scopes, `multiplayer_outcome`, `restarted`) and
+have not yet been re-verified end to end in a browser since.
 
 #### Running it after jsPsych releases the API
 
@@ -119,14 +128,15 @@ browser tabs, no server**.
 | Package                                          | Role in the demo                                                                                                       |
 | ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------- |
 | `@jspsych-multiplayer/adapter-multiplayer-local` | The network backend — `localStorage` + cross-tab signalling. Connected once, before `jsPsych.run`. **Dev/demo only.** |
-| `@jspsych-multiplayer/plugin-multiplayer-sync`   | The lobby: one declarative barrier — push your name, wait until `MIN_PLAYERS` participants are present.                |
+| `@jspsych-multiplayer/plugin-multiplayer-sync`   | The lobby: one declarative barrier — mark yourself as here, wait until `EXPECTED_PLAYERS` participants are.            |
 | `@jspsych-multiplayer/plugin-multiplayer-choice` | The decision: everyone picks, the group barriers until all have chosen, then the attributed choices + payoffs reveal. |
 
 Two composition details worth copying:
 
-1. **`player_label` turns ids into lobby names on the reveal.** The lobby pushes each participant's
-   `name`; the choice trial's `player_label` reads it back (`jsPsych.multiplayer.get(id).name`) so the
-   reveal reads "Alice: Cooperate" rather than a raw id, and labels this client "You".
+1. **`player_label` turns ids into names on the reveal.** The name trial writes each participant's
+   `name` to the session scope; the choice trial's `player_label` reads it back
+   (`jsPsych.multiplayer.get(id, { scope: "session" })?.name`) so the reveal reads "Alice: Cooperate"
+   rather than a raw id, and labels this client "You".
 2. **The `payoff` hook scores the round.** It receives `{ participantId: { index, label } }` for
    everyone plus this client's id, and returns this client's points — here, a lookup into the classic
    PD matrix. With no hook, choice stays a pure decision primitive and you derive payoffs from
@@ -135,8 +145,9 @@ Two composition details worth copying:
 ### Swapping in a real backend
 
 Change the one adapter line from `adapter-multiplayer-local` to `adapter-multiplayer-jatos` (and load
-`jatos.js` / wrap `jsPsych.run` in `jatos.onLoad`, as in `ultimatum-game-jatos.html`). Nothing else in the
-timeline is backend-specific.
+`jatos.js` / wrap `jsPsych.run` in `jatos.onLoad`, as in `ultimatum-game-jatos.html`). JATOS forms the
+groups itself, so the link-based lobby can become `await jsPsych.multiplayer.waitForGroup()` before
+`jsPsych.run`, as in that file. Nothing else in the timeline is backend-specific.
 
 ### Running it
 
@@ -163,7 +174,7 @@ Anonymity section). Runs on the local adapter across two browser tabs, no server
 | Package                                          | Role in the demo                                                                                                      |
 | ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------- |
 | `@jspsych-multiplayer/adapter-multiplayer-local` | The network backend — `localStorage` + cross-tab signalling. Connected once, before `jsPsych.run`. **Dev/demo only.** |
-| `@jspsych-multiplayer/plugin-multiplayer-sync`   | The lobby: one declarative barrier — push your name, wait until `EXPECTED_PLAYERS` participants are present.           |
+| `@jspsych-multiplayer/plugin-multiplayer-sync`   | The lobby: one declarative barrier — mark yourself as here, wait until `EXPECTED_PLAYERS` participants are.            |
 | `@jspsych-multiplayer/plugin-multiplayer-choice` | The ballot in tally mode: everyone picks, the group barriers, then the anonymous tally + winner reveal.                |
 
 ### Running it
@@ -184,7 +195,7 @@ before the results screen. Like `chat-room.html` it runs on the local adapter, s
 | --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
 | `@jspsych-multiplayer/adapter-multiplayer-local`    | The network backend — `localStorage` + cross-tab signalling. Connected once, before `jsPsych.run`. **Dev/demo only.** |
 | `@jspsych-multiplayer/plugin-multiplayer-sync`      | Two declarative barriers: the lobby before the timer, and a "wait for everyone to finish" barrier after it.           |
-| `@jspsych-multiplayer/plugin-multiplayer-countdown` | The shared timer: every client derives the same remaining time from the minimum start timestamp across all slots.     |
+| `@jspsych-multiplayer/plugin-multiplayer-countdown` | The shared timer: every client derives the same remaining time from the earliest start timestamp any client wrote.   |
 
 The composition detail worth copying is the **barrier sandwich**:
 
@@ -214,14 +225,20 @@ countdown drawn on top of them.
 | Package                                             | Role in the demo                                                                                                                 |
 | --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
 | `@jspsych-multiplayer/adapter-multiplayer-local`    | The network backend — `localStorage` + cross-tab signalling. Connected once, before `jsPsych.run`. **Dev/demo only.**            |
-| `@jspsych-multiplayer/plugin-multiplayer-sync`      | The lobby, and the "wait for both contributions" barrier, each one declarative push-then-wait.                                   |
-| `@jspsych-multiplayer/plugin-multiplayer-countdown` | Used through its **exported statics** (`startedAtKey` / `resolveStartedAt` / `computeRemaining` / `formatTime`), not as a trial. |
+| `@jspsych-multiplayer/plugin-multiplayer-sync`      | The lobby, and the "wait for both contributions" barrier, each one declarative write-then-wait.                      |
+| `@jspsych-multiplayer/plugin-multiplayer-countdown` | Used through its **exported statics** (`resolveStartedAt` / `computeRemaining` / `formatTime`), not as a trial.      |
 
-This is the countdown plugin's flagship **"render a synced timer during another trial"** use. The contribution trial resolves the group's
-consensus start (the minimum start timestamp across all slots) on a 100 ms interval and paints the
+This is the countdown plugin's flagship **"render a synced timer during another trial"** use. The
+contribution trial writes its start time to its own part of the shared data, resolves the group's
+consensus start (the earliest start timestamp any player wrote) on a 100 ms interval, and paints the
 same remaining time into both tabs, so the window closes together within skew + latency. A public-
 goods game fits the countdown because its pacing is _duration-bound_ (everyone acts within one
 window), unlike the turn-based ultimatum game.
+
+The "wait for both contributions" barrier sets `save_group: true`, so the contributions it waited
+for are saved in its jsPsych data; the reveal screen reads them from there
+(`jsPsych.data.get().filter({ trial_type: "multiplayer-sync" })`), since the barrier's shared data
+belongs to its own trial.
 
 ### Running it
 
@@ -235,8 +252,8 @@ A real-time **collaborative drawing canvas**: participants wait in a lobby until
 then draw together on one shared canvas for a synced, time-boxed round. Unlike `chat-room.html`,
 participants are never asked for a display name — strokes aren't attributed by name anywhere in the
 UI, so the roster labels players by join order ("Player 1", "Player 2", …) instead. It is the
-highest-rate demo of the multiplayer API's `subscribe` primitive (continuous, throttled pushes while a
-stroke is active, vs. `chat-room.html`'s one push per message), and the flagship demo for the countdown
+highest-rate demo of the multiplayer API's `subscribe` primitive (continuous, throttled writes while a
+stroke is active, vs. `chat-room.html`'s one write per message), and the flagship demo for the countdown
 plugin's **"render a synced timer during another trial"** use — the same core `public-goods-local.html`
 uses for its contribution window, drawn on top of a plugin (`plugin-multiplayer-draw`) instead of a
 core jsPsych plugin. Like `chat-room.html` it runs on the local adapter, so you can drive it **entirely
@@ -247,15 +264,17 @@ from two browser tabs**, no server.
 | Package                                             | Role in the demo                                                                                                                 |
 | --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
 | `@jspsych-multiplayer/adapter-multiplayer-local`    | The network backend — `localStorage` + cross-tab signalling. Connected once, before `jsPsych.run`. **Dev/demo only.**            |
-| `@jspsych-multiplayer/plugin-multiplayer-sync`      | The lobby: push a join timestamp, wait until at least `MIN_PLAYERS` are present.                                                 |
-| `@jspsych-multiplayer/plugin-multiplayer-draw`      | The shared canvas: pen/eraser, colors, brush sizes, and an undo that only ever removes this participant's own last stroke.       |
-| `@jspsych-multiplayer/plugin-multiplayer-countdown` | Used through its **exported statics** (`startedAtKey` / `resolveStartedAt` / `computeRemaining` / `formatTime`), not as a trial. |
+| `@jspsych-multiplayer/plugin-multiplayer-sync`      | The lobby: mark yourself as here, wait until at least `MIN_PLAYERS` are.                                                   |
+| `@jspsych-multiplayer/plugin-multiplayer-draw`      | The shared canvas: pen/eraser, colors, brush sizes, and an undo that only ever removes this participant's own last stroke. |
+| `@jspsych-multiplayer/plugin-multiplayer-countdown` | Used through its **exported statics** (`resolveStartedAt` / `computeRemaining` / `formatTime`), not as a trial.            |
 
 The composition detail worth copying: the draw plugin's own `duration` parameter is a per-client
 `setTimeout` with no cross-tab agreement on _when_ it started, so two tabs opened moments apart would
 see different end times. This demo skips that parameter entirely and instead renders the countdown
-plugin's consensus clock into the draw trial's `prompt` on `on_load`, using the same
-"keep-if-present `update()`" pattern the countdown plugin itself uses internally. When the synced
+plugin's consensus clock into the draw trial's `prompt` on `on_load`: each client writes its start
+time to the draw trial's own data, as the countdown plugin itself does, and the clock counts from the
+earliest one. The "Player N" labels come from a `joinedAt` time each client writes to the session
+scope when it connects, so the draw trial can read it. When the synced
 clock reaches zero, the client auto-clicks its own "I'm done" button rather than ending the trial
 directly — the room closes for everyone through the same `end_when` "wait for everyone's `draw_done`
 flag" mechanism a manual click uses, so a clock-driven end and a manual end are indistinguishable to
@@ -279,8 +298,8 @@ local adapter, so it can be driven **entirely from two browser tabs, no server**
 | Package                                              | Role in the demo                                                                                                       |
 | ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
 | `@jspsych-multiplayer/adapter-multiplayer-local`     | The network backend — `localStorage` + cross-tab signalling. Connected once, before `jsPsych.run`. **Dev/demo only.** |
-| `@jspsych-multiplayer/plugin-multiplayer-sync`       | The lobby: one declarative barrier — push your name, wait until `MIN_PLAYERS` participants are present.                |
-| `@jspsych-multiplayer/plugin-multiplayer-scoreboard` | The end board: pushes this client's final score, barriers on `group_size` reporters, then reveals the ranking.        |
+| `@jspsych-multiplayer/plugin-multiplayer-sync`       | The lobby: one declarative barrier — mark yourself as here, wait until `EXPECTED_PLAYERS` participants are.            |
+| `@jspsych-multiplayer/plugin-multiplayer-scoreboard` | The end board: writes this client's final score, barriers on `group_size` reporters, then reveals the ranking.        |
 
 Two composition details worth copying:
 
@@ -288,8 +307,8 @@ Two composition details worth copying:
    `points` in `on_finish`; the board's `score: () => jsPsych.data.get().select("points").sum()` sums
    them at trial start.
 2. **`group_size` makes it a barrier.** It waits until that many players have reported before
-   revealing, so everyone sees a complete ranking at once. The demo reads it dynamically from the
-   players who made it through the lobby.
+   revealing, so everyone sees a complete ranking at once. It's the fixed `EXPECTED_PLAYERS`, the same
+   integer on every client.
 
 Contrast with `live-scoreboard-room.html`, which renders the standings **live** from the same pure
 ranking core (via `jsPsych.multiplayer.subscribe`) as peers report, rather than revealing once at the end.
@@ -297,8 +316,9 @@ ranking core (via `jsPsych.multiplayer.subscribe`) as peers report, rather than 
 ### Swapping in a real backend
 
 Change the one adapter line from `adapter-multiplayer-local` to `adapter-multiplayer-jatos` (and load
-`jatos.js` / wrap `jsPsych.run` in `jatos.onLoad`, as in `ultimatum-game-jatos.html`). Nothing else in the
-timeline is backend-specific.
+`jatos.js` / wrap `jsPsych.run` in `jatos.onLoad`, as in `ultimatum-game-jatos.html`). JATOS forms the
+groups itself, so the link-based lobby can become `await jsPsych.multiplayer.waitForGroup()` before
+`jsPsych.run`, as in that file. Nothing else in the timeline is backend-specific.
 
 ### Running it
 
@@ -324,18 +344,21 @@ this: the panel is rendered directly from `plugin-multiplayer-scoreboard`'s expo
 | Package                                              | Role in the demo                                                                                                       |
 | ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
 | `@jspsych-multiplayer/adapter-multiplayer-local`     | The network backend — `localStorage` + cross-tab signalling. Connected once, before `jsPsych.run`. **Dev/demo only.** |
-| `@jspsych-multiplayer/plugin-multiplayer-sync`       | The lobby: one declarative barrier — push your name, wait until `EXPECTED_PLAYERS` participants are present.           |
+| `@jspsych-multiplayer/plugin-multiplayer-sync`       | The lobby: one declarative barrier — mark yourself as here, wait until `EXPECTED_PLAYERS` participants are.            |
 | `@jspsych-multiplayer/plugin-multiplayer-scoreboard` | Used through its **exported statics** (`buildLeaderboard`), not as a trial — the panel re-ranks every update.          |
 
 Two composition details worth copying:
 
-1. **Each answer pushes the running total.** Every quiz question's `on_finish` reads this client's own
-   slot, spreads it, and pushes `score: { score: total, label: name }` — so peers' panels update the
-   moment anyone answers, and the lobby-pushed `name` survives (`push` replaces the whole slot).
+1. **Each answer writes the running total to the session scope.** Every quiz question's `on_finish`
+   calls `jsPsych.multiplayer.update({ score: { score: total, label: name } }, { scope: "session" })`
+   — so peers' panels update the moment anyone answers. The scores have to outlive each quiz trial,
+   which is what the session scope is for; `update()` merges only the `score` key.
 2. **The panel lives outside the jsPsych display element.** jsPsych wipes the display every trial, so
-   the standings panel is appended to `document.body` and driven by one `subscribe` registration —
-   registered after `connect()`, unsubscribed when the game ends. Peer labels are escaped before
-   rendering (they are peer-pushed text).
+   the standings panel is appended to `document.body` and driven by one
+   `subscribe(render, { scope: "session" })` registration — made when the lobby ends, unsubscribed
+   when the game ends. A session-scope subscription outlives the trial that made it (a trial-scope
+   one would end with that trial). Peer labels are escaped before rendering (they are peer-written
+   text).
 
 ### Running it
 
@@ -361,18 +384,19 @@ adapter, so it can be driven **entirely from browser tabs, no server**.
 | Package                                          | Role in the demo                                                                                                       |
 | ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------- |
 | `@jspsych-multiplayer/adapter-multiplayer-local` | The network backend — `localStorage` + cross-tab signalling. Connected once, before `jsPsych.run`. **Dev/demo only.** |
-| `@jspsych-multiplayer/plugin-multiplayer-sync`   | The lobby: one declarative barrier — push your name, wait until `EXPECTED_PLAYERS` participants are present.           |
+| `@jspsych-multiplayer/plugin-multiplayer-sync`   | The lobby: one declarative barrier — mark yourself as here, wait until `EXPECTED_PLAYERS` participants are.            |
 | `@jspsych-multiplayer/plugin-multiplayer-match`  | The matchmaker: partitions the group into pairs; exposes this client's partners via `getMyMatch()`.                   |
-| `@jspsych-multiplayer/plugin-multiplayer-choice` | The round: each pair plays a Prisoner's Dilemma, keyed **per pair**.                                                   |
+| `@jspsych-multiplayer/plugin-multiplayer-choice` | The round: each pair plays a Prisoner's Dilemma in its own **per-pair** scope.                                        |
 
 `match` is the odd primitive out: it has **no UI of its own** — it's a short barrier that just
 resolves "who is with whom". This demo shows its value by *using* that result, which is exactly how
 `match` is meant to compose. Two details worth copying:
 
-1. **The paired round is namespaced per pair.** `choice`'s `data_key` is derived from the pair's
-   members (`"pd_" + members.sort().join("_")`) so two pairs keep separate ballots, and its
+1. **The paired round is scoped per pair.** The choice trial's `multiplayer_scope` is derived from the
+   pair's members (`"pd_" + members.sort().join("_")`), so two pairs keep separate ballots, its
    `expected_players` is the pair size, so the barrier lifts once *both partners* have chosen — not
-   the whole room.
+   the whole room — and its `participants` is the partner, so a player leaving another pair doesn't
+   end this one.
 2. **Spectators are handled with a `conditional_function`.** With an odd number of players,
    `leftover: "spectator"` leaves the extra unmatched (`getMyMatch()` is undefined); the game node's
    `conditional_function` skips the round for them.
@@ -380,8 +404,9 @@ resolves "who is with whom". This demo shows its value by *using* that result, w
 ### Swapping in a real backend
 
 Change the one adapter line from `adapter-multiplayer-local` to `adapter-multiplayer-jatos` (and load
-`jatos.js` / wrap `jsPsych.run` in `jatos.onLoad`, as in `ultimatum-game-jatos.html`). Nothing else in the
-timeline is backend-specific.
+`jatos.js` / wrap `jsPsych.run` in `jatos.onLoad`, as in `ultimatum-game-jatos.html`). JATOS forms the
+groups itself, so the link-based lobby can become `await jsPsych.multiplayer.waitForGroup()` before
+`jsPsych.run`, as in that file. Nothing else in the timeline is backend-specific.
 
 ### Running it
 
@@ -402,58 +427,48 @@ experiment can carry almost no synchronization or coordination code of its own.
 
 ### What it demonstrates
 
-| Package                                          | Role in the demo                                                                                                     |
-| ------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------- |
-| `@jspsych-multiplayer/adapter-multiplayer-jatos` | The network backend — JATOS group session + channel. Connected once, before `jsPsych.run`.                           |
-| `@jspsych-multiplayer/plugin-multiplayer-role`   | Assigns proposer/responder by **deterministic consensus**, with a `spectator` overflow role for extra arrivals.      |
-| `@jspsych-multiplayer/plugin-multiplayer-sync`   | Each "wait for the other player" point — the lobby, the offer, the decision — is a single declarative barrier trial. |
+| Package                                          | Role in the demo                                                                                                                  |
+| ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
+| `@jspsych-multiplayer/adapter-multiplayer-jatos` | The network backend — JATOS group session + channel. JATOS forms groups of two, and the adapter seals each one once it is full. |
+| `@jspsych-multiplayer/plugin-multiplayer-role`   | Assigns proposer/responder by **deterministic consensus**.                                                                        |
+| `@jspsych-multiplayer/plugin-multiplayer-sync`   | Each "wait for the other player" point — the offer, the decision — is a single declarative barrier trial.                       |
+
+**No lobby trial.** JATOS puts each arriving participant in a group with room, and the study's batch
+caps groups at two active members (`maxActiveMembers: 2`, set by `build:jatos:ultimatum`). The
+adapter seals (fixes) the group once it is full, so the page shows "Waiting for another player…" and
+waits with `await jsPsych.multiplayer.waitForGroup({ timeout })` before `jsPsych.run`. A third arrival
+starts a new group instead of joining a game in progress, and the plugins' defaults follow the sealed
+group: the role trial waits for both members, and each barrier depends on the other member.
 
 The key rewrite: an earlier version assigned roles by hand in the lobby's `on_finish` (sort the
-participant ids, take the first two as proposer/responder, route the rest to a "game full" screen).
-That block is now a single `plugin-multiplayer-role` trial. Every client independently computes the
-**same** role map from the shared group session — no coordinator, no extra round-trip. Ordering is
-by `joinedAt`, a timestamp the role plugin stamps **once, at its own trial's start** (so
-near-simultaneously on the clients leaving the lobby together — this is not the moment a client
-first connected), with ties broken deterministically by participant id.
+participant ids, take the first two as proposer/responder). That block is now a single
+`plugin-multiplayer-role` trial. Every client independently computes the **same** role map — no
+coordinator, no extra round-trip. Ordering is by `joinedAt`, a timestamp the role plugin writes
+**once**, to the session scope of the shared data, at its own trial's start (this is not the moment a
+client first connected), with ties broken deterministically by participant id.
 
-Two details in the demo make that ordering trustworthy, and they are worth copying:
+**The offer and decision share one named scope.** During a trial, reads and writes default to that
+trial's own part of the shared data, so the responder's "wait for the offer" trial would never see
+what the proposer's trial wrote. The three exchange trials (`proposerWaitTrial`, `responderWaitTrial`,
+`responderSendDecisionTrial`) therefore all set `multiplayer_scope: "offer_exchange"`: they read and
+write one shared part of the data. Each barrier sets `save_group: true`, so its `on_finish` reads the
+other player's offer or decision from the trial's `group` data field.
 
-1. **The `ready` predicate checks field readiness, not just a head-count.** Supplying a custom
-   `ready` _replaces_ the plugin's strategy-derived gate, so a count-only predicate would let each
-   client assign the instant it sees the peer's lobby entry — before the peer's `joinedAt` has
-   landed. Both clients would then sort the peer's missing timestamp as 0, each conclude the _other_
-   is the proposer, and both would wait for an offer until the barriers time out. The demo's
-   predicate therefore requires every present entry to carry `joinedAt` (or to be an unmistakably
-   mid-game entry, for a spectator arriving during a round).
-2. **Every mid-game push spreads `joinedAt` back in.** The sync plugin pushes `push_data` verbatim
-   and the JATOS adapter replaces the participant's whole group-session entry, so a bare
-   `{ offer }` push would erase `joinedAt`. The demo captures it in `assignRoles`'s `on_finish` and
-   includes it in every later push.
+### Dropouts
 
-With both in place, a spectator who joins mid-game still sees the two players' original timestamps
-and computes the same proposer/responder pair, so the pair stays stable as long as client clocks are
-reasonably sane (`joinedAt` comes from each client's own clock, so a late joiner with a badly skewed
-clock could in principle sort ahead of the original pair).
+If the other player **leaves mid-game**, the barrier waiting on them (`proposerWaitTrial`,
+`responderWaitTrial`) ends. The adapter reports who is connected; once the partner has been
+disconnected for longer than the dropout timeout (10 s by default), they count as `left`, the barrier
+ends with `multiplayer_outcome: "participant_left"`, and the timeline shows a brief "the other player
+left" screen instead of hanging forever. A lost connection on this client's side ends the barrier with
+`multiplayer_outcome: "connection_lost"` and takes the same route. If the role trial ends without
+roles (the partner left before it could assign them), the demo routes that client to a brief "could
+not form a group" screen rather than letting it fall off the end of the timeline onto a blank page.
 
-### Population model
-
-The lobby admits when **at least two** players are present, and the role trial assigns the first two
-as the active pair while any later **extra arrival** becomes a `spectator` routed to a "game is full"
-screen — so over-enrollment is handled gracefully rather than left waiting. (A stricter "exactly two"
-capped variant is possible with the role plugin's `group_size: 2` instead of `overflow_role`; see
-`plugin-multiplayer-role`'s own example.) If role assignment itself times out — a peer vanished
-between the lobby and the role trial — the role trial ends with no role, and the demo routes that
-client to a brief "could not form a group" screen rather than letting it fall off the end of the
-timeline onto a blank page.
-
-The other failure open recruitment produces is an active player **leaving mid-game**. Each barrier that
-waits on the other player (`proposerWaitTrial`, `responderWaitTrial`) names that player in
-`participants`. The adapter reports who is connected; once the partner has been disconnected for longer
-than the dropout timeout (10 s by default), they count as `left`, the barrier ends with
-`partner_left: true`, and the timeline shows a brief "the other player left" screen instead of hanging
-forever. A lost connection on this client's side ends the barrier with `connection_lost: true` and takes
-the same route. The lobby sets `participants: []` and has no timeout: indefinite waiting is correct there
-(you genuinely want to wait for a partner to arrive).
+A participant who reloads the page keeps their ID but has restarted their experiment, so the group
+counts them as left; their page sees `jsPsych.multiplayer.restarted === true` and shows a "you can't
+rejoin" screen. A failed `connect()`, or no partner arriving before the `waitForGroup()` timeout,
+shows a message too.
 
 Each mid-game barrier also keeps a `timeout` (`PARTNER_TIMEOUT_MS` at the top of the file) as a backstop
 for a partner who stays connected but never acts. That backstop decides alone, with no "we both agree
@@ -471,7 +486,7 @@ This example is **illustrative** — it cannot run from a single browser tab tod
 
 1. a jsPsych core that includes the multiplayer API ([jsPsych#3694](https://github.com/jspsych/jsPsych/pull/3694)), not yet in a released `jspsych`;
 2. the **JATOS** environment, so the `jatos` global and a group study exist; and
-3. at least **two** real participants in the same JATOS group.
+3. at least **two** real participants (JATOS groups them in twos).
 
 The `<script>` tags load the three packages from their built `dist/` in this repo. `dist/` is not
 checked in, so build the packages first from the repo root:
@@ -491,9 +506,10 @@ npm run build:jatos:ultimatum      # → dist/ultimatum-jatos.jzip
 
 This flattens the assets (resolving the CDN `<script src>` above to their installed node_modules
 copies, since a JATOS study has to be self-contained), writes the `.jas` metadata with
-`groupStudy: true`, and zips the result. The batch is left **uncapped** on purpose: this demo's
-population model admits extra arrivals as `spectator`s (see above), which a two-member cap would
-make unreachable. The archive bundles the repo's jsPsych core, which is the vendored #3694 preview
+`groupStudy: true` and a batch capped at two active members per group (see above), and zips the
+result. If you import the study some other way, set the batch's max active members to 2 yourself:
+without a cap, no group ever counts as full, so none is sealed and `waitForGroup()` waits until its
+timeout. The archive bundles the repo's jsPsych core, which is the vendored #3694 preview
 build (see `chat-room.html`'s "Running it" section), so the study runs against the same API as the
 examples.
 
@@ -521,28 +537,34 @@ speed, and see their rank between questions.
 It is the repo's demo of the **asymmetric** pattern — one authoritative driver plus many followers —
 and the counterpart to `ultimatum-game-jatos.html`, where every client runs the same timeline and
 coordination is by deterministic consensus. The host half is **not a jsPsych timeline at all**: it's
-vanilla JS driving the adapter directly, because a presenter screen reacts continuously rather than
-advancing through trials.
+vanilla JS calling `jsPsych.multiplayer` without running a timeline, because a presenter screen
+reacts continuously rather than advancing through trials.
 
 ### What it demonstrates
 
 | Package                                          | Role in the demo                                                                                                          |
 | ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------- |
-| `@jspsych-multiplayer/adapter-multiplayer-jatos` | The network backend — JATOS group session + channel. Used **two ways**: through the multiplayer API by players, and **directly** (`connect`/`push`/`subscribe`/`getAll`) by the host page. |
-| `@jspsych-multiplayer/plugin-multiplayer-sync`   | Every one of the player's four "wait for the host to advance" points is a single declarative barrier trial.                |
+| `@jspsych-multiplayer/adapter-multiplayer-jatos` | The network backend — JATOS group session + channel. The players use it from a jsPsych timeline; the host page calls `jsPsych.multiplayer` (`connect`/`update`/`subscribe`) with no timeline. |
+
+Everything both roles share lives in the **session scope** of the shared data. The host runs no
+trials, so its writes go there by default; the players pass `{ scope: "session" }` on every protocol
+read and write, since during a trial calls default to that trial's own part of the data. For the same
+reason each of the player's four "wait for the host to advance" points is one call to a small
+`hostBarrier()` helper around `jsPsych.multiplayer.wait(condition, { scope: "session", participants: [hostId] })`,
+rather than a `plugin-multiplayer-sync` trial (whose `wait_for` sees only its own trial's data).
 
 The composition detail worth copying is the **monotonic step counter**. The host advances by
 overwriting its `phase` field, and JATOS doesn't guarantee a client observes every intermediate
 snapshot — so the obvious barrier, `wait_for: g => g[hostId]?.phase === "reveal"`, **deadlocks**: a
 lagging player whose snapshot jumps straight from `question` to `leaderboard` is left with a
-permanently unsatisfiable condition and hangs forever. Every host push therefore also carries a
+permanently unsatisfiable condition and hangs forever. Every host write therefore also carries a
 `step` that only ever increases, and players wait on `hostStepValue(group) >= phaseStep(…)`. A `>=`
 test against a monotonic value can never be missed — once true it stays true. Generalized: **on a
 snapshot-based transport, barrier predicates must be monotone.** "State currently equals X" is a
 latent deadlock; "state has reached at least X" is not.
 
 `questions.js` holds the answer key, and the protocol keeps correctness a **host** decision — players
-push only their `choice`, and the host publishes `correctChoice` at reveal. The demo does load the key
+write only their `choice`, and the host publishes `correctChoice` at reveal. The demo does load the key
 on both roles (one file serves both), so a player can read it in devtools; for anything scored for
 real, serve it host-only. Full design notes, including why this demo hand-rolls its leaderboard,
 timer, and answer buttons instead of composing the scoreboard/countdown/choice plugins, are in
@@ -581,9 +603,21 @@ Adapted from the author's group-quiz demo in jsPsych#3694 (MIT-licensed).
 
 The same game as `ultimatum-game-jatos.html`, wired to `adapter-multiplayer-local` instead of
 `adapter-multiplayer-jatos` (and without the `jatos.onLoad` wrapper), so it runs from **two browser
-tabs on one machine, no server** — the same local-adapter setup `chat-room.html` uses. Everything
-else in the timeline (role assignment, sync barriers, outcome screens) is identical to
-`ultimatum-game-jatos.html`; see that section above for the full design notes.
+tabs on one machine, no server** — the same local-adapter setup `chat-room.html` uses. The game
+itself (sync barriers, the shared `offer_exchange` scope, outcome screens) is the same as
+`ultimatum-game-jatos.html`; see that section above for the design notes.
+
+What changes is how the pair forms. The local adapter doesn't form groups — participants share a
+link — so a lobby trial waits until two players are here, and the role trial uses open recruitment:
+the first two to reach it become proposer and responder, and any later **extra arrival** becomes a
+`spectator` routed to a "game is full" screen. Its custom `ready` predicate checks field readiness,
+not just a head-count: a custom `ready` _replaces_ the plugin's own gate, so a count-only predicate
+could assign the instant a peer appears, before the peer's `joinedAt` has arrived, and the two clients
+could disagree about who is the proposer. The predicate therefore requires every participant in the
+snapshot to carry `joinedAt`. The snapshot holds only participants who have reached the role trial
+(with their session data), so a spectator who arrives mid-game still sees the two players' original
+timestamps and computes the same pair. The barriers name the other player in `participants`, so a
+spectator leaving never ends the round.
 
 Use this file for iterating on the game logic itself. Use `ultimatum-game-jatos.html` when you want to test
 against a real JATOS deployment.
@@ -598,8 +632,9 @@ file in one tab, then copy the full URL (including `?mp_session=…`) into a sec
 
 The same game as `ultimatum-game-jatos.html`, wired to `adapter-multiplayer-firebase`, so it runs
 across **separate devices, browsers, and machines** with only a free Firebase project — real
-cross-device multiplayer, no server to host. Everything in the timeline is identical to the other two
-variants; only the network backend changes.
+cross-device multiplayer, no server to host. It uses a shared `?mp_session=…` link rather than
+matchmaking, so its timeline is identical to `ultimatum-game-local.html`'s (lobby, open recruitment
+with spectators); only the network backend changes.
 
 Unlike the other examples, the Firebase adapter is loaded as an **ES module** (its browser build
 externalizes the Firebase SDK), so the page uses an `<script type="importmap">` that resolves the
@@ -643,7 +678,7 @@ assets. This is the **sequential** condition (one target ⇒ a single click).
 
 Same as `chat-room.html`: build the packages, serve the repo over http(s), open the file in one tab,
 then copy the full URL (including `?mp_session=…`) into a second tab so a second player joins. The
-first tab becomes the director, the second the matcher.
+role trial makes one tab the director and the other the matcher, at random.
 
 ## `reference-game-match.html`
 

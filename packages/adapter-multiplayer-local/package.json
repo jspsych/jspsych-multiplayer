@@ -41,6 +41,9 @@
     "url": "https://github.com/jspsych/jspsych-multiplayer/issues"
   },
   "homepage": "https://github.com/jspsych/jspsych-multiplayer/blob/main/packages/adapter-multiplayer-local/README.md",
+  "dependencies": {
+    "@jspsych-multiplayer/utils": "^0.0.0"
+  },
   "peerDependencies": {
     "jspsych": ">=8.0.0"
   },

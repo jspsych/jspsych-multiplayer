@@ -5,7 +5,7 @@
     <title>jsPsychAdapterMultiplayerJatos Example</title>
     <!-- The multiplayer API (jsPsych#3694) isn't in a jsPsych release yet, so load a preview build
          of the PR, pinned to one build. Switch back to https://unpkg.com/jspsych once it's released. -->
-    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@5cb6b05bec8ca0e409145453220803b408cd7e50/packages/jspsych/dist/index.browser.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@4df7fbb672806086c7e118e53aba2262f27edf68/packages/jspsych/dist/index.browser.min.js"></script>
     <script src="https://unpkg.com/@jspsych/plugin-html-keyboard-response"></script>
     <!-- JATOS serves jatos.js from the study root, but the study page has to load it itself; it is
          not injected automatically. Without this tag the `jatos` global is undefined and the adapter
@@ -16,7 +16,7 @@
     <script src="../dist/index.browser.min.js"></script>
     <link
       rel="stylesheet"
-      href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@5cb6b05bec8ca0e409145453220803b408cd7e50/packages/jspsych/css/jspsych.css"
+      href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@4df7fbb672806086c7e118e53aba2262f27edf68/packages/jspsych/css/jspsych.css"
     />
   </head>
 
@@ -46,10 +46,26 @@
     ];
 
     // Connect the adapter (backed by the JATOS group session) before running the timeline. The IIFE
-    // build exposes the adapter class as the global `jsPsychAdapterMultiplayerJatos`. Options:
-    // connectTimeoutMs (default 20000) and closeAfterReconnectingMs (default null: never give up) — see the README.
+    // build exposes the adapter class as the global `jsPsychAdapterMultiplayerJatos`. Its one
+    // option is sealWhenFull (default true). Timeouts are options of connect() itself, e.g.
+    // connect(adapter, { connectTimeout: 20000, reconnectTimeout: 5 * 60_000 }) — see the README.
     jatos.onLoad(async () => {
-      await jsPsych.multiplayer.connect(new jsPsychAdapterMultiplayerJatos());
+      try {
+        await jsPsych.multiplayer.connect(new jsPsychAdapterMultiplayerJatos());
+      } catch (error) {
+        // Show a failed connect instead of leaving a blank page
+        console.error(error);
+        document.body.innerHTML = "<p>Couldn't connect to the study server. Please reload the page.</p>";
+        return;
+      }
+      // A reload keeps the participant's ID, but the group counts them as having left
+      if (jsPsych.multiplayer.restarted) {
+        document.body.innerHTML = "<p>You reloaded the page, so you can't rejoin this study.</p>";
+        return;
+      }
+      // With groups of a fixed size (the batch's max active members), wait until JATOS has
+      // filled and sealed this participant's group before starting.
+      await jsPsych.multiplayer.waitForGroup();
       await jsPsych.run(timeline);
     });
   </script>

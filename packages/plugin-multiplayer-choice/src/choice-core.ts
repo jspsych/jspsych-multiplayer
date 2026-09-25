@@ -5,15 +5,15 @@
  * per-option count and a plurality winner. Like the scoreboard core, it is deterministic and
  * jsPsych-free so it can be unit-tested and reused without a live group session: every client
  * reading the same snapshot agrees on the same set of choices, the same tally, and the same winner.
- * Each participant stores their pick under the trial's `data_key` as `{ index, label }`; a slot may
- * exist without a choice (the participant pushed *other* keys), so a valid, in-range integer
- * `index` is what counts as "has chosen", never mere presence of the slot.
+ * Each participant stores their pick under a key (the plugin uses `choice`) as `{ index, label }`;
+ * a participant may have data without a choice (they wrote *other* keys), so a valid, in-range
+ * integer `index` is what counts as "has chosen", never mere presence of their data.
  */
 
-/** A group-session snapshot: participantId -> that participant's pushed data. Matches `GroupSessionData`. */
+/** A shared-data snapshot: participantId -> that participant's data. Matches `GroupSessionData`. */
 export type GroupSessionData = Record<string, Record<string, unknown>>;
 
-/** One participant's decision as stored under the trial's `data_key`. */
+/** One participant's decision as stored in the trial's shared data. */
 export interface Choice {
   /** Zero-based index into the trial's `choices` array. */
   index: number;
@@ -64,9 +64,9 @@ export function readChoice(
  * How many participants in the snapshot have recorded a valid choice under `dataKey`. Pass
  * `optionCount` (the trial's number of `choices`) to count only choices that fall within the option
  * range — the same choices `tally` will actually count. Keeping the barrier's count and the tally in
- * agreement matters when a slot can hold an out-of-range index (e.g. a stale choice left under a
- * reused `data_key` from an earlier trial that had more options); without the bound the barrier
- * could lift on a choice the tally then drops, so `n_votes` would under-report. Omitting
+ * agreement matters when a participant's data holds an out-of-range index (e.g. written by a peer
+ * running a different version of the trial); without the bound the barrier could lift on a choice
+ * the tally then drops, so `n_players` would under-report. Omitting
  * `optionCount` counts every valid-integer-index choice (no upper bound).
  */
 export function countChosen(

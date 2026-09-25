@@ -40,7 +40,7 @@ describe("readChoice", () => {
     expect(readChoice({ choice: { index: NaN } }, "choice")).toBeNull();
   });
 
-  it("reads from the configured data_key, not a hard-coded one", () => {
+  it("reads from the given key, not a hard-coded one", () => {
     expect(readChoice({ vote: { index: 0, label: "A" } }, "vote")).toEqual({
       index: 0,
       label: "A",
@@ -61,7 +61,7 @@ describe("countChosen", () => {
   });
 
   it("bounds by optionCount so it agrees with what tally counts (out-of-range choices excluded)", () => {
-    // A stale pick (e.g. left under a reused data_key by an earlier trial that had more options).
+    // An out-of-range pick (e.g. from a peer running a version of the trial with more options).
     const group: GroupSessionData = {
       a: { choice: { index: 0, label: "A" } },
       b: { choice: { index: 1, label: "B" } },

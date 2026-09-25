@@ -1,23 +1,36 @@
+import { readFileSync } from "fs";
+import { join as joinPath } from "path";
+
 import { AdapterConnectOptions, initJsPsych } from "jspsych";
 
+import rules from "../database.rules.json";
 import { FakeBackend, FakeRtdb } from "./fake-backend";
 import FirebaseAdapter, { FirebaseAdapterOptions } from ".";
 
 /** Flush pending microtasks and macrotasks (the async reconnect handler). */
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
-const PREFIX = "mp-sessions";
+const NS = "mp-sessions";
 const SESSION = "sess1";
-const slot = (id: string) => `${PREFIX}/${SESSION}/${id}`;
-const presence = (id: string) => `${PREFIX}-presence/${SESSION}/${id}`;
-const membership = (uid: string) => `${PREFIX}-memberships/${uid}`;
+const slot = (id: string, session = SESSION) => `${NS}/${session}/${id}`;
+const presence = (id: string, session = SESSION) => `${NS}-presence/${session}/${id}`;
+const owner = (id: string, session = SESSION) => `${NS}-owners/${session}/${id}`;
+const membership = (uid: string) => `${NS}-memberships/${uid}`;
+const PARTICIPANT_KEY = `jspsych-multiplayer-firebase:${NS}:participant`;
+
+beforeEach(() => {
+  sessionStorage.clear();
+});
+
+afterEach(() => {
+  jest.restoreAllMocks();
+});
 
 function makeAdapter(backend: FakeBackend, overrides: FirebaseAdapterOptions = {}) {
   return new FirebaseAdapter({
     sessionId: SESSION,
     participantId: "me",
     backend,
-    connectTimeoutMs: 50,
     ...overrides,
   });
 }
@@ -27,6 +40,7 @@ function makeOptions(signal = new AbortController().signal) {
     signal,
     onChange: jest.fn(),
     onStatus: jest.fn(),
+    onResumed: jest.fn(),
   } satisfies AdapterConnectOptions;
 }
 
@@ -57,20 +71,38 @@ describe("FirebaseAdapter — connect", () => {
     await expect(adapter.connect(makeOptions())).rejects.toThrow(/security-rules denial/);
   });
 
-  it("rejects when no snapshot ever arrives (timeout)", async () => {
-    const adapter = makeAdapter(new FakeBackend({ neverSnapshot: true }));
-    await expect(adapter.connect(makeOptions())).rejects.toThrow(/timed out/);
-  });
-
-  it("tears its listeners down on a timeout, so a late snapshot can't reach the core", async () => {
+  it("waits for the first snapshot until the signal aborts, then tears its listeners down", async () => {
     const backend = new FakeBackend({ deferInitialSnapshot: true });
-    const options = makeOptions();
+    const controller = new AbortController();
+    const options = makeOptions(controller.signal);
 
-    await expect(makeAdapter(backend).connect(options)).rejects.toThrow(/timed out/);
+    const connecting = makeAdapter(backend).connect(options);
+    await flush();
+    controller.abort();
 
+    await expect(connecting).rejects.toThrow(/cancelled/);
     expect(backend.rtdb.listenerCount()).toBe(0);
     backend.rtdb.set(slot("peer"), JSON.stringify({ hello: "world" }));
     expect(options.onChange).not.toHaveBeenCalled();
+  });
+
+  it("leaves the time limit to the core's connectTimeout", async () => {
+    const jsPsych = initJsPsych();
+    const backend = new FakeBackend({ neverSnapshot: true });
+    await expect(
+      jsPsych.multiplayer.connect(makeAdapter(backend), { connectTimeout: 20 }),
+    ).rejects.toMatchObject({ name: "MultiplayerError", code: "timeout" });
+    expect(backend.goOfflineCalls).toBe(1);
+  });
+
+  it("rejects the removed options with a pointer to their replacements", () => {
+    const backend = new FakeBackend();
+    expect(() => makeAdapter(backend, { pathPrefix: "x" } as FirebaseAdapterOptions)).toThrow(
+      /namespace/,
+    );
+    expect(() => makeAdapter(backend, { connectTimeoutMs: 5 } as FirebaseAdapterOptions)).toThrow(
+      /connectTimeout/,
+    );
   });
 
   it("releases everything when arming onDisconnect fails, and a retry works", async () => {
@@ -104,6 +136,16 @@ describe("FirebaseAdapter — connect", () => {
     expect(second.getAll().me).toEqual({ still: "here" });
     expect(secondOptions.onChange).toHaveBeenCalled();
   });
+
+  it("uses a namespace for every node", async () => {
+    const backend = new FakeBackend({ uid: "u" });
+    const connection = await makeAdapter(backend, { namespace: "study" }).connect(makeOptions());
+    await connection.push({ x: 1 });
+    expect(backend.rtdb.get(`study/${SESSION}/me`)).toBe(JSON.stringify({ x: 1 }));
+    expect(backend.rtdb.get(`study-presence/${SESSION}/me`)).toBe("1");
+    expect(backend.rtdb.get(`study-owners/${SESSION}/me`)).toBe("u");
+    expect(backend.rtdb.get("study-memberships/u")).toBe(SESSION);
+  });
 });
 
 describe("FirebaseAdapter — cancelling connect()", () => {
@@ -133,19 +175,6 @@ describe("FirebaseAdapter — cancelling connect()", () => {
     expect(backend.rtdb.listenerCount()).toBe(0);
     expect(backend.rtdb.get(presence("me"))).toBeUndefined();
   });
-
-  it("stops waiting for the first snapshot as soon as the signal is aborted", async () => {
-    const backend = new FakeBackend({ deferInitialSnapshot: true });
-    const controller = new AbortController();
-    const adapter = makeAdapter(backend, { connectTimeoutMs: 60000 });
-
-    const connecting = adapter.connect(makeOptions(controller.signal));
-    await flush();
-    controller.abort();
-
-    await expect(connecting).rejects.toThrow(/cancelled/);
-    expect(backend.rtdb.listenerCount()).toBe(0);
-  });
 });
 
 describe("FirebaseAdapter — data", () => {
@@ -159,10 +188,15 @@ describe("FirebaseAdapter — data", () => {
     expect(connection.getAll().me).toEqual({ offer: 5 });
   });
 
-  it("round-trips an empty array (RTDB would prune it if stored raw)", async () => {
+  it("returns each stored payload unchanged", async () => {
     const connection = await makeAdapter(new FakeBackend()).connect(makeOptions());
-    await connection.push({ strokes: [] });
-    expect(connection.getAll().me).toEqual({ strokes: [] });
+    const payload = {
+      $mp: { v: 1, instance: "i", epoch: 3, left: ["x"] },
+      session: { strokes: [], nested: [[1, 2], []], empty: {} },
+      scopes: { "0": { a: null } },
+    };
+    await connection.push(payload);
+    expect(connection.getAll().me).toEqual(payload);
   });
 
   it("calls onChange when another participant writes", async () => {
@@ -181,6 +215,12 @@ describe("FirebaseAdapter — data", () => {
     const connection = await makeAdapter(new FakeBackend()).connect(makeOptions());
     await connection.disconnect();
     await expect(connection.push({ a: 1 })).rejects.toThrow(/closed connection/);
+  });
+
+  it("push() rejects when the write fails", async () => {
+    const backend = new FakeBackend({ denyWrite: (path) => path === slot("me") });
+    const connection = await makeAdapter(backend).connect(makeOptions());
+    await expect(connection.push({ a: 1 })).rejects.toThrow(/PERMISSION_DENIED/);
   });
 });
 
@@ -218,6 +258,21 @@ describe("FirebaseAdapter — presence", () => {
 
     expect(a.connection.connectedParticipants()).toEqual(["a"]);
   });
+
+  it("restores its presence and calls onResumed when the server removed it without a drop", async () => {
+    const backend = new FakeBackend();
+    const options = makeOptions();
+    await makeAdapter(backend).connect(options);
+
+    // e.g. the server timed the channel out, but .info/connected never went false here
+    backend.rtdb.remove(presence("me"));
+    await flush();
+
+    expect(backend.rtdb.get(presence("me"))).toBe("1");
+    expect(backend.isArmed(presence("me"))).toBe(true);
+    expect(options.onResumed).toHaveBeenCalledTimes(1);
+    expect(options.onStatus).not.toHaveBeenCalled();
+  });
 });
 
 describe("FirebaseAdapter — own connection status", () => {
@@ -226,10 +281,11 @@ describe("FirebaseAdapter — own connection status", () => {
     const options = makeOptions();
     const connection = await makeAdapter(backend).connect(options);
 
-    backend.simulateBlip(); // the server removes our presence, we drop, then reconnect
+    backend.simulateBlip(); // we drop, the server removes our presence, then we reconnect
     await flush();
 
     expect(options.onStatus.mock.calls).toEqual([["reconnecting"], ["connected"]]);
+    expect(options.onResumed).not.toHaveBeenCalled();
     expect(backend.rtdb.get(presence("me"))).toBe("1");
     expect(backend.isArmed(presence("me"))).toBe(true);
     expect(connection.connectedParticipants()).toEqual(["me"]);
@@ -255,7 +311,7 @@ describe("FirebaseAdapter — own connection status", () => {
     const options = makeOptions();
     await makeAdapter(backend).connect(options);
 
-    backend.rtdb.cancelListeners(`${PREFIX}/${SESSION}`);
+    backend.rtdb.cancelListeners(`${NS}/${SESSION}`);
 
     expect(options.onStatus.mock.calls).toEqual([["closed"]]);
     expect(console.error).toHaveBeenCalled();
@@ -315,15 +371,30 @@ describe("FirebaseAdapter — disconnect", () => {
   });
 });
 
-describe("FirebaseAdapter — session binding", () => {
-  it("uid mode registers a first-write-wins membership record before the session listener", async () => {
+describe("FirebaseAdapter — session binding and slot claims", () => {
+  it("registers a membership record and a slot claim by default, before the session listener", async () => {
     const backend = new FakeBackend({ uid: "uid-1" });
-    const adapter = makeAdapter(backend, { participantId: undefined, useUidAsParticipantId: true });
+    const order: string[] = [];
+    jest.spyOn(backend, "set").mockImplementation(async (path, value) => {
+      order.push(path);
+      backend.rtdb.set(path, value);
+    });
+    const onValue = jest.spyOn(backend, "onValue");
+    onValue.mockImplementation((path, ...rest) => {
+      order.push(`listen ${path}`);
+      return FakeBackend.prototype.onValue.call(backend, path, ...rest);
+    });
 
-    await adapter.connect(makeOptions());
+    await makeAdapter(backend).connect(makeOptions());
 
-    // The record is the RAW sessionId (the rules compare it unquoted with === $session).
+    // Both are RAW ids (the rules compare them unquoted)
     expect(backend.rtdb.get(membership("uid-1"))).toBe(SESSION);
+    expect(backend.rtdb.get(owner("me"))).toBe("uid-1");
+    expect(order.slice(0, 3)).toEqual([
+      membership("uid-1"),
+      owner("me"),
+      `listen ${NS}/${SESSION}`,
+    ]);
   });
 
   it("a denied membership write rejects connect() with a descriptive error and no live listener", async () => {
@@ -331,32 +402,34 @@ describe("FirebaseAdapter — session binding", () => {
       uid: "uid-1",
       denyWrite: (path) => path === membership("uid-1"),
     });
-    const adapter = makeAdapter(backend, { participantId: undefined, useUidAsParticipantId: true });
 
-    await expect(adapter.connect(makeOptions())).rejects.toThrow(/session membership/);
+    await expect(makeAdapter(backend).connect(makeOptions())).rejects.toThrow(/session membership/);
     expect(backend.rtdb.listenerCount()).toBe(0);
   });
 
-  it("sessionBinding: false skips the membership write (quick-start rules)", async () => {
-    const backend = new FakeBackend({ uid: "uid-1" });
-    const adapter = makeAdapter(backend, {
-      participantId: undefined,
-      useUidAsParticipantId: true,
-      sessionBinding: false,
-    });
-
-    await adapter.connect(makeOptions());
-
-    expect(backend.rtdb.get(membership("uid-1"))).toBeUndefined();
+  it("a denied slot claim (another identity owns the id) rejects connect()", async () => {
+    const backend = new FakeBackend({ uid: "uid-2", denyWrite: (path) => path === owner("me") });
+    await expect(makeAdapter(backend).connect(makeOptions())).rejects.toThrow(
+      /claiming participant "me"/,
+    );
+    expect(backend.rtdb.listenerCount()).toBe(0);
   });
 
-  it("membership survives disconnect() (the binding is the security property)", async () => {
+  it("sessionBinding: false skips the membership write but still claims the slot", async () => {
     const backend = new FakeBackend({ uid: "uid-1" });
-    const adapter = makeAdapter(backend, { participantId: undefined, useUidAsParticipantId: true });
-    const connection = await adapter.connect(makeOptions());
+    await makeAdapter(backend, { sessionBinding: false }).connect(makeOptions());
+
+    expect(backend.rtdb.get(membership("uid-1"))).toBeUndefined();
+    expect(backend.rtdb.get(owner("me"))).toBe("uid-1");
+  });
+
+  it("membership and slot claim survive disconnect() (they are the security property)", async () => {
+    const backend = new FakeBackend({ uid: "uid-1" });
+    const connection = await makeAdapter(backend).connect(makeOptions());
     await connection.disconnect();
 
     expect(backend.rtdb.get(membership("uid-1"))).toBe(SESSION);
+    expect(backend.rtdb.get(owner("me"))).toBe("uid-1");
   });
 });
 
@@ -374,14 +447,44 @@ describe("FirebaseAdapter — participant ids", () => {
 
     expect(connection.participantId).toBe("uid-123");
     expect(connection.getAll()["uid-123"]).toEqual({ a: 1 });
+    expect(sessionStorage.getItem(PARTICIPANT_KEY)).toBeNull();
   });
 
-  it("reuses a minted participantId across connections made with the same adapter", async () => {
+  it("reuses the participantId across connections made with the same adapter", async () => {
     const adapter = new FirebaseAdapter({ sessionId: SESSION, backend: new FakeBackend() });
     const first = await adapter.connect(makeOptions());
     await first.disconnect();
     const second = await adapter.connect(makeOptions());
     expect(second.participantId).toBe(first.participantId);
+  });
+
+  it("keeps the default participantId for this tab, so a reload is the same participant", async () => {
+    const first = new FirebaseAdapter({ sessionId: SESSION, backend: new FakeBackend() });
+    const before = await first.connect(makeOptions());
+    expect(sessionStorage.getItem(PARTICIPANT_KEY)).toBe(before.participantId);
+
+    // A reload: a new page constructs a new adapter in the same tab
+    const reloaded = new FirebaseAdapter({ sessionId: SESSION, backend: new FakeBackend() });
+    const after = await reloaded.connect(makeOptions());
+    expect(after.participantId).toBe(before.participantId);
+
+    // A new tab starts with empty sessionStorage
+    sessionStorage.clear();
+    const newTab = new FirebaseAdapter({ sessionId: SESSION, backend: new FakeBackend() });
+    expect((await newTab.connect(makeOptions())).participantId).not.toBe(before.participantId);
+  });
+
+  it("persistParticipant: false mints a new participantId for every page load", async () => {
+    const make = () =>
+      new FirebaseAdapter({
+        sessionId: SESSION,
+        persistParticipant: false,
+        backend: new FakeBackend(),
+      });
+    const a = await make().connect(makeOptions());
+    const b = await make().connect(makeOptions());
+    expect(a.participantId).not.toBe(b.participantId);
+    expect(sessionStorage.getItem(PARTICIPANT_KEY)).toBeNull();
   });
 
   it("throws when constructed with both useUidAsParticipantId and a custom participantId", () => {
@@ -397,15 +500,34 @@ describe("FirebaseAdapter — participant ids", () => {
     ["dollar", "a$b"],
     ["hash", "a#b"],
     ["open-bracket", "a[b"],
+    ["empty", ""],
   ])("rejects a participantId containing a %s", (_label, id) => {
     expect(() => new FirebaseAdapter({ sessionId: SESSION, participantId: id })).toThrow(
-      /must not contain/,
+      /participantId must be a non-empty string without/,
     );
   });
 
-  it("rejects a sessionId containing a forbidden char", () => {
+  it("rejects a sessionId or namespace containing a forbidden char", () => {
     expect(() => new FirebaseAdapter({ sessionId: "a/b", participantId: "me" })).toThrow(
-      /must not contain/,
+      /sessionId must be/,
+    );
+    expect(
+      () => new FirebaseAdapter({ sessionId: SESSION, participantId: "me", namespace: "a.b" }),
+    ).toThrow(/namespace must be/);
+  });
+
+  it("reads the session from ?mp_session=, or writes a new one into the URL", () => {
+    window.history.replaceState(null, "", "/?mp_session=from-url");
+    const fromUrl = new FirebaseAdapter({ participantId: "me", backend: new FakeBackend() });
+    window.history.replaceState(null, "", "/");
+    const minted = new FirebaseAdapter({ participantId: "me", backend: new FakeBackend() });
+    const url = new URL(window.location.href).searchParams.get("mp_session");
+    expect(url).toBeTruthy();
+    return Promise.all([fromUrl.connect(makeOptions()), minted.connect(makeOptions())]).then(
+      ([a, b]) => {
+        expect(a.sessionId).toBe("from-url");
+        expect(b.sessionId).toBe(url);
+      },
     );
   });
 });
@@ -435,14 +557,9 @@ describe("FirebaseAdapter — with the jsPsych multiplayer core", () => {
     await a.multiplayer.disconnect();
   });
 
-  it("a participant whose connection comes back after they left rejoins", async () => {
+  it("a participant whose network comes back before the dropout timeout is connected again", async () => {
     const rtdb = new FakeRtdb();
-    const rejoined = jest.fn();
-    const a = initJsPsych();
-    await a.multiplayer.connect(
-      makeAdapter(new FakeBackend({ rtdb, uid: "a", ownsApp: false }), { participantId: "a" }),
-      { dropoutTimeout: 20, onParticipantRejoined: rejoined },
-    );
+    const a = await connectJsPsych(rtdb, "a");
     const bBackend = new FakeBackend({ rtdb, uid: "b", ownsApp: false });
     const b = initJsPsych();
     const statuses: string[] = [];
@@ -452,39 +569,48 @@ describe("FirebaseAdapter — with the jsPsych multiplayer core", () => {
     await b.multiplayer.update({ score: 1 });
 
     bBackend.simulateDrop();
-    await new Promise((resolve) => setTimeout(resolve, 40));
-    expect(a.multiplayer.presence().b).toBe("left");
+    expect(a.multiplayer.presence().b).toBe("away");
 
     bBackend.setConnected(true);
     await flush();
     expect(statuses).toEqual(["reconnecting", "connected"]);
     expect(a.multiplayer.presence().b).toBe("connected");
-    expect(rejoined).toHaveBeenCalledWith("b");
     expect(a.multiplayer.get("b")).toEqual({ score: 1 });
     await b.multiplayer.disconnect();
     await a.multiplayer.disconnect();
   });
 
-  it("a new page load under the same participant id is a restart, not a rejoin", async () => {
+  it("a reload of the tab comes back as the same participant, which the core reports as a restart", async () => {
     const rtdb = new FakeRtdb();
-    const rejoined = jest.fn();
-    const restarted = jest.fn();
+    const left = jest.fn();
     const a = initJsPsych();
     await a.multiplayer.connect(
       makeAdapter(new FakeBackend({ rtdb, uid: "a", ownsApp: false }), { participantId: "a" }),
-      { onParticipantRejoined: rejoined, onParticipantRestarted: restarted },
+      { onParticipantLeft: left },
     );
-    const before = await connectJsPsych(rtdb, "b");
+
+    // b uses the default, tab-persisted participant id
+    const page = () =>
+      new FirebaseAdapter({
+        sessionId: SESSION,
+        backend: new FakeBackend({ rtdb, uid: "uid-b", ownsApp: false }),
+      });
+    const before = initJsPsych();
+    await before.multiplayer.connect(page());
+    const b = before.multiplayer.participantId!;
     await before.multiplayer.update({ round: 2 });
     await before.multiplayer.disconnect();
 
-    // A reload: a new page (new jsPsych.multiplayer) with the same participant id
-    const after = await connectJsPsych(rtdb, "b");
-    expect(after.multiplayer.previousInstance).not.toBeNull();
-    expect(a.multiplayer.presence().b).toBe("left");
-    expect(restarted).toHaveBeenCalledWith("b");
-    expect(rejoined).not.toHaveBeenCalled();
-    await after.multiplayer.disconnect();
+    const after = initJsPsych();
+    await after.multiplayer.connect(page());
+    await flush();
+
+    expect(after.multiplayer.participantId).toBe(b);
+    expect(after.multiplayer.sessionId).toBe(SESSION);
+    expect(after.multiplayer.restarted).toBe(true);
+    expect(after.multiplayer.get(b)).toEqual({ round: 2 });
+    expect(a.multiplayer.presence()[b]).toBe("left");
+    expect(left).toHaveBeenCalledWith(b);
     await a.multiplayer.disconnect();
   });
 
@@ -502,8 +628,9 @@ describe("FirebaseAdapter — with the jsPsych multiplayer core", () => {
 
 describe("FirebaseAdapter — matchmaking", () => {
   const LOBBY = "study-1";
-  const lobbyPath = `${PREFIX}-lobby/${LOBBY}`;
-  const groupPath = (session: string) => `${PREFIX}-groups/${session}`;
+  const lobbyPath = `${NS}-lobby/${LOBBY}`;
+  const groupPath = (session: string) => `${NS}-groups/${session}`;
+  const seatPath = (session: string, seat: number) => `${groupPath(session)}/seats/${seat}`;
 
   function matchmakingAdapter(
     backend: FakeBackend,
@@ -513,8 +640,9 @@ describe("FirebaseAdapter — matchmaking", () => {
     return new FirebaseAdapter({
       participantId: id,
       backend,
-      connectTimeoutMs: 50,
       matchmaking: { lobby: LOBBY, groupSize: 2 },
+      // Every simulated participant shares jsdom's one sessionStorage, as if in one tab
+      persistParticipant: false,
       ...overrides,
     });
   }
@@ -525,7 +653,7 @@ describe("FirebaseAdapter — matchmaking", () => {
     overrides: FirebaseAdapterOptions = {},
     backendOptions = {},
   ) {
-    const backend = new FakeBackend({ rtdb, uid: id, ...backendOptions });
+    const backend = new FakeBackend({ rtdb, uid: `uid-${id}`, ...backendOptions });
     const options = makeOptions();
     const connection = await matchmakingAdapter(backend, id, overrides).connect(options);
     return { backend, options, connection };
@@ -564,20 +692,37 @@ describe("FirebaseAdapter — matchmaking", () => {
     expect(rtdb.get(lobbyPath)).toBe(c.connection.sessionId);
   });
 
+  it("stores each seat under the holder's uid, and the sealed roster as a copy of the seats", async () => {
+    const rtdb = new FakeRtdb();
+    const a = await arrive(rtdb, "a");
+    await arrive(rtdb, "b");
+    const session = a.connection.sessionId;
+    const seats = { "0": { uid: "uid-a", id: "a" }, "1": { uid: "uid-b", id: "b" } };
+    // Either member may be the one who seals: b as the last arrival, or a on seeing it full
+    expect(rtdb.valueAt(groupPath(session))).toEqual({
+      seats,
+      sealed: { by: expect.stringMatching(/^[01]$/), seats },
+    });
+    // Once sealed, no seat is armed for removal: the roster is final
+    await flush();
+    expect(a.backend.isArmed(seatPath(session, 0))).toBe(false);
+  });
+
   it("the session paths use the assigned session", async () => {
     const rtdb = new FakeRtdb();
     const { connection } = await arrive(rtdb, "a");
     const session = connection.sessionId;
-    expect(rtdb.get(`${PREFIX}-presence/${session}/a`)).toBe("1");
+    expect(rtdb.get(presence("a", session))).toBe("1");
+    expect(rtdb.get(owner("a", session))).toBe("uid-a");
     await connection.push({ x: 1 });
-    expect(rtdb.get(`${PREFIX}/${session}/a`)).toBe(JSON.stringify({ x: 1 }));
+    expect(rtdb.get(slot("a", session))).toBe(JSON.stringify({ x: 1 }));
   });
 
   it("a participant who leaves a filling group frees their place", async () => {
     const rtdb = new FakeRtdb();
     const a = await arrive(rtdb, "a");
     await a.connection.disconnect();
-    expect(rtdb.get(`${groupPath(a.connection.sessionId)}/a`)).toBeUndefined();
+    expect(rtdb.valueAt(seatPath(a.connection.sessionId, 0))).toBeNull();
 
     const b = await arrive(rtdb, "b");
     expect(b.connection.sessionId).toBe(a.connection.sessionId);
@@ -596,7 +741,7 @@ describe("FirebaseAdapter — matchmaking", () => {
     const rtdb = new FakeRtdb();
     const a = await arrive(rtdb, "a");
     a.backend.simulateDrop();
-    expect(rtdb.get(`${groupPath(a.connection.sessionId)}/a`)).toBeUndefined();
+    expect(rtdb.valueAt(seatPath(a.connection.sessionId, 0))).toBeNull();
 
     // Back before anyone took it: they take their place again
     a.backend.setConnected(true);
@@ -613,6 +758,7 @@ describe("FirebaseAdapter — matchmaking", () => {
     const b = await arrive(rtdb, "b");
     const c = await arrive(rtdb, "c");
     expect(c.connection.sessionId).toBe(b.connection.sessionId);
+    expect(b.connection.sessionId).toBe(a.connection.sessionId);
     expect(b.connection.group!()).toEqual({ size: 2, members: ["b", "c"], sealed: true });
 
     a.backend.setConnected(true);
@@ -626,6 +772,7 @@ describe("FirebaseAdapter — matchmaking", () => {
     const a = await arrive(rtdb, "a", three);
     const b = await arrive(rtdb, "b", three);
     await a.connection.sealGroup!();
+    expect(a.connection.group!()).toEqual({ size: 3, members: ["a", "b"], sealed: true });
     expect(b.connection.group!()).toEqual({ size: 3, members: ["a", "b"], sealed: true });
     await b.connection.sealGroup!();
 
@@ -633,22 +780,30 @@ describe("FirebaseAdapter — matchmaking", () => {
     expect(c.connection.sessionId).not.toBe(a.connection.sessionId);
   });
 
-  it("a late arrival moves on from a sealed group whose rules refuse its onDisconnect", async () => {
+  it("a late arrival moves on from a sealed group whose rules refuse its seat", async () => {
     const rtdb = new FakeRtdb();
     const three = { matchmaking: { lobby: LOBBY, groupSize: 3 } };
-    // Like the recommended rules: nothing under a sealed group may be written, even on disconnect
-    const sealedRules = {
-      denyOnDisconnect: (path: string) =>
-        rtdb.get(`${path.slice(0, path.lastIndexOf("/"))}/:sealed`) !== undefined,
-    };
-    const a = await arrive(rtdb, "a", three, sealedRules);
-    await a.connection.sealGroup!();
-    const b = await arrive(rtdb, "b", three, sealedRules);
-    expect(b.connection.sessionId).not.toBe(a.connection.sessionId);
-    expect(b.backend.isArmed(`${groupPath(b.connection.sessionId)}/b`)).toBe(true);
+    const a = await arrive(rtdb, "a", three);
+    const session = a.connection.sessionId;
+    // Race: the late arrival read the group before the seal, then the rules refuse its seat
+    let sealedMeanwhile = false;
+    const b = await arrive(rtdb, "b", three, {
+      beforeTransactionRead: (path: string) => {
+        if (path === seatPath(session, 1) && !sealedMeanwhile) {
+          sealedMeanwhile = true;
+          rtdb.replace(`${groupPath(session)}/sealed`, {
+            by: "0",
+            seats: { "0": { uid: "uid-a", id: "a" } },
+          });
+        }
+      },
+      denyWrite: (path: string) => path === seatPath(session, 1),
+    });
+    expect(b.connection.sessionId).not.toBe(session);
+    expect(b.backend.isArmed(seatPath(b.connection.sessionId, 0))).toBe(true);
   });
 
-  it("a group that fills between reading the lobby and claiming a place sends the arrival on", async () => {
+  it("a group that fills between reading it and taking a seat sends the arrival on", async () => {
     const rtdb = new FakeRtdb();
     const a = await arrive(rtdb, "a");
     const session = a.connection.sessionId;
@@ -659,16 +814,48 @@ describe("FirebaseAdapter — matchmaking", () => {
       {},
       {
         beforeTransactionRead: (path: string) => {
-          if (path === groupPath(session) && !raced) {
+          if (path === seatPath(session, 1) && !raced) {
             raced = true;
-            // Another participant's claim commits first and fills the group
-            rtdb.replace(path, { a: "1", b: "1", ":sealed": JSON.stringify(["a", "b"]) });
+            // Another participant's claim commits first, fills the group, and seals it
+            rtdb.replace(seatPath(session, 1), { uid: "uid-b", id: "b" });
+            rtdb.replace(`${groupPath(session)}/sealed`, {
+              by: "1",
+              seats: { "0": { uid: "uid-a", id: "a" }, "1": { uid: "uid-b", id: "b" } },
+            });
           }
         },
       },
     );
     expect(c.connection.sessionId).not.toBe(session);
     expect(c.connection.group!().members).toEqual(["c"]);
+  });
+
+  it("a member seals a full group whose last arrival didn't get to seal it", async () => {
+    const rtdb = new FakeRtdb();
+    const a = await arrive(rtdb, "a");
+    const session = a.connection.sessionId;
+    // b took the last seat, then its tab closed before it sealed
+    rtdb.replace(seatPath(session, 1), { uid: "uid-b", id: "b" });
+    await flush();
+    expect(a.connection.group!()).toEqual({ size: 2, members: ["a", "b"], sealed: true });
+  });
+
+  it("an arrival waits for a full group to be sealed before the lobby moves on", async () => {
+    const rtdb = new FakeRtdb();
+    const a = await arrive(rtdb, "a");
+    const session = a.connection.sessionId;
+    await a.connection.disconnect(); // nobody left to seal it
+    rtdb.replace(groupPath(session), {
+      seats: { "0": { uid: "uid-x", id: "x" }, "1": { uid: "uid-y", id: "y" } },
+    });
+    setTimeout(() => {
+      rtdb.replace(`${groupPath(session)}/sealed`, {
+        by: "0",
+        seats: { "0": { uid: "uid-x", id: "x" }, "1": { uid: "uid-y", id: "y" } },
+      });
+    }, 50);
+    const c = await arrive(rtdb, "c");
+    expect(c.connection.sessionId).not.toBe(session);
   });
 
   it("works when transactions first run on a guessed null, as the real SDK's do", async () => {
@@ -679,18 +866,38 @@ describe("FirebaseAdapter — matchmaking", () => {
     expect(b.connection.group!().sealed).toBe(true);
   });
 
-  it("with session binding, a same-tab reload goes back to its own group", async () => {
+  it("with session binding, a reload goes back to its own group", async () => {
     const rtdb = new FakeRtdb();
-    const uidMode = { participantId: undefined, useUidAsParticipantId: true };
-    const a = await arrive(rtdb, "a", uidMode);
-    expect(rtdb.get(membership("a"))).toBe(a.connection.sessionId);
-    await arrive(rtdb, "b", uidMode);
+    const a = await arrive(rtdb, "a");
+    expect(rtdb.get(membership("uid-a"))).toBe(a.connection.sessionId);
+    await arrive(rtdb, "b");
     await a.connection.disconnect();
 
     // The lobby has moved on, but a's uid is bound to its first group
-    await arrive(rtdb, "c", uidMode);
-    const reloaded = await arrive(rtdb, "a", uidMode);
+    await arrive(rtdb, "c");
+    sessionStorage.clear(); // not the tab's memory: the binding
+    const reloaded = await arrive(rtdb, "a");
     expect(reloaded.connection.sessionId).toBe(a.connection.sessionId);
+  });
+
+  it("without session binding, the tab remembers its group across a reload", async () => {
+    const rtdb = new FakeRtdb();
+    const unbound = { participantId: undefined, sessionBinding: false, persistParticipant: true };
+    const a = await arrive(rtdb, "a", unbound);
+    const id = a.connection.participantId;
+    await arrive(rtdb, "b", { sessionBinding: false });
+    await a.connection.disconnect();
+    await arrive(rtdb, "c", { sessionBinding: false });
+
+    // A reload: same tab storage, and even a new anonymous identity
+    const reloaded = await arrive(rtdb, "a", unbound, { uid: "uid-a-again" });
+    expect(reloaded.connection.participantId).toBe(id);
+    expect(reloaded.connection.sessionId).toBe(a.connection.sessionId);
+    expect(reloaded.connection.group!()).toEqual({
+      size: 2,
+      members: [id, "b"].sort(),
+      sealed: true,
+    });
   });
 
   it("with the core, everyone's waiting room ends when the group is full", async () => {
@@ -706,11 +913,77 @@ describe("FirebaseAdapter — matchmaking", () => {
     const waiting = a.multiplayer.waitForGroup();
     const b = await connectJsPsych("b");
     await expect(waiting).resolves.toEqual({ size: 2, members: ["a", "b"], sealed: true });
+    expect(b.multiplayer.group()).toEqual({ size: 2, members: ["a", "b"], sealed: true });
     expect(b.multiplayer.sessionId).toBe(a.multiplayer.sessionId);
     expect(b.multiplayer.shuffle("order", [1, 2, 3, 4])).toEqual(
       a.multiplayer.shuffle("order", [1, 2, 3, 4]),
     );
     await a.multiplayer.disconnect();
     await b.multiplayer.disconnect();
+  });
+});
+
+describe("database.rules.json", () => {
+  type RuleNode = { [key: string]: RuleNode | string | boolean };
+  const root = (rules as { rules: RuleNode }).rules;
+  const node = (...path: string[]) =>
+    path.reduce<RuleNode>((current, key) => current[key] as RuleNode, root);
+
+  it("covers every node the adapter writes, and nothing else", () => {
+    expect(Object.keys(root).sort()).toEqual(
+      ["", "-groups", "-lobby", "-memberships", "-owners", "-presence"].map((s) => NS + s),
+    );
+  });
+
+  it("lets a participant write only the data slot and presence they claimed", () => {
+    for (const top of [NS, `${NS}-presence`]) {
+      const write = node(top, "$session", "$pid")[".write"];
+      expect(write).toContain(
+        `root.child('${NS}-owners').child($session).child($pid).val() === auth.uid`,
+      );
+      expect(node(top, "$session")[".write"]).toBeUndefined();
+    }
+    const claim = node(`${NS}-owners`, "$session", "$pid")[".write"];
+    expect(claim).toContain("newData.val() === auth.uid");
+    expect(claim).toContain("(!data.exists() || data.val() === auth.uid)");
+  });
+
+  it("never grants write on a whole group node, so each seat is written alone", () => {
+    const group = node(`${NS}-groups`, "$session");
+    expect(group[".write"]).toBeUndefined();
+    expect(node(`${NS}-groups`)[".write"]).toBeUndefined();
+    const seat = node(`${NS}-groups`, "$session", "seats", "$seat")[".write"];
+    // Take an empty seat as yourself, or free your own; never once sealed
+    expect(seat).toContain("!data.exists() && newData.child('uid').val() === auth.uid");
+    expect(seat).toContain("data.child('uid').val() === auth.uid && !newData.exists()");
+    expect(seat).toContain("!data.parent().parent().child('sealed').exists()");
+    // The roster: written once, by a member, copying the seats
+    const sealed = node(`${NS}-groups`, "$session", "sealed");
+    expect(sealed[".write"]).toContain("!data.exists()");
+    expect(sealed[".write"]).toContain(
+      "child(newData.child('by').val()).child('uid').val() === auth.uid",
+    );
+    expect(node(`${NS}-groups`, "$session", "sealed", "seats", "$seat")[".validate"]).toContain(
+      "child('seats').child($seat).child('uid').val()",
+    );
+  });
+
+  it("only moves a lobby off a sealed group, onto a new one", () => {
+    const write = node(`${NS}-lobby`, "$lobby")[".write"];
+    expect(write).toContain(`!root.child('${NS}-groups').child(newData.val()).exists()`);
+    expect(write).toContain(
+      `(!data.exists() || root.child('${NS}-groups').child(data.val()).child('sealed').exists())`,
+    );
+  });
+
+  it("matches the recommended rules in the README", () => {
+    const readme = readFileSync(joinPath(__dirname, "..", "README.md"), "utf8");
+    const blocks = [...readme.matchAll(/```json\n([\s\S]*?)```/g)].map((m) => JSON.parse(m[1]));
+    expect(blocks).toContainEqual(rules);
+    // The quick-start rules cover the same nodes, so the default options work with both
+    const quickStart = blocks.find(
+      (block) => block.rules?.[NS]?.$session?.[".write"] === "auth != null",
+    );
+    expect(Object.keys(quickStart.rules).sort()).toEqual(Object.keys(root).sort());
   });
 });

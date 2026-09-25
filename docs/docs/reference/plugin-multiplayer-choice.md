@@ -42,12 +42,11 @@ timeline.push({
 | `choices` | `string[]` | required | The options, one button each. HTML is allowed. The option's index (from 0) is what is shared with the group. |
 | `prompt` | HTML string | `null` | Shown above the buttons. |
 | `button_html` | `(choice, index) => string` | `null` | Returns the HTML for each option, as in `html-button-response`. `null` uses a plain `jspsych-btn` button. |
-| `data_key` | `string \| null` | `null` | The field in each participant's slot that holds their choice. `null` generates `choice-1`, `choice-2`, … (see [Choice keys](#choice-keys)). |
 | `expected_players` | `number \| null` | `null` | How many participants, including this one, must choose before the outcome is shown. Can be a function that returns the number. `null` means everyone in a [sealed group](../guides/forming-groups) who hasn't left; if the group isn't sealed when the trial starts, you must set it. |
 | `waiting_message` | HTML string | `"<p>Waiting for the other players to choose…</p>"` | Shown after this participant chooses, while the rest of the group finishes. |
-| `timeout` | `number \| null` | `null` | The longest time to wait for the others **after** choosing, in ms. When it runs out, the trial goes on with whoever has chosen, flagged `timed_out: true`, and `on_timeout` is called. `null`, `0`, or a negative number waits indefinitely. It does not limit how long this participant takes to choose. |
+| `timeout` | `number \| null` | `null` | The longest time to wait for the others **after** choosing, in ms. When it runs out, the trial goes on with whoever has chosen, with `multiplayer_outcome: "timeout"`, and `on_timeout` is called. `null`, `0`, or a negative number waits indefinitely. It does not limit how long this participant takes to choose. |
 | `on_timeout` | `function \| null` | `null` | Called with the timeout error if `timeout` runs out first. |
-| `participants` | `string[] \| null` | `null` | The participants this choice depends on. If one of them leaves before the group has chosen, the trial goes on with whoever has chosen, flagged `partner_left: true`. `null` means every other participant who is connected when this participant chooses. In a [sealed group](../guides/forming-groups), `null` means the rest of the group's members who haven't left, including any who are only `away`. `[]` ignores departures. |
+| `participants` | `string[] \| null` | `null` | The participants this choice depends on. If one of them leaves before the group has chosen, the trial goes on with whoever has chosen, with `multiplayer_outcome: "participant_left"`. `null` means the other members of a [sealed group](../guides/forming-groups) who haven't left, or, without a sealed group, every other participant who is connected when this participant chooses. `[]` ignores departures. |
 | `reveal` | `boolean` | `true` | Show the outcome screen. `false` ends the trial as soon as the group has chosen. |
 | `reveal_mode` | `"players" \| "tally"` | `"players"` | `"players"` lists each participant's choice by name. `"tally"` shows only the count for each option and the winner (or a tie), never who chose what. |
 | `reveal_prompt` | HTML string | `null` | A heading above the outcome. |
@@ -72,39 +71,31 @@ timeline.push({
 | `is_tie` | `boolean` | `true` if two or more options shared the most picks. |
 | `tied_options` | `object[]` | The options that tied, in `choices` order. Empty if there was no tie. |
 | `my_payoff` | `number \| null` | The value `payoff` returned. `null` without a `payoff` function, or if it threw or didn't return a finite number. |
-| `data_key` | `string` | The key used for this trial (your `data_key`, or the generated `choice-N`). |
-| `timed_out` | `boolean` | `true` if the trial went on because `timeout` ran out. |
-| `partner_left` | `boolean` | `true` if the trial went on because a participant in `participants` left. |
-| `left_participant` | `string \| null` | The ID of the participant who left, when `partner_left` is `true`. |
-| `connection_lost` | `boolean` | `true` if the trial went on because this participant's own connection was lost for good. |
-| `wait_error` | `string \| null` | The message of whatever ended the wait early (timeout, departure, or lost connection). `null` when the group chose. |
+| `multiplayer_outcome` | `string` | How the wait ended: `"completed"` (everyone chose), `"timeout"`, `"participant_left"` (a participant in `participants` left), or `"connection_lost"` (this participant's own connection was lost for good). On any outcome but `"completed"`, the trial goes on with whoever chose so far. |
+| `left_participant` | `string \| null` | The ID of the participant who left, when `multiplayer_outcome` is `"participant_left"`. |
 
 When the wait ends early, the trial still shows and records the outcome among those who did
-choose. Check `timed_out`, `partner_left`, and
-`connection_lost` in `on_finish`; [Handling dropouts](../guides/handling-dropouts) has patterns
-for that. The counts include a choice from a participant who chose and then left. If the
-experiment ends or is aborted while the trial is waiting, it stops without calling `on_timeout`
-and records no data.
+choose. Check `multiplayer_outcome` in `on_finish`; [Handling dropouts](../guides/handling-dropouts)
+has patterns for that. The counts include a choice from a participant who chose and then left. If
+the experiment ends or is aborted while the trial is waiting, it stops quietly: `on_timeout` isn't
+called and no data is recorded.
 
-## Choice keys
+## Each trial has its own shared data
 
-When a participant chooses, the plugin merges `{ [data_key]: { index, label } }` into their slot.
-The trial counts participants who have a choice under that key and have not left.
+When a participant chooses, the plugin merges `{ choice: { index, label } }` into their part of
+the trial's shared data. The trial counts participants who have a valid choice there and have not
+left the session.
 
-Each choice trial needs its own key, or choices from an earlier trial would count toward a later
-one. By default the first choice trial a participant reaches uses `choice-1`, the second
-`choice-2`, and so on. Because everyone passes the same trials in the same order, the Nth trial
-gets the same key for everyone.
+Each trial has its own part of the shared data, so a choice made in an earlier trial can never
+count toward a later one. Participants running the same timeline share each trial's data, because
+it is named by the trial's position in the timeline (see [How it works](../guides/how-it-works)).
+To use a round's result later, read it from the trial's jsPsych data (`choices_by_player`,
+`winner`, …).
 
-Set `data_key` yourself when:
-
-- only some participants reach the trial, for example inside a `conditional_function`;
-- a participant might reload the page (the count starts over);
-- several sub-groups choose separately in one session. Give each sub-group its own key and set
-  `expected_players` to the sub-group's size. [`multiplayer-match`](plugin-multiplayer-match#example)
-  shows this for pairs.
-
-An explicit `data_key` does not advance the default count.
+Set the trial's `multiplayer_scope` parameter when several sub-groups choose separately in one
+session. Give each sub-group its own name and set `expected_players` to the sub-group's size;
+[`multiplayer-match`](plugin-multiplayer-match#example) shows this for pairs. The name is used
+exactly as written, so a trial that repeats needs a name that changes with each repetition.
 
 ## Anonymous polls
 
@@ -114,7 +105,7 @@ winner or the tie, and "(you)" next to this participant's own pick. Add
 the data then holds the tally, the winner, and this participant's own choice.
 
 This hides choices on screen and in your data, not in the session. Each participant's pick is
-still in their slot, and a participant who inspects the page's network traffic can see it.
+still in their part of the trial's shared data, and a participant who inspects the page's network traffic can see it.
 
 ## Example
 

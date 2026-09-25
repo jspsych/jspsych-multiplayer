@@ -1,16 +1,18 @@
 import { startTimeline } from "@jspsych/test-utils";
 import { ConnectOptions, GroupSessionData, PresenceData } from "jspsych";
 
-import { MemoryHub } from "../../../test-utils/memory-backend";
+import { MemoryHub, scopeData } from "../../../test-utils/memory-backend";
 import MultiplayerSyncPlugin from ".";
 
 /**
  * A jsPsych stand-in whose `multiplayer` is a real session on an in-memory hub, so the plugin runs
  * against the actual core (frozen snapshots, presence, errors) while `finishTrial` is captured.
+ * No trial is running in the core, so the plugin's reads and writes use the session scope here;
+ * the startTimeline tests at the end cover the trial scope.
  */
 async function setup(connect?: ConnectOptions, existing: GroupSessionData = {}) {
   const hub = new MemoryHub();
-  hub.data = existing;
+  for (const [id, data] of Object.entries(existing)) hub.seed(id, data);
   const me = await hub.join("p1", { connect });
   const finished: Array<Record<string, any>> = [];
   const jsPsych = {
@@ -28,34 +30,57 @@ const display = () => document.createElement("div");
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const defaults = {
-  push_data: null,
+  write_data: null,
   message: "<p>Waiting…</p>",
   timeout: null,
   on_timeout: null,
   participants: null,
   minimum_wait: 0,
+  save_group: false,
 };
 
 describe("multiplayer-sync plugin", () => {
-  it("pushes data and ends once the condition is met by its own push", async () => {
+  it("writes data and ends once the condition is met by its own write", async () => {
     const { plugin, finished } = await setup();
 
     await plugin.trial(display(), {
       ...defaults,
-      push_data: { ready: true },
+      write_data: { ready: true },
       wait_for: (group: GroupSessionData) => Object.keys(group).length >= 1,
     } as never);
 
     expect(finished).toHaveLength(1);
-    expect(finished[0]).toMatchObject({
-      group: { p1: { ready: true } },
-      timed_out: false,
-      partner_left: false,
+    expect(finished[0]).toEqual({
+      wait_time: expect.any(Number),
+      multiplayer_outcome: "completed",
       left_participant: null,
-      connection_lost: false,
-      wait_error: null,
     });
-    expect(typeof finished[0].wait_time).toBe("number");
+  });
+
+  it("saves the group only when save_group is true", async () => {
+    const { plugin, finished } = await setup();
+
+    await plugin.trial(display(), {
+      ...defaults,
+      write_data: { ready: true },
+      wait_for: () => true,
+      save_group: true,
+    } as never);
+
+    expect(finished[0].group).toEqual({ p1: { ready: true } });
+  });
+
+  it("merges write_data into this participant's data instead of replacing it", async () => {
+    const { plugin, multiplayer } = await setup();
+    await multiplayer.update({ name: "Ann" });
+
+    await plugin.trial(display(), {
+      ...defaults,
+      write_data: { ready: true },
+      wait_for: () => true,
+    } as never);
+
+    expect(multiplayer.get("p1")).toEqual({ name: "Ann", ready: true });
   });
 
   it("fires the on_load callback once the waiting screen is rendered", async () => {
@@ -65,23 +90,27 @@ describe("multiplayer-sync plugin", () => {
     expect(on_load).toHaveBeenCalledTimes(1);
   });
 
-  it("propagates a push failure instead of masking it as a timeout", async () => {
+  it("doesn't hold the wait or its timeout for a write the backend hasn't confirmed", async () => {
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
     const { plugin, finished, me } = await setup();
     me.connection.pushImpl = async () => {
       throw new Error("write rejected");
     };
     const on_timeout = jest.fn();
 
-    await expect(
-      plugin.trial(display(), {
-        ...defaults,
-        push_data: { ready: true },
-        wait_for: () => true,
-        on_timeout,
-      } as never),
-    ).rejects.toThrow(/write rejected/);
-    expect(on_timeout).not.toHaveBeenCalled();
-    expect(finished).toHaveLength(0);
+    await plugin.trial(display(), {
+      ...defaults,
+      write_data: { ready: true },
+      wait_for: (group: GroupSessionData) => Object.keys(group).length >= 2,
+      timeout: 40,
+      on_timeout,
+    } as never);
+
+    // The core keeps retrying the write; the trial still ends when its timeout elapses
+    expect(on_timeout).toHaveBeenCalledTimes(1);
+    expect(finished[0].multiplayer_outcome).toBe("timeout");
+    await me.jsPsych.multiplayer.disconnect();
+    warn.mockRestore();
   });
 
   it("holds until a second participant satisfies the condition", async () => {
@@ -90,20 +119,22 @@ describe("multiplayer-sync plugin", () => {
 
     const done = plugin.trial(el, {
       ...defaults,
-      push_data: { role: "a" },
+      write_data: { role: "a" },
       wait_for: (group: GroupSessionData) => Object.keys(group).length >= 2,
       message: "<p>Waiting for another player…</p>",
+      participants: [],
+      save_group: true,
     } as never);
     await sleep(0);
     expect(finished).toHaveLength(0);
     expect(el.innerHTML).toContain("Waiting for another player");
 
     const peer = await hub.join("p2");
-    await peer.jsPsych.multiplayer.push({ role: "b" });
+    await peer.jsPsych.multiplayer.update({ role: "b" });
     await done;
 
     expect(finished[0].group).toEqual({ p1: { role: "a" }, p2: { role: "b" } });
-    expect(finished[0].timed_out).toBe(false);
+    expect(finished[0].multiplayer_outcome).toBe("completed");
   });
 
   it("passes presence to wait_for", async () => {
@@ -117,38 +148,54 @@ describe("multiplayer-sync plugin", () => {
     expect(finished).toHaveLength(1);
   });
 
-  it("waits without pushing when push_data is null", async () => {
+  it("waits without writing when write_data is null", async () => {
     const { plugin, finished, hub, multiplayer } = await setup();
-    hub.seed("p2", { ready: true });
+    hub.addPeer("p2", { ready: true });
 
     await plugin.trial(display(), {
       ...defaults,
       wait_for: (group: GroupSessionData) => "p2" in group,
+      save_group: true,
     } as never);
 
     expect(multiplayer.getAll()).toEqual({ p2: { ready: true } });
     expect(finished[0].group).toEqual({ p2: { ready: true } });
   });
 
-  it("ends with timed_out and calls on_timeout when the timeout elapses", async () => {
+  it("ends with a timeout outcome and calls on_timeout when the timeout elapses", async () => {
     const { plugin, finished, multiplayer } = await setup();
     const on_timeout = jest.fn();
 
     await plugin.trial(display(), {
       ...defaults,
-      push_data: { ready: true },
+      write_data: { ready: true },
       wait_for: () => false,
       timeout: 40,
       on_timeout,
+      save_group: true,
     } as never);
 
     expect(on_timeout).toHaveBeenCalledTimes(1);
-    expect(finished[0].timed_out).toBe(true);
-    expect(finished[0].wait_error).toMatch(/timed out/);
+    expect(finished[0]).toMatchObject({ multiplayer_outcome: "timeout", left_participant: null });
     expect(finished[0].group).toEqual(multiplayer.getAll());
   });
 
-  it("ends with partner_left when a participant the barrier depends on leaves", async () => {
+  it("treats a timeout of 0 as no limit", async () => {
+    const { plugin, finished, hub } = await setup();
+    const done = plugin.trial(display(), {
+      ...defaults,
+      wait_for: (group: GroupSessionData) => "p2" in group,
+      timeout: 0,
+      participants: [],
+    } as never);
+    await sleep(30);
+    expect(finished).toHaveLength(0);
+    hub.addPeer("p2", { ready: true });
+    await done;
+    expect(finished[0].multiplayer_outcome).toBe("completed");
+  });
+
+  it("ends with participant_left when a participant the barrier depends on leaves", async () => {
     const { plugin, finished, hub } = await setup({ dropoutTimeout: 10 });
     const peer = await hub.join("p2");
 
@@ -158,26 +205,22 @@ describe("multiplayer-sync plugin", () => {
     await done;
 
     expect(finished[0]).toMatchObject({
-      partner_left: true,
+      multiplayer_outcome: "participant_left",
       left_participant: "p2",
-      timed_out: false,
-      connection_lost: false,
     });
-    expect(finished[0].wait_error).toMatch(/left/);
   });
 
-  it("doesn't depend on leftover slots from members who left before this one joined", async () => {
-    // Leftover slots start out `away` and become `left` after the dropout timeout
+  it("doesn't depend on leftover data from members who left before this one joined", async () => {
+    // The group is made of the participants who are here; leftover data isn't part of it
     const { plugin, finished, multiplayer } = await setup(
       { dropoutTimeout: 10 },
       { ghost: { ready: true } },
     );
-    expect(multiplayer.presence().ghost).toBe("away");
+    expect(multiplayer.presence().ghost).toBeUndefined();
 
     await plugin.trial(display(), { ...defaults, wait_for: () => false, timeout: 60 } as never);
 
-    expect(multiplayer.presence().ghost).toBe("left");
-    expect(finished[0]).toMatchObject({ partner_left: false, timed_out: true });
+    expect(finished[0]).toMatchObject({ multiplayer_outcome: "timeout", left_participant: null });
   });
 
   it("in a sealed group, participants: null depends on the roster, including members who are away", async () => {
@@ -188,7 +231,10 @@ describe("multiplayer-sync plugin", () => {
 
     await plugin.trial(display(), { ...defaults, wait_for: () => false } as never);
 
-    expect(finished[0]).toMatchObject({ partner_left: true, left_participant: "p2" });
+    expect(finished[0]).toMatchObject({
+      multiplayer_outcome: "participant_left",
+      left_participant: "p2",
+    });
   });
 
   it("ignores departures when participants is []", async () => {
@@ -204,19 +250,25 @@ describe("multiplayer-sync plugin", () => {
     await peer.jsPsych.multiplayer.disconnect();
     await done;
 
-    expect(finished[0].partner_left).toBe(false);
-    expect(finished[0].timed_out).toBe(true);
+    expect(finished[0]).toMatchObject({ multiplayer_outcome: "timeout", left_participant: null });
   });
 
   it("ends with connection_lost when this participant's connection closes", async () => {
     const { plugin, finished, me } = await setup();
 
-    const done = plugin.trial(display(), { ...defaults, wait_for: () => false } as never);
+    const done = plugin.trial(display(), {
+      ...defaults,
+      write_data: { ready: true },
+      wait_for: () => false,
+      save_group: true,
+    } as never);
     await sleep(0);
     me.connection.options.onStatus("closed");
     await done;
 
-    expect(finished[0]).toMatchObject({ connection_lost: true, partner_left: false });
+    expect(finished[0]).toMatchObject({ multiplayer_outcome: "connection_lost" });
+    // Reads keep working after the connection is lost
+    expect(finished[0].group).toEqual({ p1: { ready: true } });
   });
 
   it("propagates a throwing wait_for instead of mislabeling it", async () => {
@@ -237,7 +289,7 @@ describe("multiplayer-sync plugin", () => {
     await expect(
       plugin.trial(display(), {
         ...defaults,
-        push_data: { list: [1] },
+        write_data: { list: [1] },
         wait_for: (group: GroupSessionData) => {
           (group.p1.list as number[]).push(2);
           return true;
@@ -256,7 +308,7 @@ describe("multiplayer-sync plugin", () => {
       minimum_wait: 60,
     } as never);
     expect(performance.now() - t0).toBeGreaterThanOrEqual(50);
-    expect(finished[0].timed_out).toBe(true);
+    expect(finished[0].multiplayer_outcome).toBe("timeout");
   });
 
   it("keeps the message on screen for at least minimum_wait when the condition is already met", async () => {
@@ -268,36 +320,36 @@ describe("multiplayer-sync plugin", () => {
       minimum_wait: 60,
     } as never);
     expect(performance.now() - t0).toBeGreaterThanOrEqual(50);
-    expect(finished[0].timed_out).toBe(false);
+    expect(finished[0].multiplayer_outcome).toBe("completed");
   });
 
   it("does not extend a wait that is already longer than minimum_wait", async () => {
     const { plugin, finished, hub } = await setup();
     const done = plugin.trial(display(), {
       ...defaults,
-      push_data: { role: "a" },
+      write_data: { role: "a" },
       wait_for: (g: GroupSessionData) => Object.keys(g).length >= 2,
       minimum_wait: 30,
     } as never);
-    setTimeout(() => hub.seed("p2", { role: "b" }), 80);
+    setTimeout(() => hub.addPeer("p2", { role: "b" }), 80);
     await done;
     expect(finished[0].wait_time).toBeGreaterThanOrEqual(70);
     expect(finished[0].wait_time).toBeLessThan(80 + 30);
   });
 
-  it("stops quietly when the wait is cancelled (abort / end of run)", async () => {
+  it("stops quietly when the wait is cancelled", async () => {
     const errSpy = jest.spyOn(console, "error").mockImplementation(() => {});
     const { plugin, finished, multiplayer } = await setup();
     const on_timeout = jest.fn();
 
     const done = plugin.trial(display(), {
       ...defaults,
-      push_data: { ready: true },
+      write_data: { ready: true },
       wait_for: () => false,
       on_timeout,
     } as never);
     await sleep(0);
-    multiplayer.cancelAllSubscriptions();
+    await multiplayer.disconnect();
     await expect(done).resolves.toBeUndefined();
 
     expect(on_timeout).not.toHaveBeenCalled();
@@ -306,21 +358,39 @@ describe("multiplayer-sync plugin", () => {
     errSpy.mockRestore();
   });
 
-  it("ignores departures by default, so a lobby keeps waiting", async () => {
+  it("stops quietly when the experiment is aborted while it waits", async () => {
+    const hub = new MemoryHub();
+    const { jsPsych } = await hub.join("p1");
+    const on_timeout = jest.fn();
+
+    const { expectFinished } = await startTimeline(
+      [{ type: MultiplayerSyncPlugin, wait_for: () => false, participants: [], on_timeout }],
+      jsPsych,
+    );
+    jsPsych.abortExperiment();
+    await expectFinished();
+    await sleep(0);
+
+    expect(on_timeout).not.toHaveBeenCalled();
+  });
+
+  it("depends on the other connected participants by default", async () => {
     const hub = new MemoryHub();
     const { jsPsych } = await hub.join("p1", { connect: { dropoutTimeout: 10 } });
     const peer = await hub.join("p2");
 
     const { getData, expectFinished } = await startTimeline(
-      [{ type: MultiplayerSyncPlugin, wait_for: () => false, timeout: 60 }],
+      [{ type: MultiplayerSyncPlugin, wait_for: () => false, timeout: 500 }],
       jsPsych,
     );
     await peer.jsPsych.multiplayer.disconnect();
-    await sleep(100);
+    await sleep(50);
     await expectFinished();
 
-    expect(jsPsych.multiplayer.presence().p2).toBe("left");
-    expect(getData().values()[0]).toMatchObject({ partner_left: false, timed_out: true });
+    expect(getData().values()[0]).toMatchObject({
+      multiplayer_outcome: "participant_left",
+      left_participant: "p2",
+    });
   });
 
   it("runs through the real jsPsych pipeline (startTimeline smoke test)", async () => {
@@ -331,8 +401,9 @@ describe("multiplayer-sync plugin", () => {
       [
         {
           type: MultiplayerSyncPlugin,
-          push_data: { ready: true },
+          write_data: { ready: true },
           wait_for: (group: GroupSessionData) => Object.keys(group).length >= 1,
+          save_group: true,
         },
       ],
       jsPsych,
@@ -341,9 +412,35 @@ describe("multiplayer-sync plugin", () => {
 
     const data = getData().values()[0];
     expect(data.group).toEqual({ p1: { ready: true } });
-    expect(data.timed_out).toBe(false);
-    expect(data.partner_left).toBe(false);
-    expect(data.wait_error).toBeNull();
+    expect(data.multiplayer_outcome).toBe("completed");
+    expect(data.left_participant).toBeNull();
+    for (const removed of ["timed_out", "partner_left", "connection_lost", "wait_error"]) {
+      expect(data).not.toHaveProperty(removed);
+    }
+  });
+
+  it("keeps each trial's data apart: an earlier trial's write doesn't satisfy a later one", async () => {
+    const hub = new MemoryHub();
+    const { jsPsych } = await hub.join("p1");
+    const barrier = {
+      type: MultiplayerSyncPlugin,
+      wait_for: (group: GroupSessionData) => group.p1?.ready === true,
+      timeout: 40,
+      save_group: true,
+    };
+
+    const { getData, expectFinished } = await startTimeline(
+      [{ ...barrier, write_data: { ready: true } }, barrier],
+      jsPsych,
+    );
+    await sleep(100);
+    await expectFinished();
+
+    const [first, second] = getData().values();
+    expect(first.multiplayer_outcome).toBe("completed");
+    expect(second).toMatchObject({ multiplayer_outcome: "timeout", group: {} });
+    // The write went to the first trial's scope, not the session scope
+    expect(scopeData(hub.data.p1)).toBeUndefined();
   });
 
   it("throws a clear error on a jsPsych without the multiplayer API", async () => {

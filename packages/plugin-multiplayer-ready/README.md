@@ -1,12 +1,12 @@
 # @jspsych-multiplayer/plugin-multiplayer-ready
 
-A participant-facing **ready / check-in** barrier for multiplayer jsPsych experiments, built on the multiplayer plugin API. It shows a prompt and a ready button; when the participant clicks it, the plugin marks them ready at this gate in the shared group session, swaps to a waiting message, and ends the trial once every expected group member is ready at this gate. It also ends if a timeout elapses, a participant the gate depends on leaves, or the connection is lost.
+A participant-facing **ready / check-in** barrier for multiplayer jsPsych experiments, built on the multiplayer plugin API. It shows a prompt and a ready button; when the participant clicks it, the plugin writes `ready: true` to the trial's shared data, swaps to a waiting message, and ends the trial once every expected group member is ready. It also ends if a timeout elapses, a participant the gate depends on leaves, or the connection is lost.
 
 Use it as the lobby / waiting-room step at the start of a multiplayer timeline, or anywhere the group needs an explicit "everyone confirm you're here before we continue" checkpoint.
 
 ## How it differs from `plugin-multiplayer-sync`
 
-`plugin-multiplayer-sync` is a low-level barrier: you supply an arbitrary `wait_for` predicate and optional `push_data`. `plugin-multiplayer-ready` is a higher-level specialization that **owns the check-in UI** and the **"all members ready" condition** for you, with a separate readiness key for every gate (see [Gates and keys](#gates-and-keys)). Reach for `sync` when you need a custom condition; reach for `ready` when you want a drop-in "I'm ready" lobby.
+`plugin-multiplayer-sync` is a low-level barrier: you supply an arbitrary `wait_for` predicate and optional `write_data`. `plugin-multiplayer-ready` is a higher-level specialization that **owns the check-in UI** and the **"all members ready" condition** for you (see [Gates](#gates)). Reach for `sync` when you need a custom condition; reach for `ready` when you want a drop-in "I'm ready" lobby.
 
 > **Status:** requires the jsPsych multiplayer API from [jsPsych#3694](https://github.com/jspsych/jsPsych/pull/3694), which is not yet in a jsPsych release. On a jsPsych without `jsPsych.multiplayer`, the trial throws an error saying so.
 
@@ -29,12 +29,12 @@ await jsPsych.run(timeline);
 | `prompt`           | HTML string \| function | `null`                                | Optional secondary reminder shown below the button (jsPsych `prompt` convention). `null` shows nothing.                                                                                                                                                                    |
 | `button_label`     | string \| function      | `"I'm ready"`                         | Label on the ready button.                                                                                                                                                                                                                                                 |
 | `waiting_message`  | HTML string \| function | `"<p>Waiting for other players…</p>"` | Shown after this participant clicks ready, while waiting for the rest of the group.                                                                                                                                                                                        |
-| `push_data`        | object \| function      | `null`                                | Extra fields written to this participant's slot along with the ready flags (e.g. a display name). They are merged into the slot, so data from earlier trials is kept.                                                                                                      |
-| `data_key`         | string \| null          | `null`                                | The key that marks readiness at this gate. `null` generates `ready-1`, `ready-2`, … in the order this participant reaches ready gates. See [Gates and keys](#gates-and-keys).                                                                                              |
-| `timeout`          | integer                 | `null`                                | Max time to wait for the rest of the group **after** clicking ready, in ms. On elapse the trial ends with `timed_out: true` and `on_timeout` is called. `null`, or any non-positive value, waits indefinitely. Does **not** bound how long the participant takes to click. |
+| `write_data`       | object \| function      | `null`                                | Extra fields written to this participant's part of the trial's shared data along with `ready: true` (e.g. a display name). They are merged in with `jsPsych.multiplayer.update()`.                                                                                        |
+| `timeout`          | integer                 | `null`                                | Max time to wait for the rest of the group **after** clicking ready, in ms. On elapse the trial ends with `multiplayer_outcome: "timeout"` and `on_timeout` is called. `null`, `0`, or a negative value waits indefinitely. Does **not** bound how long the participant takes to click. |
 | `on_timeout`       | function                | `null`                                | Called if `timeout` elapses before the whole group is ready.                                                                                                                                                                                                               |
-| `participants`     | array \| null           | `null`                                | Participants the gate depends on. If one leaves the session first, the trial ends with `partner_left: true`. `null` means every other participant who is connected when this participant clicks ready; `[]` ignores departures.                                     |
+| `participants`     | array \| null           | `null`                                | Participants the gate depends on. If one leaves the session first, the trial ends with `multiplayer_outcome: "participant_left"`. `null` means the other members of a sealed group who haven't left, or else every other participant connected when this participant clicks ready; `[]` ignores departures.                                     |
 | `minimum_wait`     | integer                 | `0`                                   | Minimum time, in ms, to keep the waiting message on screen after clicking ready, so it doesn't flash by when the group is already ready (e.g. the last participant, or solo `expected_players: 1`). Does not extend a naturally longer wait.                               |
+| `save_group`       | boolean                 | `false`                               | Save the trial's shared data, as it was when the trial ended, in the `group` data field.                                                                                                                                                                                   |
 
 ## Data Generated
 
@@ -42,27 +42,18 @@ await jsPsych.run(timeline);
 | ------------------ | -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `rt`               | integer        | Time from the ready button appearing to this participant clicking it, in ms.                                                                                                                                                                                                                                          |
 | `wait_time`        | integer        | Time spent waiting for the rest of the group, in ms, from the click until the trial ended.                                                                                                                                                                                                                            |
-| `n_ready`          | integer        | Number of group members ready at this gate, and still in the session, when the trial ended.                                                                                                                                                                                                                           |
-| `data_key`         | string         | The key that marked readiness at this gate (`data_key`, or the generated `ready-N`).                                                                                                                                                                                                                                  |
-| `group`            | object         | The full group session snapshot when the trial ended. Read peers / assign roles from here in `on_finish`. The object is frozen; copy it before modifying.                                                                                                                                                             |
-| `timed_out`        | boolean        | True if the trial ended because `timeout` elapsed rather than because everyone was ready.                                                                                                                                                                                                                             |
-| `partner_left`     | boolean        | True if the trial ended because a participant in `participants` left the session.                                                                                                                                                                                                                                     |
-| `left_participant` | string \| null | The ID of the participant who left, when `partner_left` is true.                                                                                                                                                                                                                                                      |
-| `connection_lost`  | boolean        | True if the trial ended because this participant's connection was lost for good.                                                                                                                                                                                                                                      |
-| `wait_error`       | string \| null | The message of the error that ended the wait early (timeout, departure, or lost connection); `null` when everyone was ready. Other failures (an adapter error) fail the trial instead. If the wait is **cancelled** because the experiment ended or was aborted, the trial stops quietly and writes no record at all. |
+| `n_ready`             | integer        | Number of group members ready, and still in the session, when the trial ended.                                                                                                                                  |
+| `multiplayer_outcome` | string         | How the trial ended: `"completed"` (everyone was ready), `"timeout"`, `"participant_left"` (a participant in `participants` left), or `"connection_lost"` (this participant's connection was lost for good). |
+| `left_participant`    | string \| null | The ID of the participant who left, when `multiplayer_outcome` is `"participant_left"`.                                                                                                                         |
+| `group`               | object         | Only with `save_group: true`. The trial's shared data, keyed by participant ID, when the trial ended. The object is frozen; copy it before modifying.                                                           |
 
-## Gates and keys
+An adapter failure fails the trial rather than being recorded as an outcome. If the wait is **cancelled** because the experiment ended or was aborted, the trial stops quietly and writes no record at all.
 
-Each ready gate marks readiness with its own key, so flags from an earlier gate can never make a later gate pass. When this participant clicks ready, the plugin merges `push_data` into their slot, along with `ready: true` and a flag named after the gate's key (for example `"ready-1": true`). The gate counts only participants who have that flag and haven't left the session. Earlier gates' keys stay in the slot, so a fast participant who moves on to the next gate can't remove a flag that a slower participant is still counting.
+## Gates
 
-By default the key is `ready-1` for the first ready gate this participant reaches, `ready-2` for the second, and so on. Participants have to pass gates in the same order, so the Nth gate gets the same key for everyone, however many other trials each participant saw along the way. Two cases need an explicit `data_key`:
+Each trial has its own part of the shared data, so readiness at one gate never carries over to the next. When this participant clicks ready, the plugin merges `write_data` and `ready: true` into their part of this trial's data. The gate counts the participants who have written `ready` in this trial and haven't left the session. Participants running the same timeline share each trial's data because it is named by the trial's position in the timeline (or by the trial's `multiplayer_scope` parameter).
 
-- **A gate that only some participants reach**, for example inside a `conditional_function`. Otherwise the participants who skip it count their later gates differently from the others.
-- **A participant who reloads the page.** The count starts over after a reload. (Rejoining after a reload is not yet supported.)
-
-An explicit `data_key` is used as-is and doesn't advance the default count.
-
-The plugin also sets `ready: true`, for experiments that only need to know that a participant has checked in at least once.
+Values written with `write_data` stay in this trial's data. To use one in a later trial, for example a display name, save it in the trial's data in `on_finish`, or write it to the session's shared data, which lasts the whole session: `jsPsych.multiplayer.update({ name }, { scope: "session" })`.
 
 ## Example: a two-player waiting room
 
@@ -74,9 +65,10 @@ const readyGate = {
   waiting_message: "<p>Waiting for the other player to check in…</p>",
   timeout: 120000, // give up after 2 minutes of waiting for the other player
   on_timeout: () => console.warn("The other player didn't check in."),
+  save_group: true,
   on_finish: (data) => {
-    // Role assignment stays experiment-specific — do it here off data.group, or hand the snapshot
-    // to @jspsych-multiplayer/plugin-multiplayer-role for deterministic consensus.
+    // Role assignment stays experiment-specific — do it here off data.group, or use
+    // @jspsych-multiplayer/plugin-multiplayer-role for deterministic consensus.
     // Sort the IDs so both players agree on who is first
     const ids = Object.keys(data.group).sort();
     myRole = jsPsych.multiplayer.participantId === ids[0] ? "proposer" : "responder";
@@ -86,4 +78,4 @@ const readyGate = {
 
 ## Scope
 
-A jsPsych plugin is a trial, so this plugin covers readiness checkpoints that are their own timeline step (lobbies, "press ready to continue" gates). For communication _in the middle_ of another interactive trial, use `jsPsych.multiplayer` (`push`, `update`, `get`, `getAll`, `presence`, `subscribe`, `wait`) directly, or `plugin-multiplayer-sync` for a custom-condition barrier.
+A jsPsych plugin is a trial, so this plugin covers readiness checkpoints that are their own timeline step (lobbies, "press ready to continue" gates). For communication _in the middle_ of another interactive trial, use `jsPsych.multiplayer` (`update`, `replace`, `get`, `getAll`, `presence`, `subscribe`, `wait`) directly, or `plugin-multiplayer-sync` for a custom-condition barrier.

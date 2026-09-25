@@ -36,20 +36,24 @@ runExperiment();
 ## Options
 
 Pass these to the constructor, for example
-`new jsPsychAdapterMultiplayerLocal({ persistParticipant: true })`. All are optional.
+`new jsPsychAdapterMultiplayerLocal({ persistParticipant: false })`. All are optional.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `sessionId` | `string` | the `?mp_session=` URL parameter, or a new random ID | Which session this tab joins. Tabs with the same session ID play together. If the URL has no `mp_session` parameter, the adapter makes a new ID and adds it to the URL. Must not contain `:`. It is also the session ID that seeds [shared randomness](multiplayer-api#shared-randomness). |
-| `participantId` | `string` | a new random ID | This tab's participant ID. Must not contain `:`. |
-| `persistParticipant` | `boolean` | `false` | Keep the same participant ID when the tab is reloaded. The reload restarted the experiment, so the other tabs keep that participant `left`, and the reloaded page sees `previousInstance`. Without it, a reload joins as a new participant. Ignored if you set `participantId`. |
-| `keyPrefix` | `string` | `"mp"` | The prefix of the keys the adapter writes to `localStorage`. Change it only if another page on the same site already uses `mp:` keys. |
+| `sessionId` | `string` | the `?mp_session=` URL parameter, or a new random ID | Which session this tab joins. Tabs with the same session ID play together. If the URL has no `mp_session` parameter, the adapter makes a new ID and adds it to the URL. It is also the session ID that seeds [shared randomness](multiplayer-api#shared-randomness). |
+| `participantId` | `string` | a random ID, kept for the tab | This tab's participant ID. |
+| `persistParticipant` | `boolean` | `true` | Keep the tab's participant ID when the tab is reloaded, so the other tabs can tell that this participant restarted (see [Reloading](#reloading)). Set `false` to join as a new participant on every page load. Ignored if you set `participantId`. |
+| `namespace` | `string` | `"mp"` | The prefix of the keys the adapter writes to `localStorage`. Change it to keep two studies on the same site apart. |
 | `storage` | `Storage` | `localStorage` | Where the shared data is kept. For automated tests. |
 | `signal` | `ChangeSignal` | a `BroadcastChannel` plus the `storage` event | How a tab tells the other tabs that something changed. For automated tests. A signal you pass in is yours to close. |
 | `heartbeatIntervalMs` | `number` | `2000` | How often, in ms, a tab records that it is still open. |
 | `presenceTimeoutMs` | `number` | `70000` | How long, in ms, after its last heartbeat a tab still counts as connected. Values below `heartbeatIntervalMs` are raised to it. |
 
-Once `connect()` resolves, this tab's ID is in `jsPsych.multiplayer.participantId`.
+`sessionId` and `participantId` must not contain any of `: / . # $ [ ]`, and `namespace` must
+not contain `:`. The constructor throws an error otherwise. Once `connect()` resolves, this tab's
+ID is in `jsPsych.multiplayer.participantId`.
+
+Options that changed in 1.0 are listed in [Upgrading from 0.x](../guides/upgrading).
 
 ## Setup
 
@@ -65,34 +69,53 @@ There is nothing to install or configure. Two things matter:
 Each session is separate, so start a new one (open the page without `?mp_session=`) for each
 test run. Data left in the browser by an earlier run then cannot interfere.
 
-With `persistParticipant: true`, open the extra tabs by pasting the address into a new tab or
-window. The browser's **Duplicate Tab** command copies the participant ID along with the tab, so
-the two tabs become one participant.
+Open the extra tabs by pasting the address into a **new** tab or window. The browser's
+**Duplicate Tab** command copies the tab's participant ID along with the tab, so the two tabs
+become one participant and overwrite each other's data.
+
+## How much data fits
+
+Every participant's data is stored together in the browser's `localStorage`, which holds about
+5 MB per site in most browsers. That is plenty for testing. See
+[How much data you can share](multiplayer-api#how-much-data-you-can-share).
 
 ## Presence and dropouts
 
 Each open tab records a heartbeat every 2 seconds (`heartbeatIntervalMs`). The other tabs use it
 to tell who is still connected:
 
-- **A tab that closes or reloads** drops out at once. It becomes `away` in the other tabs, then
-  `left` after the dropout timeout (10 seconds by default, set in `connect()`).
+- **A tab that closes** drops out at once. It becomes `away` in the other tabs, then `left`
+  after the dropout timeout (10 seconds by default, set in `connect()`).
 - **A tab that crashes** sends nothing, so the others notice only when its heartbeat is older
   than `presenceTimeoutMs`: 70 seconds by default, plus the dropout timeout. The timeout is long
   because browsers slow down timers in background tabs, to as little as once a minute, and a
   tab in the background should not be counted as gone.
-- **A tab whose heartbeats lapsed** but that is still open, for example one the browser throttled
-  in the background, reports this as a reconnect when it catches up. The other tabs then count it
-  as `connected` again: it rejoins.
 - **Calling `jsPsych.multiplayer.disconnect()`** removes the tab from the session at once, like
   closing it.
 
-There is no network, so a tab never loses its own connection and never shows `reconnecting`.
-The dropout fields in trial data work as on any backend; see
-[Handling dropouts](../guides/handling-dropouts).
+A participant who drops out keeps their data. Count participants by presence, not by the number
+of entries in the shared data.
 
-A reload without `persistParticipant` leaves the old participant's data in the session, and that
-participant becomes `left`. Count participants by presence, not by the number of entries in the
-shared data.
+There is no network, so a tab never loses its own connection and never shows `reconnecting`.
+The dropout fields in trial data (`multiplayer_outcome` and `left_participant`) work as on any
+backend; see [Handling dropouts](../guides/handling-dropouts).
+
+### Rejoining
+
+A tab that is still open but whose heartbeats lapsed, for example one the browser throttled in
+the background or froze in its back/forward cache, catches up when its next heartbeat runs. The
+adapter then tells the other tabs that it is still here, so a participant they saw as `away` is
+`connected` again. `left` is final: a tab that stayed silent past the other tabs' dropout timeout
+stays `left` for them.
+
+### Reloading
+
+A reload starts the experiment over, so the participant can't rejoin. With the default
+`persistParticipant: true`, the reloaded tab keeps its participant ID, the other tabs count that
+participant as `left`, and on the reloaded page `jsPsych.multiplayer.restarted` is `true` and its
+connection closes. Check `restarted` after connecting to show a message instead of starting over
+(see [Rejoining](../guides/handling-dropouts#rejoining)). With `persistParticipant: false`, the
+old participant simply stays `left` and the reloaded page joins as someone new.
 
 ## Example
 
@@ -118,7 +141,6 @@ it, and paste its address (with `?mp_session=...`) into a second tab.
     const lobby = {
       type: jsPsychMultiplayerSync,
       participants: [],
-      push_data: { status: "ready" },
       wait_for: (group, presence) => {
         // Count the participants who are currently connected
         let connected = 0;
@@ -139,6 +161,10 @@ it, and paste its address (with `?mp_session=...`) into a second tab.
 
     async function runExperiment() {
       await jsPsych.multiplayer.connect(new jsPsychAdapterMultiplayerLocal());
+      if (jsPsych.multiplayer.restarted) {
+        document.body.innerHTML = "<p>You reloaded the page, so you can't rejoin this session.</p>";
+        return;
+      }
       await jsPsych.run([lobby, start]);
     }
 

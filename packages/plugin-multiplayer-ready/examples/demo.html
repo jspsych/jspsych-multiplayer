@@ -3,12 +3,12 @@
   <head>
     <meta charset="utf-8" />
     <title>jsPsychMultiplayerReady — runnable demo</title>
-    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@5cb6b05bec8ca0e409145453220803b408cd7e50/packages/jspsych/dist/index.browser.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@4df7fbb672806086c7e118e53aba2262f27edf68/packages/jspsych/dist/index.browser.min.js"></script>
     <script src="https://unpkg.com/@jspsych/plugin-html-keyboard-response"></script>
     <script src="../dist/index.browser.min.js"></script>
     <link
       rel="stylesheet"
-      href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@5cb6b05bec8ca0e409145453220803b408cd7e50/packages/jspsych/css/jspsych.css"
+      href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@4df7fbb672806086c7e118e53aba2262f27edf68/packages/jspsych/css/jspsych.css"
     />
   </head>
 
@@ -40,8 +40,8 @@
     const prefix = `mpready-demo:${sessionId}:`;
 
     // --- Minimal localStorage adapter -------------------------------------------------------------
-    // Implements the adapter contract: connect() returns a connection with participantId, getAll,
-    // connectedParticipants, push, and disconnect, and calls onChange() when data changes. To keep
+    // Implements the adapter contract: connect() returns a connection with participantId, sessionId,
+    // getAll, connectedParticipants, push, and disconnect, and calls onChange() when data changes. To keep
     // the demo short, everyone with a slot counts as connected, so nobody is ever marked as left.
     const demoAdapter = {
       async connect({ onChange }) {
@@ -58,6 +58,7 @@
         window.addEventListener("storage", onChange);
         return {
           participantId: myId,
+          sessionId,
           getAll,
           connectedParticipants: () => [myId, ...Object.keys(getAll())],
           async push(data) {
@@ -75,12 +76,17 @@
       on_finish: () => jsPsych.data.displayData(), // dump the trial data so you can inspect rt/wait_time/etc.
     });
 
-    // Simulated peer: check in at the first ready gate a couple of seconds after load.
+    // Simulated peer: check in at the ready gate a couple of seconds after load. It writes its data
+    // in the multiplayer API's storage format: bookkeeping under `$mp`, and the flag in the trial's
+    // part of the shared data, which the gate below names "lobby" with `multiplayer_scope`.
     if (simulatePeer) {
       setTimeout(() => {
         localStorage.setItem(
           prefix + "sim-peer",
-          JSON.stringify({ ready: true, "ready-1": true, name: "Sim Player" }),
+          JSON.stringify({
+            $mp: { v: 1, instance: "sim-peer", epoch: 1 },
+            scopes: { lobby: { ready: true, name: "Sim Player" } },
+          }),
         );
         window.dispatchEvent(new StorageEvent("storage")); // nudge our own tab
       }, 2500);
@@ -88,6 +94,7 @@
 
     const readyGate = {
       type: jsPsychMultiplayerReady,
+      multiplayer_scope: "lobby", // names the trial's shared data, so the simulated peer can write to it
       expected_players: 2, // this participant + one other
       stimulus: "<p>You'll be matched with another player.</p>",
       prompt:
@@ -103,6 +110,13 @@
       stimulus: "<p>🎉 Everyone's ready! Press any key to begin the experiment.</p>",
     };
 
-    jsPsych.multiplayer.connect(demoAdapter).then(() => jsPsych.run([readyGate, start]));
+    jsPsych.multiplayer
+      .connect(demoAdapter)
+      .then(() => jsPsych.run([readyGate, start]))
+      .catch((error) => {
+        // Show a failed connect instead of leaving a blank page
+        console.error(error);
+        document.body.textContent = "Couldn't connect: " + error.message;
+      });
   </script>
 </html>

@@ -91,10 +91,9 @@ In the tables below, _k_ is the number of targets.
 | `max_length` | `number \| null` | `null` | The longest a message can be, in characters. Longer messages are cut when sent. `null` means no limit. |
 | `require_message_before_response` | `boolean` | `false` | Ignore the matcher's clicks until the director has sent a message this round, as in the original study's Experiment 2. Ignored clicks are shown a hint and recorded as `gated_click` in `interaction_history`. Has no effect when `chat_enabled` is `false`. |
 | `placeholder` | `string` | `"Type a message…"` | Placeholder text in the empty text box. |
-| `chat_persists` | `boolean` | `false` | Keep one conversation across rounds. `false` starts each round with an empty chat. |
+| `chat_persists` | `boolean` | `false` | Keep one conversation across rounds: the log is kept in the session scope and shared by every reference-game trial with `chat_persists` on. `false` starts each round with an empty chat. |
 | `chat_position` | `string` | `"below"` | Where the chat panel goes: `"below"` or `"beside"` the grid. |
-| `typing_indicator` | `boolean` | `false` | Show "Matcher is typing…" (or "Director is typing…") while the partner types. |
-| `typing_key` | `string` | `"typing_at"` | The slot field used for the typing indicator. Only change it if your experiment already uses `typing_at` for something else. |
+| `typing_indicator` | `boolean` | `false` | Show "Matcher is typing…" (or "Director is typing…") while the partner types. It is only a hint: it never holds up the trial, and it is hidden while the partner is away or has left. |
 | `typing_ttl` | `number` | `2500` | How long the typing hint stays up after the partner's last keystroke, in ms. |
 | `typing_throttle` | `number` | `800` | While typing, send at most one update per this many ms. |
 | `typing_label` | `string \| null` | `null` | The typing hint's text. `null` uses the partner's role label, e.g. "Matcher is typing…". |
@@ -107,7 +106,7 @@ In the tables below, _k_ is the number of targets.
 | `auto_submit` | `boolean \| null` | `null` | Send the answer as soon as every slot is filled, without a Submit button. `null` means `true` when _k_ = 1. |
 | `submit_label` | `string` | `"Submit"` | The label of the Submit button. |
 | `allow_change` | `boolean` | `true` | Let the matcher change a choice before submitting. |
-| `selection_timeout` | `number \| null` | `null` | The matcher's time limit, in ms. When it runs out, whatever they have chosen so far is submitted and scored. It keeps running while the matcher waits for a message under `require_message_before_response`. |
+| `selection_timeout` | `number \| null` | `null` | The matcher's time limit, in ms. When it runs out, whatever they have chosen so far is submitted and scored, and the round ends with `multiplayer_outcome: "timeout"`. It keeps running while the matcher waits for a message under `require_message_before_response`. |
 
 ### Feedback
 
@@ -117,7 +116,7 @@ In the tables below, _k_ is the number of targets.
 | `feedback_content` | `object` | `{ reveal_target: true, show_score: true, show_partner_choice: true }` | What feedback shows: the targets, the score, and the matcher's choices. To show the two players different things, key it by role: `{ director: {…}, matcher: {…} }`. Missing entries are `true`. |
 | `feedback_to` | `string` | `"both"` | Who sees feedback: `"director"`, `"matcher"`, or `"both"`. |
 | `feedback_duration` | `number \| null` | `3000` | How long feedback stays up, in ms. `null` shows a **Continue** button instead. |
-| `show_running_score` | `boolean` | `false` | Add the pair's total `n_correct` so far to the score line. |
+| `show_running_score` | `boolean` | `false` | Add a running total to the score line: this round's `n_correct` plus the `n_correct` of this participant's earlier reference-game trials in the jsPsych data. |
 
 ### Rounds, timing, and data
 
@@ -125,14 +124,13 @@ In the tables below, _k_ is the number of targets.
 | --- | --- | --- | --- |
 | `prompt` | HTML string or `(role) => string` | `""` | Shown above the board. A function receives this participant's role, so the two players can get different instructions. |
 | `round` | `number` | required | The round number. Must be different for every round in the experiment (see [Rounds](#rounds)). Usually `jsPsych.timelineVariable("round")`. |
-| `data_key` | `string` | `"reference_game"` | The slot field where round results are stored. The chat uses fields that start with the same name. |
-| `partner_id` | `string \| null` | `null` | The partner's participant ID. `null` finds the one other participant who hasn't left, and throws an error if there is more than one. Set it when the session can hold more than two people. |
-| `round_timeout` | `number \| null` | `null` | The longest the round can last before feedback, in ms. When it runs out, the round ends with `ended_by: "timeout"` and no answer. If neither this nor `selection_timeout` is set, a warning is logged: a partner who stays connected but never acts would leave the trial waiting forever. |
+| `partner_id` | `string \| null` | `null` | The partner's participant ID. `null` finds the one other participant: the other member of a [sealed group](../guides/forming-groups), or else the other connected participant. Set it when the session can hold more than two people. |
+| `round_timeout` | `number \| null` | `null` | The longest the round can last before feedback, in ms. When it runs out, the round ends with `multiplayer_outcome: "timeout"` and no answer. If neither this nor `selection_timeout` is set, a warning is logged: a partner who stays connected but never acts would leave the trial waiting forever. |
 | `end_on_participant_left` | `boolean` | `true` | End the round, with no answer, if the partner leaves before feedback. |
 | `save_orders` | `boolean` | `true` | Save both players' arrangements in `my_order` and `partner_order`. |
 | `save_transcript` | `boolean` | `true` | Save the chat in `chat_transcript`. |
 | `save_interaction_history` | `boolean` | `false` | Save every choice the matcher made before submitting in `interaction_history`. |
-| `save_group` | `boolean` | `false` | Save the group's shared data at the end of the trial in `group`. |
+| `save_group` | `boolean` | `false` | Save this round's shared data, as it was at the end of the trial, in `group`. |
 
 ## Data
 
@@ -156,39 +154,47 @@ without one.
 | `my_order` | `string[]` | The `id`s in the order this participant saw them, row by row. Only when `save_orders` is `true`. |
 | `partner_order` | `string[] \| null` | The same for the partner. `null` if the partner was never found. Only when `save_orders` is `true`. |
 | `interaction_history` | `object[]` | The matcher's choices before submitting, as `{ t, action, slot, object_id }`. `t` is ms from the start of the trial; `action` is `"assign"`, `"reassign"`, `"clear"`, or `"gated_click"`. Only for the matcher, and only when `save_interaction_history` is `true`. |
-| `ended_by` | `string` | `"submit"`, `"timeout"`, `"participant_left"`, or `"connection_lost"`. |
-| `partner_left` | `boolean` | `true` if the round ended because the partner left. |
-| `left_participant` | `string \| null` | The partner's ID, when `partner_left` is `true`. |
-| `connection_lost` | `boolean` | `true` if the round ended because this participant's own connection was lost for good. |
-| `group` | `object` | The shared data at the end of the trial. Only when `save_group` is `true`. |
+| `multiplayer_outcome` | `string` | How the round ended: `"completed"` (the matcher answered), `"timeout"` (see below), `"participant_left"` (the partner left the study), `"connection_lost"` (this participant's connection was lost for good), or `"cancelled"` (the experiment called `jsPsych.multiplayer.disconnect()` during the round). |
+| `left_participant` | `string \| null` | The partner's ID, when `multiplayer_outcome` is `"participant_left"`. |
+| `group` | `object` | Every participant's shared data for this round. Only when `save_group` is `true`. |
 
-`ended_by: "timeout"` has two cases. If `selection_timeout` ran out, the matcher's partial answer
-was scored and feedback was shown, so `assignment` and `n_correct` are filled in. If
-`round_timeout` ran out, there is no answer.
+`multiplayer_outcome: "timeout"` has two cases. If `selection_timeout` ran out, the matcher's
+partial answer was scored and feedback was shown, so `assignment` and `n_correct` are filled in.
+If `round_timeout` ran out, there is no answer.
 
-[Handling dropouts](../guides/handling-dropouts) explains `partner_left`, `left_participant`,
-`connection_lost`, and how to branch on them.
+[Handling dropouts](../guides/handling-dropouts) explains `multiplayer_outcome` and
+`left_participant`, and how to branch on them.
 
 ## Rounds
 
 Put one trial per round in a timeline with `timeline_variables`, and give each round its own
-`round` number. Round results are stored under that number, so a repeated number would find the
-earlier round's answer. The trial throws an error if the matcher's slot already holds an answer
-for that round.
+`round` number. The round number picks the arrangements, is recorded in the data, and is stamped
+on chat messages.
+
+Each round's shared data (the matcher's answer, the chat, and the typing indicator) lives in the
+round's own [trial scope](../guides/how-it-works), so rounds never see each other's answers, even
+when the same trial runs again through `timeline_variables`. Don't give rounds a shared
+`multiplayer_scope`: the trial throws an error if its scope already holds this participant's
+answer. With `chat_persists`, the chat is kept in the session scope instead, so it carries across
+rounds; the `round` stamped on each message tells this round's messages from earlier ones.
 
 Arrangements are shuffled again every round. They depend only on the session ID (or the
-`randomSeed` connect option), `seed`, the round number, and the two participant IDs, so a player
-who reloads the page sees the same arrangement, each group gets its own arrangements, and each
-player's data can record the partner's arrangement too.
+`randomSeed` connect option), `seed`, the round number, and the two participant IDs, so each group
+gets its own arrangements and each player's data can record the partner's arrangement too.
 
-With the default feedback settings, both players' trials end together: when the matcher answers, the director's screen shows the
-feedback at the same moment, and both end `feedback_duration` later.
+With the default feedback settings, both players' trials end together: when the matcher answers,
+the director's screen shows the feedback at the same moment, and both end `feedback_duration`
+later.
 
 ## When the partner leaves or goes quiet
 
 If the partner leaves before feedback, the round ends for this participant with
-`ended_by: "participant_left"` and no answer. An answer that arrived before they left is still
-scored. Once feedback is showing, a departure changes nothing.
+`multiplayer_outcome: "participant_left"`, their ID in `left_participant`, and no answer. An answer that arrived before they left is still
+scored. Once feedback is showing, a departure changes nothing. Set
+`end_on_participant_left: false` to rely on `round_timeout` instead.
+
+If this participant's own connection is lost for good, the round ends with
+`multiplayer_outcome: "connection_lost"`.
 
 A partner who stays connected but stops responding does not end the round. Set `round_timeout`
 so the round can't wait forever, and skip the remaining rounds once a partner is gone, as in the
@@ -237,7 +243,12 @@ const gameRound = {
       ? "<p>Describe the outlined shape so your partner can find it.</p>"
       : "<p>Click the shape your partner describes.</p>",
   on_finish: (data) => {
-    if (data.partner_left || data.connection_lost) partnerGone = true;
+    if (
+      data.multiplayer_outcome === "participant_left" ||
+      data.multiplayer_outcome === "connection_lost"
+    ) {
+      partnerGone = true;
+    }
   },
 };
 

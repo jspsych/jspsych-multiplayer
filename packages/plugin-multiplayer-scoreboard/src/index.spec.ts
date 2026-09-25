@@ -1,13 +1,15 @@
 import { startTimeline } from "@jspsych/test-utils";
 import { ConnectOptions } from "jspsych";
 
-import { MemoryHub } from "../../../test-utils/memory-backend";
+import { MemoryHub, scopeData } from "../../../test-utils/memory-backend";
 import MultiplayerScoreboardPlugin from ".";
 
 /**
  * A jsPsych stand-in whose `multiplayer` is a real session on an in-memory hub, so the plugin runs
  * against the actual core (frozen snapshots, presence, errors) while `finishTrial` is captured.
- * `api.seed(id, data)` writes a participant's slot, as if they had written it.
+ * `api.seed(id, data)` writes a participant's data, as if they had written it; another participant
+ * is added as a connected peer. No trial is running in the core, so the plugin's reads and writes
+ * use the session scope here; the startTimeline tests cover the trial scope.
  */
 async function setup(participantId = "p1", connect?: ConnectOptions) {
   const hub = new MemoryHub();
@@ -23,7 +25,11 @@ async function setup(participantId = "p1", connect?: ConnectOptions) {
   };
   const api = {
     seed: (id: string, data: Record<string, unknown>) =>
-      id === participantId ? void multiplayer.update(data) : hub.seed(id, data),
+      id === participantId
+        ? void multiplayer.update(data)
+        : hub.peers.has(id)
+          ? hub.seed(id, data)
+          : hub.addPeer(id, data),
     get: (id: string) => multiplayer.get(id),
   };
   return { hub, me, multiplayer, jsPsych, finished, api };
@@ -68,7 +74,6 @@ describe("plugin-multiplayer-scoreboard — package surface", () => {
 // ---------------------------------------------------------------------------------------------------
 describe("plugin-multiplayer-scoreboard — trial wrapper", () => {
   const base = {
-    data_key: "score",
     sort: "desc",
     tie_method: "standard",
     title: "<h2>Final scores</h2>",
@@ -89,8 +94,8 @@ describe("plugin-multiplayer-scoreboard — trial wrapper", () => {
 
   it("happy path: gathers scores, ranks them, and finishes on the continue button", async () => {
     const { api, jsPsych, finished } = await setup("p1");
-    api.seed("p2", { score: { score: 30, label: "Bea" } });
-    api.seed("p3", { score: { score: 10 } });
+    api.seed("p2", { scoreboard: { score: 30, label: "Bea" } });
+    api.seed("p3", { scoreboard: { score: 10 } });
 
     const el = display();
 
@@ -112,7 +117,8 @@ describe("plugin-multiplayer-scoreboard — trial wrapper", () => {
     clickContinue(el);
     expect(finished).toHaveLength(1);
     const data = finished[0];
-    expect(data.timed_out).toBe(false);
+    expect(data.multiplayer_outcome).toBe("completed");
+    expect(data.left_participant).toBeNull();
     expect(data.num_players).toBe(3);
     expect(data.my_rank).toBe(2);
     expect(data.my_score).toBe(20);
@@ -124,10 +130,10 @@ describe("plugin-multiplayer-scoreboard — trial wrapper", () => {
     expect(data.leaderboard.find((r: any) => r.participantId === "p1").isSelf).toBe(true);
   });
 
-  it("preserves other keys already in this client's slot (update MERGES into it)", async () => {
+  it("preserves other keys already in this client's data (update MERGES into it)", async () => {
     const { api, jsPsych } = await setup("p1");
-    api.seed("p1", { role: "proposer" }); // an earlier trial pushed a role
-    api.seed("p2", { score: { score: 5 } });
+    api.seed("p1", { role: "proposer" }); // written earlier
+    api.seed("p2", { scoreboard: { score: 5 } });
 
     new MultiplayerScoreboardPlugin(jsPsych as never).trial(display(), {
       ...base,
@@ -138,7 +144,7 @@ describe("plugin-multiplayer-scoreboard — trial wrapper", () => {
 
     const mine = api.get("p1") as any;
     expect(mine.role).toBe("proposer"); // survived the scoreboard's own write
-    expect(mine.score).toEqual({ score: 7 }); // score added alongside
+    expect(mine.scoreboard).toEqual({ score: 7 }); // score added alongside
   });
 
   it("barrier: stalls at N-1 reporters, reveals when the Nth arrives", async () => {
@@ -155,7 +161,7 @@ describe("plugin-multiplayer-scoreboard — trial wrapper", () => {
     expect(el.querySelector(".jspsych-multiplayer-scoreboard-table")).toBeNull(); // still waiting
     expect(el.innerHTML).toContain("waiting");
 
-    api.seed("p2", { score: { score: 5 } }); // Nth reporter
+    api.seed("p2", { scoreboard: { score: 5 } }); // Nth reporter
     await flush();
     expect(el.querySelector(".jspsych-multiplayer-scoreboard-table")).not.toBeNull();
     clickContinue(el);
@@ -165,8 +171,8 @@ describe("plugin-multiplayer-scoreboard — trial wrapper", () => {
   it("no valid score: warns, stays unranked, but still views the board", async () => {
     const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
     const { api, jsPsych, finished } = await setup("p1");
-    api.seed("p2", { score: { score: 8 } });
-    api.seed("p3", { score: { score: 3 } });
+    api.seed("p2", { scoreboard: { score: 8 } });
+    api.seed("p3", { scoreboard: { score: 3 } });
 
     const el = display();
 
@@ -185,9 +191,9 @@ describe("plugin-multiplayer-scoreboard — trial wrapper", () => {
     warn.mockRestore();
   });
 
-  it("timeout: fires on_timeout, degrades to a partial board flagged timed_out, still finishable", async () => {
+  it("timeout: fires on_timeout, degrades to a partial board with a timeout outcome, still finishable", async () => {
     const { api, jsPsych, finished } = await setup("p1"); // group_size 3 never satisfied
-    api.seed("p2", { score: { score: 4 } });
+    api.seed("p2", { scoreboard: { score: 4 } });
     const onTimeout = jest.fn();
     const el = display();
 
@@ -204,7 +210,7 @@ describe("plugin-multiplayer-scoreboard — trial wrapper", () => {
     expect(el.querySelector(".jspsych-multiplayer-scoreboard-timeout")).not.toBeNull();
     clickContinue(el);
     expect(finished).toHaveLength(1);
-    expect(finished[0].timed_out).toBe(true);
+    expect(finished[0].multiplayer_outcome).toBe("timeout");
     expect(finished[0].error).toBeNull(); // a timeout is not an error
     expect(finished[0].num_players).toBe(2); // p1 (self) + p2, the two who reported
     expect(finished[0].my_rank).toBe(1); // 9 > 4
@@ -213,7 +219,7 @@ describe("plugin-multiplayer-scoreboard — trial wrapper", () => {
   it("a throwing on_timeout hook still renders the board (no hang)", async () => {
     const errSpy = jest.spyOn(console, "error").mockImplementation(() => {});
     const { api, jsPsych, finished } = await setup("p1"); // 2 reporters, group_size 3 never satisfied
-    api.seed("p2", { score: { score: 4 } });
+    api.seed("p2", { scoreboard: { score: 4 } });
     const el = display();
 
     new MultiplayerScoreboardPlugin(jsPsych as never).trial(el, {
@@ -230,7 +236,7 @@ describe("plugin-multiplayer-scoreboard — trial wrapper", () => {
     expect(errSpy).toHaveBeenCalled(); // the throw was caught and logged
     expect(el.querySelector(".jspsych-multiplayer-scoreboard-table")).not.toBeNull(); // board still rendered
     clickContinue(el);
-    expect(finished[0].timed_out).toBe(true);
+    expect(finished[0].multiplayer_outcome).toBe("timeout");
     errSpy.mockRestore();
   });
 
@@ -250,7 +256,7 @@ describe("plugin-multiplayer-scoreboard — trial wrapper", () => {
     expect(el.querySelector(".jspsych-multiplayer-scoreboard-table")).toBeNull(); // still waiting
 
     const p2 = await hub.join("p2");
-    await p2.jsPsych.multiplayer.update({ score: { score: 5 } });
+    await p2.jsPsych.multiplayer.update({ scoreboard: { score: 5 } });
     await flush();
     expect(el.querySelector(".jspsych-multiplayer-scoreboard-table")).not.toBeNull();
     clickContinue(el);
@@ -295,7 +301,7 @@ describe("plugin-multiplayer-scoreboard — trial wrapper", () => {
 
   it("rendering: highlights self, honours display_label override and score_format", async () => {
     const { api, jsPsych } = await setup("p1");
-    api.seed("p2", { score: { score: 2, label: "ignored-pushed-label" } });
+    api.seed("p2", { scoreboard: { score: 2, label: "ignored-written-label" } });
 
     const el = display();
 
@@ -311,14 +317,14 @@ describe("plugin-multiplayer-scoreboard — trial wrapper", () => {
     const selfRow = el.querySelector(".jspsych-multiplayer-scoreboard-row.is-self");
     expect(selfRow).not.toBeNull();
     expect(el.textContent).toContain("You");
-    expect(el.textContent).toContain("Rival"); // display_label overrode the pushed label
-    expect(el.textContent).not.toContain("ignored-pushed-label");
+    expect(el.textContent).toContain("Rival"); // display_label overrode the written label
+    expect(el.textContent).not.toContain("ignored-written-label");
     expect(el.textContent).toContain("2 pts"); // score_format applied
   });
 
   it("escapes untrusted labels rather than parsing them as HTML", async () => {
     const { api, jsPsych } = await setup("p1");
-    api.seed("p2", { score: { score: 5, label: "<img src=x onerror=alert(1)>" } });
+    api.seed("p2", { scoreboard: { score: 5, label: "<img src=x onerror=alert(1)>" } });
 
     const el = display();
 
@@ -333,10 +339,10 @@ describe("plugin-multiplayer-scoreboard — trial wrapper", () => {
     expect(el.innerHTML).toContain("&lt;img");
   });
 
-  it("a throwing display_label falls back to the pushed label and still renders/finishes", async () => {
+  it("a throwing display_label falls back to the written label and still renders/finishes", async () => {
     const errSpy = jest.spyOn(console, "error").mockImplementation(() => {});
     const { api, jsPsych, finished } = await setup("p1");
-    api.seed("p2", { score: { score: 5, label: "Bea" } });
+    api.seed("p2", { scoreboard: { score: 5, label: "Bea" } });
 
     const el = display();
 
@@ -353,8 +359,8 @@ describe("plugin-multiplayer-scoreboard — trial wrapper", () => {
 
     expect(errSpy).toHaveBeenCalled(); // the throw was caught and logged
     expect(el.querySelector(".jspsych-multiplayer-scoreboard-table")).not.toBeNull(); // rendered, not soft-locked
-    expect(el.textContent).toContain("Me"); // fell back to p1's pushed label
-    expect(el.textContent).toContain("Bea"); // fell back to p2's pushed label
+    expect(el.textContent).toContain("Me"); // fell back to p1's written label
+    expect(el.textContent).toContain("Bea"); // fell back to p2's written label
     clickContinue(el);
     expect(finished).toHaveLength(1); // trial actually finished
     errSpy.mockRestore();
@@ -363,7 +369,7 @@ describe("plugin-multiplayer-scoreboard — trial wrapper", () => {
   it("a throwing score_format falls back to the raw score", async () => {
     const errSpy = jest.spyOn(console, "error").mockImplementation(() => {});
     const { api, jsPsych, finished } = await setup("p1");
-    api.seed("p2", { score: { score: 5 } });
+    api.seed("p2", { scoreboard: { score: 5 } });
 
     const el = display();
 
@@ -384,10 +390,10 @@ describe("plugin-multiplayer-scoreboard — trial wrapper", () => {
     errSpy.mockRestore();
   });
 
-  it("write failure: records `error`, is NOT a timeout, does not fire on_timeout, still shows the board", async () => {
-    const errSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+  it("doesn't hold the barrier for a write the backend hasn't confirmed", async () => {
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
     const { api, jsPsych, finished, me } = await setup("p1");
-    api.seed("p2", { score: { score: 7 } });
+    api.seed("p2", { scoreboard: { score: 7 } });
     me.connection.pushImpl = () => Promise.reject(new Error("network down")); // the score write fails
     const onTimeout = jest.fn();
     const el = display();
@@ -400,19 +406,43 @@ describe("plugin-multiplayer-scoreboard — trial wrapper", () => {
     } as never);
     await flush();
 
-    expect(onTimeout).not.toHaveBeenCalled(); // a write failure is not a timeout
-    expect(el.querySelector(".jspsych-multiplayer-scoreboard-table")).not.toBeNull(); // board still shown
+    // The core keeps retrying the write, and this client's own reads already include it
+    expect(onTimeout).not.toHaveBeenCalled();
+    expect(el.querySelector(".jspsych-multiplayer-scoreboard-table")).not.toBeNull();
     clickContinue(el);
-    expect(finished).toHaveLength(1);
-    expect(finished[0].timed_out).toBe(false); // NOT mislabeled as a timeout
-    expect(finished[0].error).toMatch(/network down/); // the error is preserved separately
-    errSpy.mockRestore();
+    expect(finished[0]).toMatchObject({
+      multiplayer_outcome: "completed",
+      my_rank: 1,
+      error: null,
+    });
+    await me.jsPsych.multiplayer.disconnect();
+    warn.mockRestore();
+  });
+
+  it("display_label receives the session's shared data, e.g. names chosen in earlier trials", async () => {
+    const { hub, jsPsych, multiplayer } = await setup("p1");
+    await multiplayer.update({ name: "Ann" }, { scope: "session" });
+    hub.addPeer("p2", { name: "Bea", scoreboard: { score: 3 } });
+    const display_label = jest.fn((id: string, group: any) => group[id]?.name ?? id);
+    const el = display();
+
+    new MultiplayerScoreboardPlugin(jsPsych as never).trial(el, {
+      ...base,
+      score: 9,
+      group_size: 2,
+      display_label,
+    } as never);
+    await flush();
+
+    expect(el.textContent).toContain("Ann");
+    expect(el.textContent).toContain("Bea");
+    expect(display_label.mock.calls[0][1]).toEqual(multiplayer.getAll({ scope: "session" }));
   });
 
   it("wait/backend failure: records `error`, is NOT a timeout, does not fire on_timeout", async () => {
     const errSpy = jest.spyOn(console, "error").mockImplementation(() => {});
     const { api, jsPsych, finished, multiplayer } = await setup("p1");
-    api.seed("p2", { score: { score: 7 } });
+    api.seed("p2", { scoreboard: { score: 7 } });
     jest.spyOn(multiplayer, "wait").mockRejectedValue(new Error("socket closed")); // backend drops mid-wait
     const onTimeout = jest.fn();
     const el = display();
@@ -425,24 +455,27 @@ describe("plugin-multiplayer-scoreboard — trial wrapper", () => {
     } as never);
     await flush();
 
-    // A wait rejection is a backend/disconnect error, distinct from our own timeout timer firing.
+    // A wait rejection is a backend error, distinct from our own timeout timer firing.
     expect(onTimeout).not.toHaveBeenCalled();
     clickContinue(el);
     expect(finished).toHaveLength(1);
-    expect(finished[0].timed_out).toBe(false); // NOT mislabeled as a timeout
+    expect(finished[0].multiplayer_outcome).toBeNull(); // NOT mislabeled as a timeout
     expect(finished[0].error).toMatch(/socket closed/);
     errSpy.mockRestore();
   });
 
   it("wait while not connected: the rejection is caught as `error`, no unhandled rejection or soft-lock", async () => {
-    // Under jsPsych#3694 `wait()` REJECTS when the API isn't connected rather than throwing
-    // synchronously, so the rejection is the only path this has to survive.
+    // `wait()` REJECTS when the API isn't connected rather than throwing synchronously, so the
+    // rejection is the only path this has to survive.
     const errSpy = jest.spyOn(console, "error").mockImplementation(() => {});
     const { api, jsPsych, finished, multiplayer } = await setup("p1");
-    api.seed("p2", { score: { score: 7 } });
-    jest
-      .spyOn(multiplayer, "wait")
-      .mockRejectedValue(new Error("connect() must be called before using multiplayer methods"));
+    api.seed("p2", { scoreboard: { score: 7 } });
+    jest.spyOn(multiplayer, "wait").mockRejectedValue(
+      Object.assign(new Error("connect() must be called before using multiplayer methods"), {
+        name: "MultiplayerError",
+        code: "not_connected",
+      }),
+    );
     const onTimeout = jest.fn();
     const el = display();
 
@@ -458,13 +491,13 @@ describe("plugin-multiplayer-scoreboard — trial wrapper", () => {
     expect(el.querySelector(".jspsych-multiplayer-scoreboard-table")).not.toBeNull(); // rendered, not soft-locked
     clickContinue(el);
     expect(finished).toHaveLength(1);
-    expect(finished[0].timed_out).toBe(false);
+    expect(finished[0].multiplayer_outcome).toBeNull();
     expect(finished[0].error).toMatch(/connect\(\) must be called/);
     errSpy.mockRestore();
   });
 
   it("a cancelled wait stops quietly: no board, no error, no finishTrial", async () => {
-    // A wait cancelled by abortExperiment / disconnect / the end of jsPsych.run means the trial is
+    // A wait cancelled by the end of the trial or the experiment, or by disconnect, means the trial is
     // being torn down and jsPsych has already cleared the display. Revealing here would paint a board
     // over a finished experiment, with a Continue button whose finishTrial() lands after the run ended.
     const errSpy = jest.spyOn(console, "error").mockImplementation(() => {});
@@ -481,7 +514,7 @@ describe("plugin-multiplayer-scoreboard — trial wrapper", () => {
     await flush();
     expect(el.querySelector(".jspsych-multiplayer-scoreboard-table")).toBeNull(); // still waiting
 
-    multiplayer.cancelAllSubscriptions();
+    await multiplayer.disconnect();
     await flush();
 
     expect(el.querySelector(".jspsych-multiplayer-scoreboard-table")).toBeNull(); // no board drawn
@@ -491,44 +524,6 @@ describe("plugin-multiplayer-scoreboard — trial wrapper", () => {
     expect(errSpy).not.toHaveBeenCalled(); // nor a backend failure worth logging
     errSpy.mockRestore();
   });
-
-  it("failure paths survive a disconnected getAll(): the board still renders and finishes", async () => {
-    // `gather()` runs detached (`void`), so a throwing getAll() on a failure path would be an
-    // unhandled rejection leaving the participant stuck on the waiting message. Both the write-failure
-    // and wait-failure paths read through the same safe fallback instead.
-    const errSpy = jest.spyOn(console, "error").mockImplementation(() => {});
-    const disconnected = () => {
-      throw new Error("connect() must be called before using multiplayer methods");
-    };
-
-    for (const failing of ["update", "wait"] as const) {
-      const { api, jsPsych, finished, multiplayer, me } = await setup("p1");
-      api.seed("p2", { score: { score: 7 } });
-      if (failing === "update") {
-        me.connection.pushImpl = () => Promise.reject(new Error("adapter went away"));
-      } else {
-        jest.spyOn(multiplayer, "wait").mockRejectedValue(new Error("adapter went away"));
-      }
-      jest.spyOn(multiplayer, "getAll").mockImplementation(disconnected);
-      const el = display();
-
-      new MultiplayerScoreboardPlugin(jsPsych as never).trial(el, {
-        ...base,
-        score: 9,
-        group_size: 2,
-      } as never);
-      await flush();
-
-      // Empty snapshot fallback: no rows to rank, but a board with a working button all the same.
-      expect(el.querySelector(".jspsych-multiplayer-scoreboard-empty")).not.toBeNull();
-      clickContinue(el);
-      expect(finished).toHaveLength(1);
-      expect(finished[0].num_players).toBe(0);
-      expect(finished[0].timed_out).toBe(false);
-      expect(finished[0].error).toMatch(/adapter went away/);
-    }
-    errSpy.mockRestore();
-  });
 });
 
 // ---------------------------------------------------------------------------------------------------
@@ -536,12 +531,24 @@ describe("plugin-multiplayer-scoreboard — real jsPsych pipeline (startTimeline
   it("runs through jsPsych's parameter pipeline, records trial_type, and saves the standing", async () => {
     const hub = new MemoryHub();
     const { jsPsych } = await hub.join("p1");
-    // This trial uses the DEFAULT data_key, so it's the first scoreboard: "scoreboard-1".
-    hub.seed("p2", { "scoreboard-1": { score: 30 } });
-    hub.seed("p3", { "scoreboard-1": { score: 5 } });
+    // The peers write their scores to the trial's scope, which this trial names with multiplayer_scope
+    for (const [id, score] of [
+      ["p2", 30],
+      ["p3", 5],
+    ] as const) {
+      hub.addPeer(id);
+      hub.seed(id, { scoreboard: { score } }, { scope: "final" });
+    }
 
     const { getData, expectFinished, finished, displayElement } = await startTimeline(
-      [{ type: MultiplayerScoreboardPlugin, score: 20, group_size: 3 }],
+      [
+        {
+          type: MultiplayerScoreboardPlugin,
+          score: 20,
+          group_size: 3,
+          multiplayer_scope: "final",
+        },
+      ],
       jsPsych,
     );
 
@@ -554,14 +561,45 @@ describe("plugin-multiplayer-scoreboard — real jsPsych pipeline (startTimeline
     expect(data.trial_type).toBe("multiplayer-scoreboard"); // jsPsych records info.name (sans plugin- prefix)
     expect(data.my_rank).toBe(2); // 30 > 20 > 5
     expect(data.num_players).toBe(3);
+    expect(data.multiplayer_outcome).toBe("completed");
+    for (const removed of ["data_key", "timed_out", "partner_left", "connection_lost"]) {
+      expect(data).not.toHaveProperty(removed);
+    }
     expect(MultiplayerScoreboardPlugin.getMyRank()).toBe(2);
+    // The score went to the trial's own shared data, not the session's
+    expect(scopeData(hub.data.p1, "final")).toEqual({ scoreboard: { score: 20 } });
+    expect(scopeData(hub.data.p1)).toBeUndefined();
+  });
+
+  it("a later board ignores scores reported to an earlier one", async () => {
+    const hub = new MemoryHub();
+    const { jsPsych } = await hub.join("p1");
+    hub.addPeer("p2");
+    hub.seed("p2", { scoreboard: { score: 3 } }, { scope: "first" });
+    const board = { type: MultiplayerScoreboardPlugin, score: 5, group_size: 2 };
+
+    const { getData, expectFinished, displayElement } = await startTimeline(
+      [
+        { ...board, multiplayer_scope: "first" },
+        { ...board, timeout: 40 },
+      ],
+      jsPsych,
+    );
+    await flush();
+    clickContinue(displayElement);
+    await new Promise((r) => setTimeout(r, 80));
+    clickContinue(displayElement);
+    await expectFinished();
+
+    const [first, second] = getData().values();
+    expect(first).toMatchObject({ multiplayer_outcome: "completed", num_players: 2 });
+    expect(second).toMatchObject({ multiplayer_outcome: "timeout", num_players: 1 });
   });
 });
 
 // ---------------------------------------------------------------------------------------------------
-describe("plugin-multiplayer-scoreboard — board keys and departures", () => {
+describe("plugin-multiplayer-scoreboard — departures", () => {
   const base = {
-    data_key: null,
     sort: "desc",
     tie_method: "standard",
     title: "<h2>Final scores</h2>",
@@ -573,41 +611,7 @@ describe("plugin-multiplayer-scoreboard — board keys and departures", () => {
   };
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-  it("generates scoreboard-1, scoreboard-2, … and a later board ignores earlier scores", async () => {
-    const { api, jsPsych, finished } = await setup("p1");
-    const plugin = new MultiplayerScoreboardPlugin(jsPsych as never);
-    api.seed("p2", { "scoreboard-1": { score: 3 } });
-
-    const el1 = display();
-    plugin.trial(el1, { ...base, score: 5, group_size: 2 } as never);
-    await flush();
-    clickContinue(el1);
-    expect(finished[0]).toMatchObject({ data_key: "scoreboard-1", num_players: 2 });
-
-    const el2 = display();
-    plugin.trial(el2, { ...base, score: 6, group_size: 2, timeout: 40 } as never);
-    await sleep(80);
-    clickContinue(el2);
-    expect(finished[1]).toMatchObject({
-      data_key: "scoreboard-2",
-      num_players: 1,
-      timed_out: true,
-    });
-  });
-
-  it("uses an explicit data_key as-is without advancing the default count", async () => {
-    const { jsPsych, finished } = await setup("p1");
-    const plugin = new MultiplayerScoreboardPlugin(jsPsych as never);
-    for (const data_key of ["final", null]) {
-      const el = display();
-      plugin.trial(el, { ...base, data_key, score: 1, group_size: 1 } as never);
-      await flush();
-      clickContinue(el);
-    }
-    expect(finished.map((d) => d.data_key)).toEqual(["final", "scoreboard-1"]);
-  });
-
-  it("shows the partial board flagged partner_left when a participant leaves", async () => {
+  it("shows the partial board with participant_left when a participant leaves", async () => {
     const { hub, jsPsych, finished } = await setup("p1", { dropoutTimeout: 10 });
     const peer = await hub.join("p2");
     const onTimeout = jest.fn();
@@ -626,9 +630,8 @@ describe("plugin-multiplayer-scoreboard — board keys and departures", () => {
     expect(el.textContent).toContain("A player left");
     clickContinue(el);
     expect(finished[0]).toMatchObject({
-      partner_left: true,
+      multiplayer_outcome: "participant_left",
       left_participant: "p2",
-      timed_out: false,
       error: null,
       num_players: 1,
     });
@@ -636,9 +639,9 @@ describe("plugin-multiplayer-scoreboard — board keys and departures", () => {
   });
 
   it("does not count a participant who left toward group_size", async () => {
-    const { hub, jsPsych, finished } = await setup("p1", { dropoutTimeout: 0 });
+    const { hub, jsPsych, finished } = await setup("p1", { dropoutTimeout: 1 });
     const gone = await hub.join("p2");
-    await gone.jsPsych.multiplayer.update({ "scoreboard-1": { score: 9 } });
+    await gone.jsPsych.multiplayer.update({ scoreboard: { score: 9 } });
     await gone.jsPsych.multiplayer.disconnect();
     await sleep(5);
     const el = display();
@@ -651,10 +654,10 @@ describe("plugin-multiplayer-scoreboard — board keys and departures", () => {
     } as never);
     await sleep(80);
     clickContinue(el);
-    expect(finished[0].timed_out).toBe(true);
+    expect(finished[0]).toMatchObject({ multiplayer_outcome: "timeout", num_players: 1 });
   });
 
-  it("shows the board flagged connection_lost when this participant's connection closes", async () => {
+  it("shows the board with connection_lost when this participant's connection closes", async () => {
     const { me, jsPsych, finished } = await setup("p1");
     const el = display();
     new MultiplayerScoreboardPlugin(jsPsych as never).trial(el, {
@@ -668,6 +671,8 @@ describe("plugin-multiplayer-scoreboard — board keys and departures", () => {
 
     expect(el.textContent).toContain("connection was lost");
     clickContinue(el);
-    expect(finished[0]).toMatchObject({ connection_lost: true, error: null });
+    expect(finished[0]).toMatchObject({ multiplayer_outcome: "connection_lost", error: null });
+    // Reads keep working after the connection is lost, so this client's own row is on the board
+    expect(finished[0].my_score).toBe(5);
   });
 });

@@ -272,6 +272,13 @@ declare class Trial extends TimelineNode {
     private onStart;
     private onLoad;
     private onFinish;
+    /**
+     * The name of this trial's part of the multiplayer shared data: the `multiplayer_scope`
+     * parameter, or else the trial's position in the timeline. Each timeline counts every child
+     * it runs, across repetitions and loops, so the position is the same for every participant
+     * running the same timeline, even when a conditional timeline runs for some and not others.
+     */
+    getMultiplayerScope(): string;
     evaluateTimelineVariable(variable: TimelineVariable): any;
     getParameterValue(parameterPath: string | string[], options?: GetParameterValueOptions): any;
     /**
@@ -351,6 +358,13 @@ interface TrialDescription extends Record<string, any> {
      * Whether to record the data of this trial. Defaults to `true`.
      */
     record_data?: Parameter<boolean>;
+    /**
+     * Names the part of the multiplayer shared data this trial reads and writes. Defaults to the
+     * trial's position in the timeline, which is the same for every participant running the same
+     * timeline. Trials that use the same name share data, so a trial that repeats needs a name that
+     * changes with each repetition, e.g. one built from a timeline variable.
+     */
+    multiplayer_scope?: Parameter<string>;
     /** https://www.jspsych.org/latest/overview/events/#on_start-trial */
     on_start?: (trial: any) => void;
     /** https://www.jspsych.org/latest/overview/events/#on_load */
@@ -577,7 +591,7 @@ declare class JsPsychData {
     removeInteractionListeners(): void;
 }
 
-/** Group session snapshot keyed by participantId, then by data key. */
+/** Shared data keyed by participantId, then by data key. */
 type GroupSessionData = Record<string, Record<string, unknown>>;
 /** Calling this removes the associated subscription. */
 type Unsubscribe = () => void;
@@ -592,21 +606,20 @@ type ConnectionStatus = "connected" | "reconnecting" | "closed";
  * Whether a participant is still in the session.
  * - `connected`: currently connected.
  * - `away`: dropped out, and may come back within the dropout timeout.
- * - `left`: gone for good. A participant who reaches `left` stays `left`.
+ * - `left`: gone for good. A participant who reaches `left` stays `left`, and the group agrees
+ *   on it: once one participant sees someone leave, the others who have also lost sight of them
+ *   count them as left too.
  */
 type PresenceStatus = "connected" | "away" | "left";
 /** Presence of every participant seen in the session, keyed by participantId. */
 type PresenceData = Record<string, PresenceStatus>;
 /**
  * How the group's membership stands.
- * - `size`: the most participants the group can hold, or null when the backend
- *   doesn't say.
- * - `members`: the participants assigned to the group, including this one.
- *   Once the group is sealed, this is the final roster: a member who drops out
- *   stays on it, and nobody is added.
- * - `sealed`: true once nobody new can join. Before that, a member who leaves
- *   frees their place for someone new; after it, they count as a dropout. A
- *   sealed group never becomes unsealed.
+ * - `size`: the most participants the group can hold, or null when the backend doesn't say.
+ * - `members`: the participants assigned to the group, including this one. Once the group is
+ *   sealed, this is the final roster: a member who drops out stays on it, and nobody is added.
+ * - `sealed`: true once nobody new can join. Before that, a member who leaves frees their place
+ *   for someone new; after it, they count as a dropout. A sealed group never becomes unsealed.
  */
 interface GroupState {
     size: number | null;
@@ -616,465 +629,275 @@ interface GroupState {
 /** What the MultiplayerAPI passes to MultiplayerAdapter.connect(). */
 interface AdapterConnectOptions {
     /**
-     * Aborted when the caller cancels the connection attempt. The adapter should
+     * Aborted when the caller cancels the connection attempt or it times out. The adapter should
      * stop connecting, release anything it opened, and then reject.
      */
     signal: AbortSignal;
     /**
-     * Call whenever the connection's getAll(), connectedParticipants(), or
-     * group() may have changed. The API re-reads them all, so extra calls are
-     * harmless.
+     * Call whenever the connection's getAll(), connectedParticipants(), or group() may have
+     * changed. The API re-reads them all, so extra calls are harmless. Calls made before
+     * connect() resolves are allowed and ignored; the API reads everything once it resolves.
      */
     onChange(): void;
     /**
-     * Call when this client's own channel drops (`reconnecting`), recovers
-     * (`connected`), or is lost for good (`closed`).
+     * Call when this client's own channel drops (`reconnecting`), recovers (`connected`), or is
+     * lost for good (`closed`).
      */
     onStatus(status: ConnectionStatus): void;
+    /**
+     * Call when other participants may have seen this client drop out even though its channel
+     * never reported `reconnecting`, e.g. after a missed heartbeat. The API then tells the group
+     * that this participant is still on the same page. Recovering from `reconnecting` does this
+     * already.
+     */
+    onResumed(): void;
 }
 /**
- * Contract that any multiplayer network backend must implement. An adapter
- * holds configuration only; each connect() call opens a new, independent
- * MultiplayerConnection. Plugin authors code against the MultiplayerAPI and
- * never touch the adapter directly.
+ * Contract that any multiplayer network backend must implement. An adapter holds configuration
+ * only; each connect() call opens a new, independent MultiplayerConnection. Plugin authors code
+ * against the MultiplayerAPI and never touch the adapter directly.
  */
 interface MultiplayerAdapter {
     /**
-     * Open the communication channel and establish group membership. The
-     * backend, not the client, decides which group an arriving participant
-     * joins, so two participants who arrive together can't both take the last
-     * place. connect() resolves once this participant has a group.
+     * Open the communication channel and establish group membership. The backend, not the client,
+     * decides which group an arriving participant joins, so two participants who arrive together
+     * can't both take the last place. connect() resolves once this participant has a group and the
+     * connection's reads are ready.
      */
     connect(options: AdapterConnectOptions): Promise<MultiplayerConnection>;
 }
-/** One open channel to the backend, returned by MultiplayerAdapter.connect(). */
+/**
+ * One open channel to the backend, returned by MultiplayerAdapter.connect().
+ *
+ * Reads are synchronous, so an adapter over an asynchronous backend keeps an in-memory mirror of
+ * the backend's state and fills it before connect() resolves.
+ */
 interface MultiplayerConnection {
-    /** Stable identifier for this participant within the group session namespace. */
+    /**
+     * Identifies this participant within the group session. Keep the same ID for every connection
+     * made from the same page, so a participant whose network drops can rejoin.
+     */
     readonly participantId: string;
     /**
-     * Identifies the group session. Every participant in the group gets the same
-     * non-empty value, it stays the same across reconnects and reloads, and a
-     * different group gets a different value. The API seeds shared randomness
-     * with it.
+     * Identifies the group session. Every participant in the group gets the same non-empty value,
+     * it stays the same across reconnects and reloads, and a different group gets a different
+     * value. The API seeds shared randomness with it.
      */
     readonly sessionId: string;
-    /** Read the full current group session (all participants). Return `{}` when empty. */
-    getAll(): GroupSessionData;
     /**
-     * IDs of the participants whose channels are currently open. May include
-     * this participant's own ID.
+     * Every participant's latest pushed data, keyed by participantId. Return `{}` when empty. The
+     * API owns the format of each participant's data; store and return it unchanged.
      */
+    getAll(): Record<string, unknown>;
+    /** IDs of the participants whose channels are currently open, including this participant's. */
     connectedParticipants(): string[];
     /**
-     * Write this participant's data into the shared group session, replacing the
-     * previous data. Resolves when the backend confirms the write. The API sends
-     * one push at a time and passes an object it owns; treat it as read-only.
+     * Store this participant's data, replacing what they pushed before. Resolves when the backend
+     * confirms the write, and rejects if it fails; the API retries. The API sends one push at a
+     * time and passes an object it owns; treat it as read-only. Whether this participant's own
+     * getAll() and onChange() reflect the push before it resolves is up to the adapter.
+     *
+     * Adapters should let a participant write only their own data where the backend allows it.
+     * The API doesn't rely on it, but it keeps one participant from changing another's.
      */
     push(data: Record<string, unknown>): Promise<void>;
     /**
-     * Optional. The group's membership as the backend reports it. Omit it when
-     * the backend doesn't form groups, e.g. when the researcher gives each group
-     * its own link. Report `sealed` only once the backend has confirmed that
-     * nobody new can join, and never go back to false.
+     * Optional. The group's membership as the backend reports it. Omit it when the backend doesn't
+     * form groups, e.g. when the researcher gives each group its own link.
+     *
+     * Report `sealed` only once the backend has confirmed that nobody new can join, and never go
+     * back to false. Every member's connection must report the seal, not only the one that asked
+     * for it, and once sealed `members` must stay the final roster, including members who drop out.
      */
     group?(): GroupState;
     /**
-     * Optional. Ask the backend to stop letting new participants join this
-     * group. Resolves once the backend confirms. Sealing an already sealed group
-     * succeeds. Omit it when the backend can't seal groups.
+     * Optional. Ask the backend to stop letting new participants join this group. Resolves once the
+     * backend confirms, after which group() reports `sealed`. Sealing an already sealed group
+     * succeeds. Omit the method when the backend can't seal groups, rather than throwing.
      */
     sealGroup?(): Promise<void>;
-    /** Close the channel cleanly. The connection is not used afterward. */
+    /** Close the channel cleanly. The API calls it once, and doesn't use the connection afterward. */
     disconnect(): Promise<void>;
 }
 
 interface SessionOptions {
     /**
-     * How long a participant can stay disconnected before they count as having
-     * left, in milliseconds. Defaults to 10000. null or Infinity means never.
+     * How long a participant can stay disconnected before they count as having left, in
+     * milliseconds. Defaults to 10000. null means never.
      */
     dropoutTimeout?: number | null;
     /**
-     * Seed for random(), randomInt(), shuffle(), and sample() in place of the
-     * session ID. Every participant in the group must pass the same value. Use
-     * it to make the random values the same in every session.
+     * How long this participant's own connection can stay `reconnecting` before the API gives up
+     * and closes it, in milliseconds. Defaults to null: keep trying for as long as the adapter does.
+     */
+    reconnectTimeout?: number | null;
+    /**
+     * Seed for random(), randomInt(), shuffle(), and sample() in place of the session ID. Every
+     * participant in the group must pass the same value. Use it to make the random values the
+     * same in every session.
      */
     randomSeed?: string;
-    /** Called once when another participant reaches the `left` presence status. */
+    /**
+     * Called once when another participant reaches the `left` presence status, whether their
+     * connection dropped for longer than the dropout timeout or they reloaded the page.
+     */
     onParticipantLeft?: (participantId: string) => void;
-    /**
-     * Called when a participant who had `left` comes back from the same page
-     * load, so their experiment is still where they left it.
-     */
-    onParticipantRejoined?: (participantId: string) => void;
-    /**
-     * Called when a participant comes back from a new page load (a reload or a
-     * new tab) under the same ID. Their experiment restarted, so they are out of
-     * step with the group and stay `left`.
-     */
-    onParticipantRestarted?: (participantId: string) => void;
     /** Called whenever this client's connection status changes. */
     onStatusChange?: (status: ConnectionStatus) => void;
 }
-interface SubscribeOptions {
-    /** Aborting this signal removes the subscription. */
-    signal?: AbortSignal;
-}
-interface WaitOptions {
-    /**
-     * Maximum time to wait in milliseconds. null, undefined, negative, and
-     * non-finite values mean no timeout.
-     */
-    timeout?: number | null;
-    /** Aborting this signal rejects the wait with a MultiplayerCancelledError. */
-    signal?: AbortSignal;
-    /**
-     * Participants the wait depends on. If one of them leaves before the
-     * condition is met, the wait rejects with a MultiplayerParticipantLeftError.
-     */
-    participants?: string[];
-}
-/** Options for waitForGroup(). */
-type GroupWaitOptions = Omit<WaitOptions, "participants">;
 type SessionListener = (data: GroupSessionData, presence: PresenceData, group: GroupState) => void;
-/**
- * Slot key the session reserves for its own bookkeeping. It is added to every
- * push and removed from every snapshot, so readers never see it.
- */
-declare const RESERVED_KEY = "$mp";
-/** Identifies one page load. Shared by every session made from one jsPsych.multiplayer. */
-interface SessionIdentity {
-    /** Random, and new on every page load. */
-    instance: string;
-    /** Goes up every time this page (re)announces itself to the group. */
-    epoch: number;
-}
-/**
- * One connection to a multiplayer backend, returned by
- * jsPsych.multiplayer.connect(). All state belongs to the session, so work
- * left over from an earlier connection can never touch a later one.
- */
-declare class MultiplayerSession {
-    private readonly connection;
-    private readonly options;
-    private readonly identity;
-    readonly participantId: string;
-    /** Identifies the group session; the same for every participant in the group. */
-    readonly sessionId: string;
-    /** Seeded with `options.randomSeed`, or else the session ID. */
-    private readonly rng;
-    private currentStatus;
-    /** Why the session closed; pending and later waits reject with it. */
-    private closeReason;
-    /** Memoized so overlapping disconnect() calls close the connection once. */
-    private closing;
-    /**
-     * The adapter's latest session data as a frozen copy with the reserved key
-     * removed, the JSON text of the raw and the cleaned data, and each
-     * participant's reserved bookkeeping.
-     */
-    private remote;
-    private remoteJson;
-    private remoteDataJson;
-    private metas;
-    /**
-     * The page load this participant's slot came from before this page, if it
-     * wasn't this one: this participant reloaded or opened the study again, so
-     * their experiment restarted. Null otherwise.
-     */
-    readonly previousInstance: string | null;
-    /**
-     * This participant's own data. The session is its source of truth: writes
-     * change it at once and the backend is brought up to date after.
-     */
-    private slot;
-    private slotJson;
-    /** True when the backend is known to hold the current slot. */
-    private slotConfirmed;
-    /** Frozen snapshot shared by every reader: `remote` with `slot` on top. */
-    private data;
-    private presenceData;
-    /** Frozen snapshot of the group's membership. */
-    private groupData;
-    /**
-     * The roster this participant's own backend confirmed as sealed, sent to the
-     * group in the reserved key. Null until then.
-     */
-    private ownRoster;
-    /**
-     * Every roster seen so far, from this backend or any participant's slot.
-     * Non-null means the group is sealed. It only grows, so a sealed group
-     * never becomes unsealed and nobody drops off the roster.
-     */
-    private roster;
-    /** Set by the first announce(); pushes wait for it. */
-    private announced;
-    /** Memoized so overlapping sealGroup() calls ask the backend once. */
-    private sealing;
-    private presenceStatus;
-    private awayTimers;
-    private readonly dropoutTimeout;
-    /** Each participant's page load, as last seen while they were connected. */
-    private knownInstance;
-    /**
-     * Each absent participant's bookkeeping as of when they dropped out (null if
-     * they had none). They count as back only after a write made since then.
-     */
-    private dropMeta;
-    /** `${id}\n${instance}` for every restart already reported. */
-    private restartsReported;
-    /** Callbacks to researcher code, run once the session's state is settled. */
-    private events;
-    private listeners;
-    private pendingWaits;
-    private notifying;
-    private notifyAgain;
-    /** True when `slot` has changed since it was last handed to the connection. */
-    private hasUnsentChanges;
-    /** True while sendLatestSlot() is running. */
-    private sending;
-    /** Callers whose writes will go out with the next push. */
-    private nextBatch;
-    /** Callers whose writes are in the push currently in flight. */
-    private inFlightBatch;
-    /**
-     * Connect with an adapter. Once `signal` is aborted this rejects, but only
-     * after any connection the adapter opened has been closed.
-     */
-    static open(adapter: MultiplayerAdapter, signal: AbortSignal, options: SessionOptions, identity: SessionIdentity): Promise<MultiplayerSession>;
-    private constructor();
-    /** This client's connection status. */
-    get status(): ConnectionStatus;
-    private get isClosed();
-    /** The full group session. The object is frozen and shared, so don't modify it. */
-    getAll(): GroupSessionData;
-    /** One participant's data, or undefined if they haven't written any. Frozen. */
-    get(participantId: string): Record<string, unknown> | undefined;
-    /** The presence status of every participant seen in the session, including this one. Frozen. */
-    presence(): PresenceData;
-    /** The group's size, members, and whether it is sealed. Frozen. */
-    group(): GroupState;
-    /**
-     * A float in [0, 1) that is the same for every participant who asks with the
-     * same `key`. Asking again with the same key returns the same value.
-     */
-    random(key: string): number;
-    /** An integer from `lower` to `upper`, inclusive, shared like random(). */
-    randomInt(key: string, lower: number, upper: number): number;
-    /** A shuffled copy of `array`, in the same order for every participant who uses `key`. */
-    shuffle<T>(key: string, array: readonly T[]): T[];
-    /** `size` items drawn from `array` without replacement, shared like shuffle(). */
-    sample<T>(key: string, array: readonly T[], size: number): T[];
-    /**
-     * Replace this participant's data. Reads reflect the change at once; the
-     * promise resolves when the backend confirms a push that includes it.
-     */
-    push(data: Record<string, unknown>): Promise<void>;
-    /**
-     * Shallow-merge data into this participant's data. Top-level keys in `data`
-     * replace the existing ones; other keys are kept.
-     */
-    update(data: Record<string, unknown>): Promise<void>;
-    private assertWritable;
-    /**
-     * Queue the new slot for sending, then show it to readers. A write that
-     * doesn't change the slot sends and notifies nothing, so a subscriber that
-     * writes the same value on every notification can't start a loop.
-     */
-    private write;
-    /**
-     * Push this page's identity with a new epoch, so the group can tell that this
-     * participant is (back) on this page load. Runs on connect and whenever the
-     * connection recovers.
-     */
-    private announce;
-    /** Push the slot so the group sees this participant's current bookkeeping. */
-    private sendMeta;
-    /** The slot as pushed: this participant's data plus the reserved bookkeeping. */
-    private payload;
-    /** Start the sender if it's idle; a running sender picks up the change itself. */
-    private requestSend;
-    /**
-     * Push the latest slot, one push at a time, until the backend has caught
-     * up. Writes made during a push go out together in the next one, so values
-     * that are replaced before they are sent are skipped.
-     */
-    private sendLatestSlot;
-    /**
-     * Call `callback` with the group session and presence now, and again after
-     * every change. Returns a function that removes the subscription.
-     */
-    subscribe(callback: SessionListener, options?: SubscribeOptions): Unsubscribe;
-    /**
-     * Resolve with the group session once `condition` returns true. Checks the
-     * current state first, so it resolves at once if the condition already holds.
-     * A throwing condition rejects the wait.
-     */
-    wait(condition: (data: GroupSessionData, presence: PresenceData, group: GroupState) => boolean, options?: WaitOptions): Promise<GroupSessionData>;
-    /**
-     * Ask the backend to stop letting new participants join, so the group is
-     * sealed with the members it has now. Use it to start with fewer people than
-     * the group can hold. Resolves once the backend confirms, and at once if the
-     * group is already sealed. Rejects if the adapter can't seal groups.
-     */
-    sealGroup(): Promise<void>;
-    /**
-     * Resolve with the group's state once it is sealed, e.g. to hold everyone in
-     * a waiting room until the group is complete. Rejects at once if the adapter
-     * doesn't form groups, since the group could then never be sealed.
-     */
-    waitForGroup(options?: GroupWaitOptions): Promise<GroupState>;
-    /**
-     * Remove every subscription and reject pending waits with a
-     * MultiplayerCancelledError. The connection stays open.
-     */
-    cancelAllSubscriptions(): void;
-    private cancelListeners;
-    private deliver;
-    /**
-     * Deliver the current snapshot to every listener. A change made by a
-     * listener starts another round after this one, instead of a nested one,
-     * so each listener sees snapshots in order.
-     */
-    private notify;
-    /** Rebuild the shared snapshots. Only the top level is new; nested data is already frozen. */
-    private rebuild;
-    private handleChange;
-    private handleStatus;
-    private reportStatus;
-    /**
-     * Compare the adapter's connected list with what we know, starting or
-     * stopping dropout clocks. Returns whether any presence status changed.
-     */
-    private refreshPresence;
-    /**
-     * A participant came back from a new page load, so their experiment restarted.
-     * They stay (or become) `left`. Returns whether their presence changed.
-     */
-    private markRestarted;
-    /** Run queued researcher callbacks, after the session's state and snapshots are settled. */
-    private flushEvents;
-    private startAwayTimer;
-    private clearAwayTimer;
-    private clearAwayTimers;
-    private markLeft;
-    /** The adapter's report of the group, or undefined if it has none or it is malformed. */
-    private readAdapterGroup;
-    /**
-     * Work out the group's state from the adapter and the rosters in everyone's
-     * slots. Returns whether it changed. A newly sealed report from this
-     * participant's own backend is sent on to the group.
-     */
-    private refreshGroup;
-    /**
-     * Close the connection. Subscribers are called one last time, then removed.
-     * Pending waits reject with a MultiplayerCancelledError and unsent writes
-     * reject. Reads keep returning the last snapshot.
-     */
-    disconnect(): Promise<void>;
-    private close;
-}
 
-/** wait() rejects with this when its timeout elapses before the condition is met. */
-declare class MultiplayerTimeoutError extends Error {
-    constructor(timeout: number);
-}
 /**
- * An operation was cancelled on purpose: a wait() by its signal,
- * cancelAllSubscriptions(), disconnect(), or the experiment ending, or a
- * connect() by its signal or disconnect().
+ * Why a multiplayer operation failed.
+ * - `timeout`: a wait() or connect() ran out of time.
+ * - `cancelled`: the operation was cancelled on purpose: by its signal, by disconnect(), or
+ *   because its trial or the experiment ended.
+ * - `participant_left`: a participant the wait depended on left the session.
+ * - `connection_lost`: this participant's connection was lost for good.
+ * - `not_connected`: there is no open session to use.
+ * - `unsupported`: the adapter can't do what was asked, e.g. seal a group.
  */
-declare class MultiplayerCancelledError extends Error {
-    constructor(message?: string);
-}
-/** wait() rejects with this when a participant it depends on leaves the session. */
-declare class MultiplayerParticipantLeftError extends Error {
-    readonly participantId: string;
-    constructor(participantId: string);
-}
-/** Pending waits and writes reject with this when the connection is lost for good. */
-declare class MultiplayerConnectionClosedError extends Error {
-    constructor();
+type MultiplayerErrorCode = "timeout" | "cancelled" | "participant_left" | "connection_lost" | "not_connected" | "unsupported";
+/**
+ * Every error the multiplayer API raises on its own account; `code` says why. Invalid arguments
+ * throw a TypeError or RangeError instead.
+ *
+ * Code checking errors from separately bundled packages should compare `error.name` to
+ * "MultiplayerError" rather than use instanceof, which fails if two copies of jspsych are loaded.
+ */
+declare class MultiplayerError extends Error {
+    readonly code: MultiplayerErrorCode;
+    /** With `participant_left`, the participant who left. */
+    readonly participantId?: string;
+    constructor(code: MultiplayerErrorCode, message: string, participantId?: string);
 }
 
 interface ConnectOptions extends SessionOptions {
     /**
-     * Aborting this signal cancels a connect() that is still pending. connect()
-     * then rejects with a MultiplayerCancelledError once the adapter has closed
-     * anything it opened.
+     * Aborting this signal cancels a connect() that is still pending. connect() then rejects with
+     * a `cancelled` MultiplayerError once the adapter has closed anything it opened.
      */
     signal?: AbortSignal;
+    /**
+     * How long to wait for the adapter to connect before giving up with a `timeout`
+     * MultiplayerError, in milliseconds. Defaults to 20000. null means no limit.
+     */
+    connectTimeout?: number | null;
+    /**
+     * Whether to add `multiplayer_participant_id` and `multiplayer_session_id` to every row of
+     * jsPsych's data recorded while connected, so data from the members of a group can be joined.
+     * Defaults to true.
+     */
+    recordIds?: boolean;
 }
+interface ScopeOptions {
+    /**
+     * Which part of the shared data to use. During a trial, calls use that trial's scope by
+     * default, so data from one trial never shows up in another. `"session"` uses the data that
+     * lasts the whole session, which is also the default outside trials. `"trial"` insists on the
+     * current trial's scope and throws outside a trial.
+     */
+    scope?: "trial" | "session";
+}
+interface SubscribeOptions extends ScopeOptions {
+    /** Aborting this signal removes the subscription. */
+    signal?: AbortSignal;
+}
+interface WaitOptions extends SubscribeOptions {
+    /** Maximum time to wait in milliseconds. null or undefined means no limit. */
+    timeout?: number | null;
+    /**
+     * Participants the wait depends on. If one of them leaves before the condition is met, the
+     * wait rejects with a `participant_left` MultiplayerError.
+     */
+    participants?: string[];
+}
+/** Options for waitForGroup(). */
+type GroupWaitOptions = Pick<WaitOptions, "timeout" | "signal">;
+/** Key of the hooks jsPsych calls as its timeline runs. Not part of the public API. */
+declare const timelineHooks: unique symbol;
 /**
- * jsPsych.multiplayer: opens sessions and forwards every other method to the
- * current one, so plugins can call jsPsych.multiplayer.update() and so on
- * without holding a session themselves.
+ * jsPsych.multiplayer: opens a session with a backend adapter and forwards every other method to
+ * it, so plugins can call jsPsych.multiplayer.update() and so on without holding a session.
  */
 declare class MultiplayerAPI {
-    private current;
+    /** The latest session, open or closed. Closed sessions still answer reads. */
+    private session;
     private connecting;
+    /** The running trial's scope name, or null between trials. */
+    private trialScope;
+    /** The IDs to add to each row of jsPsych's data, or null when not recording them. */
+    private recordedIds;
     /**
-     * This page load's identity, shared by every session opened from it, so the
-     * group can tell a reconnect of this page from a reload.
+     * This page load's identity, shared by every session opened from it, so the group can tell a
+     * reconnect of this page from a reload.
      */
     private readonly identity;
     constructor();
-    /** The current session. Null until connect() resolves and after disconnect(). */
-    get session(): MultiplayerSession | null;
-    /** This participant's ID within the group. Null until connect() resolves and after disconnect(). */
+    /** This participant's ID within the group. Null until connect() resolves. */
     get participantId(): string | null;
-    /**
-     * The group session's ID, the same for every participant in the group. Null
-     * until connect() resolves and after disconnect().
-     */
+    /** The group session's ID, the same for every participant in the group. Null until connect() resolves. */
     get sessionId(): string | null;
     /**
-     * Set when this participant's slot came from an earlier page load: they
-     * reloaded or reopened the study, so the group is ahead of them. Null
-     * otherwise, and when there is no session.
+     * True when this participant reloaded or reopened the study after joining the group: their
+     * experiment restarted, the group has moved on, and the others count them as having left.
      */
-    get previousInstance(): string | null;
-    /** The current session's connection status, or null when there is no session. */
+    get restarted(): boolean;
+    /** This participant's connection status. Null until connect() resolves; `closed` after disconnect(). */
     get status(): ConnectionStatus | null;
-    private requireSession;
+    /** The session to read from: the latest one, even if it has closed. */
+    private readable;
+    /** The session to write to, which must still be open. */
+    private writable;
+    /** The scope a call uses: null for the session scope, or the running trial's. */
+    private scopeOf;
     /**
-     * Open a session with a backend adapter and make it the current session.
-     * Must be called (and awaited) before jsPsych.run() and before any other
-     * multiplayer method. Rejects if a session is already open or connecting;
-     * a session whose connection was lost can be replaced.
+     * Open a session with a backend adapter. Must be called (and awaited) before jsPsych.run().
+     * Rejects if a session is already open or connecting; a closed session can be replaced.
      */
-    connect(adapter: MultiplayerAdapter, options?: ConnectOptions): Promise<MultiplayerSession>;
+    connect(adapter: MultiplayerAdapter, options?: ConnectOptions): Promise<void>;
     /**
-     * Close the current session, or cancel a connect() that is still pending.
-     * Resolves once the adapter has closed the connection.
+     * Close the current session, or cancel a connect() that is still pending. Resolves once the
+     * adapter has closed the connection. Reads keep returning the last state.
      */
     disconnect(): Promise<void>;
-    /** Replace this participant's data in the shared group session. */
-    push(data: Record<string, unknown>): Promise<void>;
-    /** Shallow-merge data into this participant's data in the shared group session. */
-    update(data: Record<string, unknown>): Promise<void>;
-    /** The full group session. Frozen; don't modify it. */
-    getAll(): GroupSessionData;
-    /** One participant's data, or undefined if they haven't written any. Frozen. */
-    get(participantId: string): Record<string, unknown> | undefined;
+    /**
+     * Shallow-merge data into this participant's data: top-level keys in `data` replace the same
+     * keys, other keys are kept, and a key set to undefined is removed. Everyone sees the change;
+     * the promise resolves once the backend has it.
+     */
+    update(data: Record<string, unknown>, options?: ScopeOptions): Promise<void>;
+    /** Replace this participant's data in the scope with `data`, dropping every key it omits. */
+    replace(data: Record<string, unknown>, options?: ScopeOptions): Promise<void>;
+    /** Every participant's data in the scope, keyed by participant ID. Frozen; don't modify it. */
+    getAll(options?: ScopeOptions): GroupSessionData;
+    /** One participant's data in the scope, or undefined if they haven't written any. Frozen. */
+    get(participantId: string, options?: ScopeOptions): Record<string, unknown> | undefined;
     /** The presence status of every participant seen in the session. Frozen. */
     presence(): PresenceData;
     /** The group's size, members, and whether it is sealed. Frozen. */
     group(): GroupState;
     /**
-     * Stop new participants from joining, sealing the group with the members it
-     * has now. Rejects if the adapter can't seal groups.
+     * Stop new participants from joining, sealing the group with the members it has now. Rejects
+     * with an `unsupported` MultiplayerError if the adapter can't seal groups.
      */
     sealGroup(): Promise<void>;
     /** Resolve with the group's state once it is sealed. */
     waitForGroup(options?: GroupWaitOptions): Promise<GroupState>;
-    /** Call `callback` now and after every change to the group session, presence, or group. */
+    /**
+     * Call `callback(data, presence, group)` now and after every change to the scope's data,
+     * presence, or the group. A subscription made during a trial ends with the trial, unless it
+     * uses `scope: "session"`, which lasts until the experiment ends.
+     */
     subscribe(callback: SessionListener, options?: SubscribeOptions): Unsubscribe;
-    /** Resolve with the group session once `condition` returns true. */
+    /**
+     * Resolve with the scope's data once `condition(data, presence, group)` returns true. A wait
+     * made during a trial is cancelled when the trial ends, unless it uses `scope: "session"`.
+     */
     wait(condition: (data: GroupSessionData, presence: PresenceData, group: GroupState) => boolean, options?: WaitOptions): Promise<GroupSessionData>;
     /**
-     * A float in [0, 1) that is the same for every participant who asks with the
-     * same `key`. Asking again with the same key returns the same value.
+     * A float in [0, 1) that is the same for every participant who asks with the same `key`.
+     * Asking again with the same key returns the same value.
      */
     random(key: string): number;
     /** An integer from `lower` to `upper`, inclusive, shared like random(). */
@@ -1083,12 +906,19 @@ declare class MultiplayerAPI {
     shuffle<T>(key: string, array: readonly T[]): T[];
     /** `size` items drawn from `array` without replacement, shared like shuffle(). */
     sample<T>(key: string, array: readonly T[], size: number): T[];
-    /**
-     * Remove every subscription on the current session and reject its pending
-     * waits with a MultiplayerCancelledError. jsPsych calls this when the
-     * experiment finishes or is aborted.
-     */
-    cancelAllSubscriptions(): void;
+    /** Called by jsPsych as its timeline runs. */
+    readonly [timelineHooks]: {
+        /** A trial is starting; its calls use `scope` by default. */
+        trialStarted: (scope: string) => void;
+        /** The trial's result is in: end its subscriptions and waits. */
+        trialEnded: () => void;
+        /** The trial's on_finish has run; later calls use the session scope. */
+        trialFinished: () => void;
+        /** The experiment finished or was aborted: end every subscription and wait. */
+        experimentEnded: () => void;
+        /** Properties to add to a trial's data row, or null for none. */
+        dataProperties: () => Record<string, string> | null;
+    };
 }
 
 type KeyboardListener = (e: KeyboardEvent) => void;
@@ -1507,4 +1337,4 @@ declare class JsPsych {
  */
 declare function initJsPsych(options?: any): JsPsych;
 
-export { type AdapterConnectOptions, type ConnectOptions, type ConnectionStatus, DataCollection, type GroupSessionData, type GroupState, type GroupWaitOptions, JsPsych, type JsPsychExtension, type JsPsychExtensionInfo, type JsPsychPlugin, RESERVED_KEY as MULTIPLAYER_RESERVED_KEY, type MultiplayerAdapter, MultiplayerCancelledError, type MultiplayerConnection, MultiplayerConnectionClosedError, MultiplayerParticipantLeftError, MultiplayerSession, MultiplayerTimeoutError, ParameterType, type PluginInfo, type PresenceData, type PresenceStatus, type SessionListener, type SubscribeOptions, type TrialType, type Unsubscribe, type WaitOptions, initJsPsych };
+export { type AdapterConnectOptions, type ConnectOptions, type ConnectionStatus, DataCollection, type GroupSessionData, type GroupState, type GroupWaitOptions, JsPsych, type JsPsychExtension, type JsPsychExtensionInfo, type JsPsychPlugin, type MultiplayerAdapter, type MultiplayerConnection, MultiplayerError, type MultiplayerErrorCode, ParameterType, type PluginInfo, type PresenceData, type PresenceStatus, type ScopeOptions, type SessionListener, type SubscribeOptions, type TrialType, type Unsubscribe, type WaitOptions, initJsPsych };

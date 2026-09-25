@@ -13,42 +13,51 @@
  * failure paths.
  */
 
-import {
-  FirebaseBackend,
-  RawSessionSnapshot,
-  TransactionValue,
-  Unsubscribe,
-} from "./firebase-backend";
+import { DbNode, FirebaseBackend, TransactionValue, Unsubscribe } from "./firebase-backend";
 
-interface SessionListener {
+interface NodeListener {
   path: string;
-  onData: (snapshot: RawSessionSnapshot | null) => void;
+  onData: (value: TransactionValue) => void;
   onError: (error: Error) => void;
 }
 
-/** The shared "server": a flat path->string store plus the session listeners watching it. */
+/** The shared "server": a flat path->string store of leaves plus the listeners watching it. */
 export class FakeRtdb {
   private readonly data = new Map<string, string>();
-  private readonly listeners = new Set<SessionListener>();
+  private readonly listeners = new Set<NodeListener>();
 
   set(path: string, value: string): void {
-    this.data.set(path, value);
-    this.fire(path);
+    this.replace(path, value);
   }
 
   remove(path: string): void {
-    this.data.delete(path);
-    this.fire(path);
+    this.replace(path, null);
   }
 
-  /** The raw string stored at `path`, if any. */
+  /** The raw string stored at `path`, if `path` is a leaf. */
   get(path: string): string | undefined {
     return this.data.get(path);
   }
 
-  /** What a transaction on `path` sees: its string, its children, or null. */
+  /** The value at `path`: its string, a tree of its descendants, or null. */
   valueAt(path: string): TransactionValue {
-    return this.data.get(path) ?? this.snapshotOf(path);
+    const leaf = this.data.get(path);
+    if (leaf !== undefined) return leaf;
+    const prefix = `${path}/`;
+    const out: DbNode = {};
+    let any = false;
+    for (const [key, value] of this.data) {
+      if (!key.startsWith(prefix)) continue;
+      const parts = key.slice(prefix.length).split("/");
+      let node = out;
+      for (const part of parts.slice(0, -1)) {
+        const child = node[part];
+        node = typeof child === "object" ? child : (node[part] = {});
+      }
+      node[parts[parts.length - 1]] = value;
+      any = true;
+    }
+    return any ? out : null;
   }
 
   /** Replace `path` and everything under it with `value`, then notify listeners once. */
@@ -56,13 +65,7 @@ export class FakeRtdb {
     for (const key of [...this.data.keys()]) {
       if (key === path || key.startsWith(`${path}/`)) this.data.delete(key);
     }
-    if (typeof value === "string") {
-      this.data.set(path, value);
-    } else if (value) {
-      for (const [child, childValue] of Object.entries(value)) {
-        this.data.set(`${path}/${child}`, childValue);
-      }
-    }
+    this.write(path, value);
     this.fire(path);
   }
 
@@ -79,42 +82,39 @@ export class FakeRtdb {
     }
   }
 
-  /** Immediate children of a session node: `{ childKey: value }`, or null if none. */
-  snapshotOf(sessionPath: string): RawSessionSnapshot | null {
-    const prefix = `${sessionPath}/`;
-    const out: RawSessionSnapshot = {};
-    let any = false;
-    for (const [key, value] of this.data) {
-      if (key.startsWith(prefix)) {
-        const child = key.slice(prefix.length);
-        // Only immediate children (no deeper nesting in our slot model).
-        if (!child.includes("/")) {
-          out[child] = value;
-          any = true;
-        }
-      }
-    }
-    return any ? out : null;
-  }
-
-  register(listener: SessionListener, deliverInitial = true): Unsubscribe {
+  register(listener: NodeListener, deliverInitial = true): Unsubscribe {
     this.listeners.add(listener);
     // Real RTDB delivers an initial value event on registration; deliver it synchronously here so
     // the adapter's await-first-snapshot resolves deterministically in tests. `deliverInitial: false`
     // models a registered-but-slow listener (see FakeBackend `deferInitialSnapshot`).
-    if (deliverInitial) listener.onData(this.snapshotOf(listener.path));
+    if (deliverInitial) listener.onData(this.valueAt(listener.path));
     return () => this.listeners.delete(listener);
   }
 
-  /** Number of live session listeners — for asserting a listener was torn down. */
+  /** Number of live listeners — for asserting a listener was torn down. */
   listenerCount(): number {
     return this.listeners.size;
   }
 
+  private write(path: string, value: TransactionValue): void {
+    if (typeof value === "string") {
+      this.data.set(path, value);
+    } else if (value) {
+      for (const [child, childValue] of Object.entries(value)) {
+        this.write(`${path}/${child}`, childValue);
+      }
+    }
+  }
+
   private fire(changedPath: string): void {
-    for (const listener of this.listeners) {
-      if (changedPath === listener.path || changedPath.startsWith(`${listener.path}/`)) {
-        listener.onData(this.snapshotOf(listener.path));
+    for (const listener of [...this.listeners]) {
+      const { path } = listener;
+      if (
+        changedPath === path ||
+        changedPath.startsWith(`${path}/`) ||
+        path.startsWith(`${changedPath}/`)
+      ) {
+        listener.onData(this.valueAt(path));
       }
     }
   }
@@ -126,13 +126,13 @@ export interface FakeBackendOptions {
   ownsApp?: boolean;
   /** onValue immediately invokes its error/cancel callback (simulates a rules denial). */
   denyReads?: boolean;
-  /** onValue registers but never delivers a snapshot (simulates a silent hang → connect timeout). */
+  /** onValue registers but never delivers a snapshot (simulates a silent hang). */
   neverSnapshot?: boolean;
   /**
-   * onValue registers a LIVE session listener but withholds the initial snapshot (simulates a
-   * connected-but-slow backend → connect timeout). Unlike `neverSnapshot`, the listener is real, so a
-   * later rtdb change would fire it — which is exactly what lets a test catch a listener the adapter
-   * failed to tear down on the timeout reject.
+   * onValue registers a LIVE listener but withholds the initial snapshot (simulates a
+   * connected-but-slow backend). Unlike `neverSnapshot`, the listener is real, so a later rtdb
+   * change would fire it — which is exactly what lets a test catch a listener the adapter failed
+   * to tear down when connect() was cancelled.
    */
   deferInitialSnapshot?: boolean;
   /**
@@ -205,8 +205,8 @@ export class FakeBackend implements FirebaseBackend {
     return Promise.resolve();
   }
 
-  get(path: string): Promise<string | null> {
-    return Promise.resolve(this.rtdb.get(path) ?? null);
+  get(path: string): Promise<TransactionValue> {
+    return Promise.resolve(this.rtdb.valueAt(path));
   }
 
   /** Atomic, as the server makes it: nothing else runs between the read and the write. */
@@ -231,7 +231,7 @@ export class FakeBackend implements FirebaseBackend {
 
   onValue(
     path: string,
-    onData: (snapshot: RawSessionSnapshot | null) => void,
+    onData: (value: TransactionValue) => void,
     onError: (error: Error) => void,
   ): Unsubscribe {
     if (this.denyReads) {
@@ -277,13 +277,14 @@ export class FakeBackend implements FirebaseBackend {
   }
 
   /**
-   * Simulate losing the network: the server fires our armed onDisconnect (removing our presence
-   * node, one-shot) and the client goes offline. `setConnected(true)` brings it back.
+   * Simulate losing the network: the client goes offline, then the server notices and fires our
+   * armed onDisconnects (one-shot). `setConnected(true)` brings the client back.
    */
   simulateDrop(): void {
-    for (const path of this.armed) this.rtdb.remove(path);
-    this.armed.clear();
     this.setConnected(false);
+    const armed = [...this.armed];
+    this.armed.clear();
+    for (const path of armed) this.rtdb.remove(path);
   }
 
   /**

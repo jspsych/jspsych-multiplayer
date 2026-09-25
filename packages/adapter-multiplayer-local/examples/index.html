@@ -6,7 +6,7 @@
     <!-- jsPsych core must include the multiplayer API (jsPsych#3694), which is not in a release yet.
          This loads the PR's preview build, pinned to #3694 commit f309a688 (preview SHA 49e6a93).
          If the demo misbehaves against a newer #3694, re-pin — see examples/README.md. -->
-    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@5cb6b05bec8ca0e409145453220803b408cd7e50/packages/jspsych/dist/index.browser.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@4df7fbb672806086c7e118e53aba2262f27edf68/packages/jspsych/dist/index.browser.min.js"></script>
     <!-- The adapter's own IIFE build. Run `npm run build` in this package first — the bundle below
          does not exist until you do. Once this package is published you could instead load it from
          a CDN:
@@ -56,8 +56,19 @@
       (async () => {
         const jsPsych = initJsPsych();
         // The IIFE build exposes the adapter class as the global `jsPsychAdapterMultiplayerLocal`.
-        await jsPsych.multiplayer.connect(new jsPsychAdapterMultiplayerLocal());
+        try {
+          await jsPsych.multiplayer.connect(new jsPsychAdapterMultiplayerLocal());
+        } catch (err) {
+          document.getElementById("me").textContent = "not connected (" + err.message + ")";
+          return;
+        }
         document.getElementById("me").textContent = jsPsych.multiplayer.participantId;
+        // A reloaded tab keeps its participant id, but counts as having left for everyone else,
+        // and its connection is closed. A study would show a "you can't rejoin" message here.
+        if (jsPsych.multiplayer.restarted) {
+          document.getElementById("me").textContent +=
+            " (this tab was reloaded, so it can't rejoin; open the URL in a new tab instead)";
+        }
 
         const groupEl = document.getElementById("group");
         const presenceEl = document.getElementById("presence");

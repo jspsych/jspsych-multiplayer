@@ -14,7 +14,10 @@
  * helpers below, seeded by `opts.seed` or the sorted ids + `round`.
  */
 
-/** A group-session snapshot: participantId -> that participant's pushed data. */
+/**
+ * A snapshot: participantId -> that participant's data. The plugin passes each participant's
+ * session data merged under their data from the match trial.
+ */
 export type Snapshot = Record<string, any>;
 
 /** One participant's match assignment. */
@@ -38,7 +41,7 @@ export interface MatchOptions {
   /**
    * How participants are ordered before being chunked into groups:
    *   - `"ordered"` (default): by participantId (stable, arbitrary-but-consistent pairings).
-   *   - `"join_order"`: by pushed `joinedAt`, then id.
+   *   - `"join_order"`: by `joinedAt`, then id.
    *   - `"random"`: a shared shuffle, keyed by `seed` + `round`, so pairings are unpredictable-by-id
    *     yet identical on every client, and change each round (increment `round` to re-pair). Uses
    *     `shuffle` when given; otherwise a seeded Fisher–Yates over `${sortedIds}#${round}` (or `seed`).

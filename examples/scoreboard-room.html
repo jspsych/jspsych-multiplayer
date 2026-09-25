@@ -8,7 +8,7 @@
          This URL is pinned to the same #3694 preview SHA as chat-room.html. A SHA-pinned URL keeps
          loading indefinitely (it never 404s); what goes stale is the #3694 API it was pinned against,
          so if the demo misbehaves against a newer #3694, re-pin — see examples/README.md "Running it". -->
-    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@5cb6b05bec8ca0e409145453220803b408cd7e50/packages/jspsych/dist/index.browser.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@4df7fbb672806086c7e118e53aba2262f27edf68/packages/jspsych/dist/index.browser.min.js"></script>
     <script src="https://unpkg.com/@jspsych/plugin-survey-text"></script>
     <script src="https://unpkg.com/@jspsych/plugin-html-button-response"></script>
     <!-- The multiplayer packages resolve from the sibling packages' built dist/ in this repo (run
@@ -22,7 +22,7 @@
     <script src="../packages/plugin-multiplayer-scoreboard/dist/index.browser.min.js?v=1"></script>
     <link
       rel="stylesheet"
-      href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@5cb6b05bec8ca0e409145453220803b408cd7e50/packages/jspsych/css/jspsych.css"
+      href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@4df7fbb672806086c7e118e53aba2262f27edf68/packages/jspsych/css/jspsych.css"
     />
   </head>
 
@@ -36,8 +36,8 @@
     // at once — so no one sees a partial board. It composes three packages:
     //   • adapter-multiplayer-local     — the network backend. localStorage + cross-tab signalling, so
     //                                     the whole thing runs by OPENING TWO BROWSER TABS — no server.
-    //   • plugin-multiplayer-sync       — the lobby: push your name, wait until EXPECTED_PLAYERS present.
-    //   • plugin-multiplayer-scoreboard — the end board: pushes this client's final score, barriers on
+    //   • plugin-multiplayer-sync       — the lobby: wait until EXPECTED_PLAYERS are present.
+    //   • plugin-multiplayer-scoreboard — the end board: writes this client's final score, barriers on
     //                                     `group_size` reporters, then every client independently ranks
     //                                     the same snapshot and shows it with a Continue button.
     //
@@ -67,19 +67,18 @@
     const jsPsych = initJsPsych();
 
     // Connecting the adapter is the only network setup the timeline needs. The adapter tracks
-    // presence itself, including when a tab closes. A refreshed tab gets a new participant id and
-    // joins as a new participant: a page that reloaded can't rejoin the group it left.
+    // presence itself, including when a tab closes. A refreshed tab keeps its participant id, but its
+    // experiment starts over, so jsPsych reports it as restarted (see the connect() call at the bottom).
     const localAdapter = new jsPsychAdapterMultiplayerLocal();
 
-
-    // Players who pushed a name in the lobby and are still connected. Slots stay after a player
-    // leaves, so presence, not the slot, says who is here.
-    const namedPresent = (group, presence) =>
-      Object.keys(group).filter((id) => group[id]?.name && presence[id] === "connected").length;
+    // Shows a message in place of the experiment (connect failed, or this tab was reloaded).
+    function showMessage(html) {
+      document.body.innerHTML = `<div style="max-width: 40em; margin: 4em auto; text-align: center;">${html}</div>`;
+    }
 
     let myName = "";
 
-    // 1) Ask for a display name.
+    // 1) Ask for a display name. It stays local: the scoreboard's `label` sends it with the score.
     const nameTrial = {
       type: jsPsychSurveyText,
       preamble: `<div style="max-width:34em;margin:0 auto 1.2em;padding:0.8em 1em;border:1px solid #ccc;border-radius:8px;background:#f6f8fa;">
@@ -93,16 +92,20 @@
       },
     };
 
-    // 2) Lobby: publish our name + join time, then wait until enough named players are present.
+    // 2) Lobby: mark ourselves as here, then wait until enough players are here.
     const lobbyTrial = {
       type: jsPsychMultiplayerSync,
       // A lobby counts who is here, so someone leaving shouldn't end the wait
       participants: [],
-      push_data: () => ({ name: myName, joinedAt: Date.now() }),
+      // Written to this trial's own part of the shared data, which is what wait_for sees
+      write_data: { here: true },
       // NB: the sync plugin's waiting-HTML parameter is `message`, not `prompt`.
       message: `<p>Waiting for ${EXPECTED_PLAYERS} players to join…</p>
                <p>Open this page in another tab (keep the <code>?mp_session=</code> in the URL) to add a player.</p>`,
-      wait_for: (group, presence) => namedPresent(group, presence) >= EXPECTED_PLAYERS,
+      // Count players who reached the lobby and are still connected; data stays after a player leaves
+      wait_for: (group, presence) =>
+        Object.keys(group).filter((id) => group[id].here && presence[id] === "connected").length >=
+        EXPECTED_PLAYERS,
     };
 
     // 3) The quiz. Each question tags its own trial with `points` in on_finish, so the scoreboard can
@@ -141,19 +144,36 @@
         const rank = sb.my_rank ?? "—";
         const score = sb.my_score ?? "—";
         const n = sb.num_players ?? "—";
-        return `<h2>Game over!</h2>
+        const note =
+          sb.multiplayer_outcome === "participant_left"
+            ? "<p>Another player left before reporting a score.</p>"
+            : sb.multiplayer_outcome === "timeout"
+              ? "<p>Not every player reported a score in time.</p>"
+              : "";
+        return `<h2>Game over!</h2>${note}
                 <p>You finished <strong>#${rank}</strong> of ${n} with <strong>${score}</strong> points.</p>`;
       },
     };
 
     // Connect the backend, then run. Everything above is backend-agnostic — swapping the adapter on
     // the line below is the only change needed to move from local two-tab testing to JATOS.
-    jsPsych.multiplayer.connect(localAdapter).then(() => {
-      jsPsych.run([nameTrial, lobbyTrial, ...quizTrials, scoreboardTrial, doneTrial]).then(() => {
-        jsPsych.getDisplayElement().innerHTML = `
-          <h2>Demo complete</h2>
-          <p>You can close this browser tab now.</p>`;
+    jsPsych.multiplayer
+      .connect(localAdapter)
+      .then(() => {
+        // A reloaded tab keeps its participant id, but the group has moved on without it
+        if (jsPsych.multiplayer.restarted) {
+          showMessage("<p>You reloaded this page, so you can't rejoin the game. Please close this tab.</p>");
+          return;
+        }
+        return jsPsych.run([nameTrial, lobbyTrial, ...quizTrials, scoreboardTrial, doneTrial]).then(() => {
+          jsPsych.getDisplayElement().innerHTML = `
+            <h2>Demo complete</h2>
+            <p>You can close this browser tab now.</p>`;
+        });
+      })
+      .catch((error) => {
+        console.error(error);
+        showMessage("<p>Couldn't connect to the game. Please reload the page to try again.</p>");
       });
-    });
   </script>
 </html>

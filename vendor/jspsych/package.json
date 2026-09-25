@@ -34,5 +34,5 @@
     "seedrandom": "^3.0.5",
     "type-fest": "^2.9.0"
   },
-  "vendoredFrom": "jspsych/jsPsych@5cb6b05bec8ca0e409145453220803b408cd7e50 (preview build of PR #3694)"
+  "vendoredFrom": "jspsych/jsPsych@4df7fbb672806086c7e118e53aba2262f27edf68 (preview build of PR #3694)"
 }

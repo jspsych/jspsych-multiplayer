@@ -3,14 +3,14 @@
   <head>
     <meta charset="utf-8" />
     <title>jsPsychMultiplayerMatch Example</title>
-    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@5cb6b05bec8ca0e409145453220803b408cd7e50/packages/jspsych/dist/index.browser.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@4df7fbb672806086c7e118e53aba2262f27edf68/packages/jspsych/dist/index.browser.min.js"></script>
     <script src="https://unpkg.com/@jspsych/plugin-html-keyboard-response"></script>
     <!-- Once this plugin package is published, load it from a CDN instead:
          <script src="https://unpkg.com/@jspsych-multiplayer/plugin-multiplayer-match"></script> -->
     <script src="../dist/index.browser.min.js"></script>
     <link
       rel="stylesheet"
-      href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@5cb6b05bec8ca0e409145453220803b408cd7e50/packages/jspsych/css/jspsych.css"
+      href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@4df7fbb672806086c7e118e53aba2262f27edf68/packages/jspsych/css/jspsych.css"
     />
   </head>
 
@@ -41,7 +41,7 @@
       strategy: "random",
     };
 
-    // 3. A later trial reads this client's partner from the store the match published.
+    // 3. A later trial reads this client's partner from the data the match trial recorded.
     const greetPartner = {
       type: jsPsychHtmlKeyboardResponse,
       stimulus: () => {

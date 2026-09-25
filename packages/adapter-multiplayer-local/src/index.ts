@@ -1,13 +1,14 @@
-import type {
-  AdapterConnectOptions,
-  GroupSessionData,
-  MultiplayerAdapter,
-  MultiplayerConnection,
-} from "jspsych";
+import {
+  SESSION_PARAM,
+  generateId,
+  sessionIdFromUrl,
+  tabId,
+  validateId,
+} from "@jspsych-multiplayer/utils";
+import type { AdapterConnectOptions, MultiplayerAdapter, MultiplayerConnection } from "jspsych";
 
 import {
   SlotStorage,
-  generateId,
   presencePrefix,
   readAllSlots,
   readPresent,
@@ -18,8 +19,7 @@ import {
 } from "./local-store";
 import { ChangeSignal, createDefaultSignal } from "./signal";
 
-const SESSION_PARAM = "mp_session";
-const DEFAULT_KEY_PREFIX = "mp";
+const DEFAULT_NAMESPACE = "mp";
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 2000;
 /**
  * Chrome throttles timers in a tab that has been hidden for 5 minutes to once a minute, so a
@@ -30,26 +30,29 @@ const DEFAULT_PRESENCE_TIMEOUT_MS = 70000;
 
 export interface LocalAdapterOptions {
   /**
-   * Session namespace. All keys live under `<keyPrefix>:<sessionId>:`. Defaults to the
+   * The group's session. All keys live under `<namespace>:<sessionId>:`. Defaults to the
    * `?mp_session=` URL parameter, or a fresh random id if that's absent (which is then reflected
-   * back into the URL so the link can be shared with the other tabs).
+   * back into the URL so the link can be shared with the other tabs). Must not contain any of
+   * `: / . # $ [ ]`.
    */
   sessionId?: string;
   /**
-   * This tab's participant id. Defaults to a fresh random id per construction — so a **refresh
-   * starts a new participant** (its old slot is a mid-run ghost; open a new session for a clean
-   * run). Set `persistParticipant: true` to instead reuse a stable id across reloads of this tab.
+   * This tab's participant id. Defaults to an id kept for this tab and session (see
+   * `persistParticipant`). Must not contain any of `: / . # $ [ ]`.
    */
   participantId?: string;
   /**
-   * Persist this tab's participant id in `sessionStorage` (per-tab, survives reload, gone when the
-   * tab closes) so a refresh keeps the same id instead of a new one. The refreshed page has still
-   * restarted the experiment, so the other tabs see it as restarted, not rejoined. Ignored if
-   * `participantId` is given explicitly.
+   * Keep this tab's participant id in `sessionStorage` (per-tab, survives reload, gone when the
+   * tab closes), so a reload keeps the same id and the other tabs can tell this participant
+   * restarted rather than seeing a new stranger. Defaults to `true`. Set `false` to get a fresh
+   * id on every page load. Ignored if `participantId` is given explicitly.
    */
   persistParticipant?: boolean;
-  /** Storage-key namespace prefix. Defaults to `"mp"`. */
-  keyPrefix?: string;
+  /**
+   * Prefix of every storage key the adapter uses, so separate studies on one origin stay apart.
+   * Defaults to `"mp"`. Must not contain `:`.
+   */
+  namespace?: string;
   /** Storage backend. Defaults to `localStorage`. Injectable for tests. */
   storage?: SlotStorage;
   /**
@@ -71,7 +74,7 @@ export interface LocalAdapterOptions {
 interface LocalConfig {
   participantId: string;
   sessionId: string;
-  keyPrefix: string;
+  namespace: string;
   storage: SlotStorage;
   signal?: ChangeSignal;
   heartbeatIntervalMs: number;
@@ -98,34 +101,40 @@ export default class LocalAdapter implements MultiplayerAdapter {
   private readonly config: LocalConfig;
 
   constructor(options: LocalAdapterOptions = {}) {
-    const keyPrefix = options.keyPrefix ?? DEFAULT_KEY_PREFIX;
+    if ("keyPrefix" in options) {
+      console.warn(
+        "LocalAdapter: the keyPrefix option was renamed namespace; keyPrefix is ignored.",
+      );
+    }
+    const namespace = options.namespace ?? DEFAULT_NAMESPACE;
+    // A ":" is the key-namespace boundary (`<namespace>:<sessionId>:<participantId>`), and
+    // participantIdFromKey slices on it assuming no part contains one; otherwise one session's
+    // keys could be read as another's. validateId rejects ":" (among others) in the ids.
+    if (typeof namespace !== "string" || namespace === "" || namespace.includes(":")) {
+      throw new Error(
+        `LocalAdapter: namespace must be a non-empty string without ":" ` +
+          `(got ${JSON.stringify(namespace)}).`,
+      );
+    }
     const storage = options.storage ?? resolveLocalStorage();
-    const sessionId = options.sessionId ?? resolveSessionId();
-    const participantId =
+    const sessionId = validateId(
+      "LocalAdapter",
+      "sessionId",
+      options.sessionId ?? sessionIdFromUrl(SESSION_PARAM),
+    );
+    const participantId = validateId(
+      "LocalAdapter",
+      "participantId",
       options.participantId ??
-      resolveParticipantId(keyPrefix, sessionId, options.persistParticipant);
-    // A ":" is the key-namespace boundary (`<keyPrefix>:<sessionId>:<participantId>`), and
-    // participantIdFromKey slices on it assuming ids/sessions never contain one. Auto-generated ids
-    // never do, but a user-supplied one could — which would silently mis-parse the snapshot (a
-    // participantId with a ":" would look like it belonged to a different session, so it'd vanish
-    // from getAll). Reject it up front with a clear message instead.
-    if (sessionId.includes(":")) {
-      throw new Error(
-        `LocalAdapter: sessionId must not contain ":" (got "${sessionId}") — it is the ` +
-          "reserved storage-key namespace separator.",
-      );
-    }
-    if (participantId.includes(":")) {
-      throw new Error(
-        `LocalAdapter: participantId must not contain ":" (got "${participantId}") — it is ` +
-          "the reserved storage-key namespace separator.",
-      );
-    }
+        (options.persistParticipant === false
+          ? generateId()
+          : tabId(`${namespace}:participant:${sessionId}`)),
+    );
     const heartbeatIntervalMs = options.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
     this.config = {
       participantId,
       sessionId,
-      keyPrefix,
+      namespace,
       storage,
       signal: options.signal,
       heartbeatIntervalMs,
@@ -195,9 +204,9 @@ class LocalConnection implements MultiplayerConnection {
     this.signal =
       config.signal ??
       createDefaultSignal(
-        `${config.keyPrefix}:${config.sessionId}`,
-        slotPrefix(config.keyPrefix, config.sessionId),
-        presencePrefix(config.keyPrefix, config.sessionId),
+        `${config.namespace}:${config.sessionId}`,
+        slotPrefix(config.namespace, config.sessionId),
+        presencePrefix(config.namespace, config.sessionId),
       );
     // Another tab changed the store: data or presence may have changed
     this.removeSignalHandler = this.signal.onChange(() => this.notify());
@@ -213,8 +222,8 @@ class LocalConnection implements MultiplayerConnection {
     }
   }
 
-  getAll(): GroupSessionData {
-    return readAllSlots(this.config.storage, this.config.keyPrefix, this.config.sessionId);
+  getAll(): Record<string, unknown> {
+    return readAllSlots(this.config.storage, this.config.namespace, this.config.sessionId);
   }
 
   connectedParticipants(): string[] {
@@ -226,8 +235,8 @@ class LocalConnection implements MultiplayerConnection {
       throw new Error("LocalAdapter: push() called after disconnect().");
     }
     // setItem throws on e.g. QuotaExceededError; being async, this rejects the returned promise
-    const { storage, keyPrefix, sessionId } = this.config;
-    writeSlot(storage, keyPrefix, sessionId, this.participantId, data);
+    const { storage, namespace, sessionId } = this.config;
+    writeSlot(storage, namespace, sessionId, this.participantId, data);
     // Tell the other tabs to re-read
     this.signal.post();
   }
@@ -258,25 +267,24 @@ class LocalConnection implements MultiplayerConnection {
    * localStorage never disconnects, but a tab's heartbeat can still lapse: a throttled background
    * tab, or a page frozen in the back/forward cache, may go longer than `presenceTimeoutMs`
    * without a beat, and the other tabs then count it as gone. When that happens this tab reports
-   * a drop and a recovery, so the session tells the group this page is back and it can rejoin.
+   * that it resumed, so the session tells the group this page is still here.
    */
   private beat(announce = false) {
     if (this.closed) return;
-    const { storage, keyPrefix, sessionId, presenceTimeoutMs } = this.config;
+    const { storage, namespace, sessionId, presenceTimeoutMs } = this.config;
     const now = Date.now();
     const lapsed = this.lastBeatAt > 0 && now - this.lastBeatAt > presenceTimeoutMs;
-    if (lapsed) this.options.onStatus("reconnecting");
     let written = false;
     try {
-      writePresence(storage, keyPrefix, sessionId, this.participantId, now);
+      writePresence(storage, namespace, sessionId, this.participantId, now);
       this.lastBeatAt = now;
       written = true;
     } catch (e) {
       console.error("LocalAdapter: could not write the presence heartbeat", e);
     }
     if (announce || lapsed) this.signal.post();
-    // Still lapsed if the write failed; the next successful beat reports the recovery
-    if (lapsed && written) this.options.onStatus("connected");
+    // Still lapsed if the write failed; the next successful beat reports it
+    if (lapsed && written) this.options.onResumed();
     const present = this.readPresent().join("\n");
     if (present !== this.lastPresent) {
       this.lastPresent = present;
@@ -285,14 +293,14 @@ class LocalConnection implements MultiplayerConnection {
   }
 
   private readPresent(): string[] {
-    const { storage, keyPrefix, sessionId, presenceTimeoutMs } = this.config;
-    return readPresent(storage, keyPrefix, sessionId, Date.now(), presenceTimeoutMs);
+    const { storage, namespace, sessionId, presenceTimeoutMs } = this.config;
+    return readPresent(storage, namespace, sessionId, Date.now(), presenceTimeoutMs);
   }
 
   private removeOwnPresence() {
-    const { storage, keyPrefix, sessionId } = this.config;
+    const { storage, namespace, sessionId } = this.config;
     try {
-      removePresence(storage, keyPrefix, sessionId, this.participantId);
+      removePresence(storage, namespace, sessionId, this.participantId);
     } catch {
       // Best effort; the key expires on its own
     }
@@ -314,45 +322,4 @@ function resolveLocalStorage(): SlotStorage {
     );
   }
   return localStorage;
-}
-
-/** Read `?mp_session=` from the URL; if absent, mint one and reflect it back so it can be shared. */
-function resolveSessionId(): string {
-  if (typeof window === "undefined" || typeof window.location === "undefined") {
-    return generateId();
-  }
-  try {
-    const url = new URL(window.location.href);
-    const existing = url.searchParams.get(SESSION_PARAM);
-    if (existing) return existing;
-    const fresh = generateId();
-    url.searchParams.set(SESSION_PARAM, fresh);
-    // Reflect the fresh session into the URL (without a navigation) so the user can copy the link
-    // into the other tabs for a shared run.
-    window.history?.replaceState?.(window.history.state, "", url.toString());
-    return fresh;
-  } catch {
-    return generateId();
-  }
-}
-
-/** Resolve this tab's participant id, optionally persisting it per-tab across refreshes. */
-function resolveParticipantId(
-  keyPrefix: string,
-  sessionId: string,
-  persist: boolean | undefined,
-): string {
-  if (!persist || typeof sessionStorage === "undefined") {
-    return generateId();
-  }
-  const key = `${keyPrefix}:participant:${sessionId}`;
-  try {
-    const existing = sessionStorage.getItem(key);
-    if (existing) return existing;
-    const fresh = generateId();
-    sessionStorage.setItem(key, fresh);
-    return fresh;
-  } catch {
-    return generateId();
-  }
 }

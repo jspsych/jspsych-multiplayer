@@ -34,9 +34,16 @@ const command =
     ? ["npm", "run", "build", "--workspaces", "--if-present", ...rest]
     : ["jest", ...rest];
 
-const result = spawnSync(command[0], command.slice(1), {
-  stdio: "inherit",
-  shell: process.platform === "win32",
-});
+const run = (args) =>
+  spawnSync(args[0], args.slice(1), { stdio: "inherit", shell: process.platform === "win32" });
+
+// Plugins and adapters bundle @jspsych-multiplayer/utils into their browser builds, so it has to
+// be built before them; workspaces otherwise build in alphabetical order.
+if (kind === "build") {
+  const utils = run(["npm", "run", "build", "-w", "@jspsych-multiplayer/utils", ...rest]);
+  if (utils.status !== 0) process.exit(utils.status ?? 1);
+}
+
+const result = run(command);
 
 process.exit(result.status ?? 1);

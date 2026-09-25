@@ -12,14 +12,14 @@
  * without a live group session.
  */
 
-/** A group-session snapshot: participantId -> that participant's pushed data. Matches `GroupSessionData`. */
+/** A shared-data snapshot: participantId -> that participant's data. Matches `GroupSessionData`. */
 export type GroupSessionData = Record<string, Record<string, unknown>>;
 
-/** One participant's entry as stored under the trial's `data_key`. */
+/** One participant's entry as stored in the trial's shared data. */
 export interface ScoreEntry {
   /** The participant's final score. */
   score: number;
-  /** Optional display name this participant pushed for themselves. */
+  /** Optional display name this participant wrote for themselves. */
   label?: string;
 }
 
@@ -31,14 +31,14 @@ export interface LeaderboardRow {
   score: number;
   /** Their competition rank (1 = best). Ties share a rank; see `tieMethod`. */
   rank: number;
-  /** Display name: the pushed `label`, else the participantId. */
+  /** Display name: the written `label`, else the participantId. */
   label: string;
   /** True for the viewing client's own row (drives self-highlighting). */
   isSelf: boolean;
 }
 
 export interface BuildOptions {
-  /** Session field each participant's `ScoreEntry` is stored under. */
+  /** The key each participant's `ScoreEntry` is stored under (the plugin uses `scoreboard`). */
   dataKey: string;
   /** The viewing client's id, so its row can be flagged `isSelf`. Omit when there is no viewer (e.g. a test). */
   self?: string;

@@ -1,13 +1,15 @@
 import { startTimeline } from "@jspsych/test-utils";
 import { ConnectOptions, initJsPsych } from "jspsych";
 
-import { MemoryHub } from "../../../test-utils/memory-backend";
+import { MemoryHub, scopeData } from "../../../test-utils/memory-backend";
 import MultiplayerReferenceGamePlugin from ".";
 
 // ---------------------------------------------------------------------------------------------------
 // Every test runs the real jsPsych multiplayer session over the in-memory backend in test-utils, so
 // reads are frozen snapshots, own writes show up at once (and notify subscribers synchronously),
-// and presence is real. `makeApi` wraps that session with a test convenience:
+// and presence is real. No trial is running in the core, so the plugin's reads and writes use the
+// session scope; the startTimeline tests cover the trial scope. `makeApi` wraps that session with a
+// test convenience:
 //   - `pushAs(id, data)` writes another participant's slot, as if that connected participant had
 //     written it. For this participant's own id it writes through the session instead, since the
 //     session owns its own slot.
@@ -26,7 +28,7 @@ async function makeApi(participantId: string, connect?: ConnectOptions) {
     getAll: () => multiplayer.getAll(),
     pushAs(id: string, data: Record<string, unknown>) {
       if (id === participantId) {
-        void multiplayer.push(data);
+        void multiplayer.update(data);
         return;
       }
       if (![...hub.connections].some((c) => c.participantId === id)) {
@@ -87,7 +89,6 @@ const base = {
   chat_persists: false,
   chat_position: "below",
   typing_indicator: false,
-  typing_key: "typing_at",
   typing_ttl: 2500,
   typing_throttle: 800,
   typing_label: null,
@@ -103,7 +104,6 @@ const base = {
   show_running_score: false,
   prompt: "",
   round: 0,
-  data_key: "reference_game",
   partner_id: null,
   save_orders: true,
   save_transcript: true,
@@ -160,7 +160,7 @@ describe("multiplayer-reference-game: single-target (sequential) click task", ()
       n_targets: 1,
       accuracy: 1,
       correct: true,
-      ended_by: "submit",
+      multiplayer_outcome: "completed",
     });
     expect(finished[0].rt).toEqual(expect.any(Number));
   });
@@ -185,7 +185,7 @@ describe("multiplayer-reference-game: single-target (sequential) click task", ()
 
     // The matcher's OWN message must not open the gate — only the director's counts.
     api.pushAs("matcher", {
-      reference_game_chat_r0: [{ senderId: "matcher", seq: 0, text: "which one?", ts: 1 }],
+      chat: [{ senderId: "matcher", seq: 0, text: "which one?", ts: 1 }],
     });
     clickCell(el, "b");
     expect(finished).toHaveLength(0);
@@ -193,12 +193,12 @@ describe("multiplayer-reference-game: single-target (sequential) click task", ()
     // Director speaks → gate opens, hint clears, and the next click submits normally.
     api.pushAs("director", {
       joinedAt: 1,
-      reference_game_chat_r0: [{ senderId: "director", seq: 0, text: "the star shape", ts: 5 }],
+      chat: [{ senderId: "director", seq: 0, text: "the star shape", ts: 5 }],
     });
     expect(el.querySelector(`.${P}-gate-hint`)).toBeNull();
     clickCell(el, "b");
     expect(finished).toHaveLength(1);
-    expect(finished[0]).toMatchObject({ correct: true, ended_by: "submit" });
+    expect(finished[0]).toMatchObject({ correct: true, multiplayer_outcome: "completed" });
     // The two blocked clicks are logged as gated_click events before the final assign.
     const actions = finished[0].interaction_history.map((e: any) => e.action);
     expect(actions).toEqual(["gated_click", "gated_click", "assign"]);
@@ -238,7 +238,7 @@ describe("multiplayer-reference-game: single-target (sequential) click task", ()
     });
     clickCell(el, "b");
     expect(finished).toHaveLength(1);
-    expect(finished[0]).toMatchObject({ ended_by: "submit" });
+    expect(finished[0]).toMatchObject({ multiplayer_outcome: "completed" });
   });
 
   it("with chat_persists, THIS round's message already in the log DOES open the gate", async () => {
@@ -267,7 +267,7 @@ describe("multiplayer-reference-game: single-target (sequential) click task", ()
 
     clickCell(el, "b");
     expect(finished).toHaveLength(1);
-    expect(finished[0]).toMatchObject({ ended_by: "submit" });
+    expect(finished[0]).toMatchObject({ multiplayer_outcome: "completed" });
   });
 
   it("a NON-partner participant's message does not open the gate", async () => {
@@ -285,14 +285,14 @@ describe("multiplayer-reference-game: single-target (sequential) click task", ()
     // A third slot (spectator, or a leftover session) chatting must not count as the director's
     // referring expression.
     api.pushAs("spectator", {
-      reference_game_chat_r0: [{ senderId: "spectator", seq: 0, text: "hello?", ts: 2 }],
+      chat: [{ senderId: "spectator", seq: 0, text: "hello?", ts: 2 }],
     });
     clickCell(el, "b");
     expect(finished).toHaveLength(0);
 
     api.pushAs("director", {
       joinedAt: 1,
-      reference_game_chat_r0: [{ senderId: "director", seq: 0, text: "the star shape", ts: 5 }],
+      chat: [{ senderId: "director", seq: 0, text: "the star shape", ts: 5 }],
     });
     clickCell(el, "b");
     expect(finished).toHaveLength(1);
@@ -356,7 +356,7 @@ describe("multiplayer-reference-game: single-target (sequential) click task", ()
       feedback_duration: null, // Continue button, so it stays up for inspection
     });
     api.pushAs("matcher", {
-      reference_game: { 0: { assignment: { 1: "b" }, rt: 300, n_correct: 1, n_targets: 1 } },
+      submission: { assignment: { 1: "b" }, rt: 300, n_correct: 1, n_targets: 1 },
     });
 
     expect(feedbackText(el)).toMatch(/correct/i);
@@ -373,7 +373,7 @@ describe("multiplayer-reference-game: single-target (sequential) click task", ()
     clickCell(el, "b");
 
     expect(api.getAll().matcher.joinedAt).toBe(42);
-    expect((api.getAll().matcher.reference_game as any)["0"].assignment).toEqual({ 1: "b" });
+    expect((api.getAll().matcher.submission as any).assignment).toEqual({ 1: "b" });
   });
 
   it("tears down the subscription on finish (no leak)", async () => {
@@ -387,7 +387,7 @@ describe("multiplayer-reference-game: single-target (sequential) click task", ()
 
     // Nothing reacts to later updates: no re-render, and no second finish
     api.pushAs("director", {
-      reference_game_chat_r0: [{ senderId: "director", seq: 0, text: "late", ts: 5 }],
+      chat: [{ senderId: "director", seq: 0, text: "late", ts: 5 }],
     });
     expect(el.innerHTML).toBe(rendered);
   });
@@ -496,7 +496,7 @@ describe("multiplayer-reference-game: chat, timeout, and the real pipeline", () 
 
     run(jsPsych, el, { ...base, partner_id: "director" });
     api.pushAs("director", {
-      reference_game_chat_r0: [{ senderId: "director", seq: 0, text: "the star shape", ts: 5 }],
+      chat: [{ senderId: "director", seq: 0, text: "the star shape", ts: 5 }],
     });
 
     const rows = [...el.querySelectorAll(`.${P}-chat-message`)].map((r) => [
@@ -531,13 +531,13 @@ describe("multiplayer-reference-game: chat, timeout, and the real pipeline", () 
     sendChat(el, "first");
     sendChat(el, "second");
 
-    const mine = api.getAll().matcher.reference_game_chat_r0 as any[];
+    const mine = api.getAll().matcher.chat as any[];
     expect(mine.map((m) => m.text)).toEqual(["first", "second"]);
   });
 
   it("submitting keeps a just-sent chat message (update merges, push would have replaced)", async () => {
-    // Submitting writes only the rounds key with `update`, so the chat key written just before it
-    // survives.
+    // Submitting writes only the submission key with `update`, so the chat key written just before
+    // it survives.
     const api = await makeApi("matcher");
     const { jsPsych } = makeJsPsych(api);
     const el = display();
@@ -547,8 +547,8 @@ describe("multiplayer-reference-game: chat, timeout, and the real pipeline", () 
     clickCell(el, "b"); // single target → submits immediately
 
     const slot = api.getAll().matcher;
-    expect((slot.reference_game_chat_r0 as any[]).map((m) => m.text)).toEqual(["is it the star?"]);
-    expect((slot.reference_game as any)["0"].assignment).toEqual({ 1: "b" });
+    expect((slot.chat as any[]).map((m) => m.text)).toEqual(["is it the star?"]);
+    expect((slot.submission as any).assignment).toEqual({ 1: "b" });
   });
 
   it("throws a clear error when participantId is null (adapter not connected yet)", () => {
@@ -556,7 +556,9 @@ describe("multiplayer-reference-game: chat, timeout, and the real pipeline", () 
   });
 
   it("throws a clear error on a jsPsych without the multiplayer module", () => {
-    expect(() => run({}, display(), { ...base })).toThrow(/no multiplayer module/);
+    expect(() => run({}, display(), { ...base })).toThrow(
+      /needs a version of jsPsych with the multiplayer API/,
+    );
   });
 
   it("submits the current (partial) assignment on selection_timeout", async () => {
@@ -571,7 +573,11 @@ describe("multiplayer-reference-game: chat, timeout, and the real pipeline", () 
       jest.advanceTimersByTime(40);
 
       expect(finished).toHaveLength(1);
-      expect(finished[0]).toMatchObject({ ended_by: "timeout", assignment: null, correct: false });
+      expect(finished[0]).toMatchObject({
+        multiplayer_outcome: "timeout",
+        assignment: null,
+        correct: false,
+      });
     } finally {
       jest.useRealTimers();
     }
@@ -605,6 +611,80 @@ describe("multiplayer-reference-game: chat, timeout, and the real pipeline", () 
 
     const data = getData().values()[0];
     expect(data).toMatchObject({ role: "matcher", assignment: "c", correct: true, n_targets: 1 });
+    expect(data.multiplayer_outcome).toBe("completed");
+  });
+
+  it("keeps each round's submission in its own trial, and sums the running score from the data", async () => {
+    const hub = new MemoryHub();
+    const { jsPsych } = await hub.join("me");
+    const round = {
+      type: MultiplayerReferenceGamePlugin,
+      stimuli: STIMULI4,
+      targets: ["c"],
+      role: "matcher",
+      round: jsPsych.timelineVariable("round"),
+      feedback: true,
+      feedback_duration: null,
+      show_running_score: true,
+    };
+
+    const { displayElement, expectFinished, getData } = await startTimeline(
+      [{ timeline: [round], timeline_variables: [{ round: 0 }, { round: 1 }, { round: 2 }] }],
+      jsPsych,
+    );
+    const texts: string[] = [];
+    for (const pick of ["c", "a", "c"]) {
+      // A new round starts with no submission, so it doesn't jump straight to feedback
+      expect(displayElement.querySelector(`.${P}-continue`)).toBeNull();
+      clickCell(displayElement, pick);
+      texts.push(feedbackText(displayElement));
+      (displayElement.querySelector(`.${P}-continue`) as HTMLButtonElement).click();
+      await flush();
+    }
+    await expectFinished();
+
+    expect(texts.map((t) => t.match(/total so far: (\d+)/)![1])).toEqual(["1", "1", "2"]);
+    expect(
+      getData()
+        .values()
+        .map((d: any) => d.correct),
+    ).toEqual([true, false, true]);
+  });
+
+  it("keeps the chat log across rounds only with chat_persists", async () => {
+    const hub = new MemoryHub();
+    const { jsPsych } = await hub.join("me");
+    const rounds = (chat_persists: boolean) => ({
+      timeline: [
+        {
+          type: MultiplayerReferenceGamePlugin,
+          stimuli: STIMULI4,
+          targets: ["c"],
+          role: "matcher",
+          round: jsPsych.timelineVariable("round"),
+          feedback: false,
+          chat_persists,
+        },
+      ],
+      timeline_variables: [{ round: 0 }, { round: 1 }],
+    });
+
+    const { displayElement, expectFinished, getData } = await startTimeline(
+      [rounds(false), rounds(true)],
+      jsPsych,
+    );
+    for (let i = 0; i < 4; i++) {
+      sendChat(displayElement, `message ${i}`);
+      clickCell(displayElement, "c");
+      await flush();
+    }
+    await expectFinished();
+
+    expect(
+      getData()
+        .values()
+        .map((d: any) => d.message_count),
+    ).toEqual([1, 1, 1, 2]);
   });
 });
 
@@ -622,15 +702,15 @@ describe("multiplayer-reference-game: review-fix regressions", () => {
   });
 
   it("fails loudly when this round already holds a submitted assignment (stale-replay guard)", async () => {
-    // A reused round index (or the old default of 0 across trials) leaves the previous submission in
-    // data_key[round]; running again must throw rather than silently replay it into feedback.
+    // Rounds that share a multiplayer_scope see the previous round's submission; running again must
+    // throw rather than silently replay it into feedback.
     const api = await makeApi("matcher");
     api.pushAs("matcher", {
-      reference_game: { 0: { assignment: { 1: "b" }, rt: 100, n_correct: 1, n_targets: 1 } },
+      submission: { assignment: { 1: "b" }, rt: 100, n_correct: 1, n_targets: 1 },
     });
     const { jsPsych } = makeJsPsych(api);
     expect(() => run(jsPsych, display(), { ...base, partner_id: "director" })).toThrow(
-      /round 0 already/i,
+      /multiplayer_scope/i,
     );
   });
 
@@ -686,7 +766,7 @@ describe("multiplayer-reference-game: review-fix regressions", () => {
     expect(() => run(jsPsych, display(), { ...base, role: "director" })).not.toThrow();
   });
 
-  it("preserves ended_by 'submit' when a Continue button only advances feedback", async () => {
+  it("keeps the outcome 'completed' when a Continue button only advances feedback", async () => {
     const api = await makeApi("matcher");
     const { jsPsych, finished } = makeJsPsych(api);
     const el = display();
@@ -700,7 +780,7 @@ describe("multiplayer-reference-game: review-fix regressions", () => {
     (el.querySelector(`.${P}-continue`) as HTMLButtonElement).dispatchEvent(
       new MouseEvent("click", { bubbles: true }),
     );
-    expect(finished[0].ended_by).toBe("submit");
+    expect(finished[0].multiplayer_outcome).toBe("completed");
   });
 
   it("shows both the correct target order and the matcher's slot at feedback without clobbering", async () => {
@@ -719,7 +799,7 @@ describe("multiplayer-reference-game: review-fix regressions", () => {
     });
     // Matcher mis-placed "c" into slot 2.
     api.pushAs("matcher", {
-      reference_game: { 0: { assignment: { 2: "c" }, rt: 100, n_correct: 0, n_targets: 3 } },
+      submission: { assignment: { 2: "c" }, rt: 100, n_correct: 0, n_targets: 3 },
     });
     const c = cell(el, "c");
     const badge = c.querySelector(`.${P}-badge`) as HTMLElement;
@@ -733,8 +813,8 @@ describe("multiplayer-reference-game: review-fix regressions", () => {
 });
 
 describe("multiplayer-reference-game: presence and the session closing", () => {
-  it("ends with ended_by 'participant_left' when the partner leaves before feedback", async () => {
-    const api = await makeApi("director", { dropoutTimeout: 0 });
+  it("ends with outcome 'participant_left' when the partner leaves before feedback", async () => {
+    const api = await makeApi("director", { dropoutTimeout: 1 });
     const matcher = await api.hub.join("matcher");
     const { jsPsych, finished } = makeJsPsych(api);
     run(jsPsych, display(), { ...base, role: "director" });
@@ -744,16 +824,16 @@ describe("multiplayer-reference-game: presence and the session closing", () => {
 
     expect(finished).toHaveLength(1);
     expect(finished[0]).toMatchObject({
-      ended_by: "participant_left",
-      partner_left: true,
+      multiplayer_outcome: "participant_left",
       left_participant: "matcher",
-      connection_lost: false,
       assignment: null,
     });
+    expect(finished[0]).not.toHaveProperty("ended_by");
+    expect(finished[0]).not.toHaveProperty("partner_left");
   });
 
   it("doesn't end when end_on_participant_left is false", async () => {
-    const api = await makeApi("director", { dropoutTimeout: 0 });
+    const api = await makeApi("director", { dropoutTimeout: 1 });
     const matcher = await api.hub.join("matcher");
     const { jsPsych, finished } = makeJsPsych(api);
     run(jsPsych, display(), { ...base, role: "director", end_on_participant_left: false });
@@ -764,22 +844,26 @@ describe("multiplayer-reference-game: presence and the session closing", () => {
   });
 
   it("scores a submission that arrived before the partner left", async () => {
-    const api = await makeApi("director", { dropoutTimeout: 0 });
+    const api = await makeApi("director", { dropoutTimeout: 1 });
     const matcher = await api.hub.join("matcher");
     const { jsPsych, finished } = makeJsPsych(api);
     run(jsPsych, display(), { ...base, role: "director", partner_id: "matcher" });
 
-    await matcher.jsPsych.multiplayer.push({
-      reference_game: { 0: { assignment: { 1: "b" }, rt: 10, n_correct: 1, n_targets: 1 } },
+    await matcher.jsPsych.multiplayer.update({
+      submission: { assignment: { 1: "b" }, rt: 10, n_correct: 1, n_targets: 1 },
     });
     await matcher.jsPsych.multiplayer.disconnect();
     await sleep(5);
 
-    expect(finished[0]).toMatchObject({ ended_by: "submit", correct: true, partner_left: false });
+    expect(finished[0]).toMatchObject({
+      multiplayer_outcome: "completed",
+      correct: true,
+      left_participant: null,
+    });
   });
 
   it("finishes feedback normally if the partner leaves during it", async () => {
-    const api = await makeApi("matcher", { dropoutTimeout: 0 });
+    const api = await makeApi("matcher", { dropoutTimeout: 1 });
     const director = await api.hub.join("director");
     const { jsPsych, finished } = makeJsPsych(api);
     const el = display();
@@ -791,13 +875,13 @@ describe("multiplayer-reference-game: presence and the session closing", () => {
     expect(finished).toHaveLength(0);
 
     (el.querySelector(`.${P}-continue`) as HTMLButtonElement).click();
-    expect(finished[0]).toMatchObject({ ended_by: "submit", partner_left: false });
+    expect(finished[0]).toMatchObject({ multiplayer_outcome: "completed", left_participant: null });
   });
 
-  it("auto-detect ignores participants who left and prefers connected ones", async () => {
-    const api = await makeApi("matcher", { dropoutTimeout: 0 });
+  it("auto-detect ignores participants who left", async () => {
+    const api = await makeApi("matcher", { dropoutTimeout: 1 });
     const old = await api.hub.join("old-partner");
-    await old.jsPsych.multiplayer.push({ joinedAt: 1 });
+    await old.jsPsych.multiplayer.update({ joinedAt: 1 });
     await old.jsPsych.multiplayer.disconnect();
     await sleep(5);
     await api.hub.join("director");
@@ -810,24 +894,29 @@ describe("multiplayer-reference-game: presence and the session closing", () => {
     expect(finished[0].partner_order).not.toBeNull();
   });
 
-  it("ends with ended_by 'connection_lost' when the session closes", async () => {
+  it("ends with outcome 'connection_lost' when the session closes", async () => {
     const api = await makeApi("director");
     await api.hub.join("matcher");
     const { jsPsych, finished } = makeJsPsych(api);
-    run(jsPsych, display(), { ...base, role: "director" });
+    run(jsPsych, display(), { ...base, role: "director", save_orders: true });
 
     api.connection.options.onStatus("closed");
+    await flush();
 
     expect(finished).toHaveLength(1);
-    expect(finished[0]).toMatchObject({ ended_by: "connection_lost", connection_lost: true });
+    expect(finished[0]).toMatchObject({ multiplayer_outcome: "connection_lost" });
+    // Shared randomness keeps working after the session closes
+    expect(finished[0].partner_order).toHaveLength(STIMULI4.length);
   });
 
-  it("also ends cleanly when the experiment calls disconnect() mid-trial", async () => {
+  it("ends as cancelled when the experiment calls disconnect() mid-trial", async () => {
     const api = await makeApi("director");
     const { jsPsych, finished } = makeJsPsych(api);
     run(jsPsych, display(), { ...base, role: "director", partner_id: "matcher" });
     await api.multiplayer.disconnect();
-    expect(finished[0].ended_by).toBe("connection_lost");
+    await flush();
+    expect(finished).toHaveLength(1);
+    expect(finished[0].multiplayer_outcome).toBe("cancelled");
   });
 
   it("saves a modifiable copy of the group with save_group", async () => {
@@ -852,7 +941,7 @@ describe("multiplayer-reference-game: role-keyed feedback_content", () => {
   };
   // target is "b" in `base`; have the matcher click "c" so target and choice are different cells.
   const wrongSubmission = {
-    reference_game: { 0: { assignment: { 1: "c" }, rt: 300, n_correct: 0, n_targets: 1 } },
+    submission: { assignment: { 1: "c" }, rt: 300, n_correct: 0, n_targets: 1 },
   };
 
   it("shows the director the matcher's choice and NOT the target", async () => {
@@ -888,9 +977,7 @@ describe("multiplayer-reference-game: role-keyed feedback_content", () => {
       feedback_duration: null,
     });
     api.pushAs("director", {
-      [`reference_game_chat_r0`]: [
-        { id: "director#0", senderId: "director", seq: 0, text: "hi", ts: 1, round: 0 },
-      ],
+      [`chat`]: [{ id: "director#0", senderId: "director", seq: 0, text: "hi", ts: 1, round: 0 }],
     });
     clickCell(el, "c");
 
@@ -948,7 +1035,8 @@ describe("multiplayer-reference-game: typing indicator", () => {
     input.dispatchEvent(new Event("input", { bubbles: true }));
   };
   /** Pushes that reached the backend carrying a typing timestamp. */
-  const typingPushes = (api: Api) => api.connection.pushes.filter((d) => "typing_at" in d);
+  const typingPushes = (api: Api) =>
+    api.connection.pushes.filter((d) => "typing_at" in (scopeData(d) ?? {}));
 
   it("writes a typing timestamp on input without clobbering other slot keys", async () => {
     const api = await makeApi("matcher");
@@ -982,25 +1070,6 @@ describe("multiplayer-reference-game: typing indicator", () => {
     await flush();
 
     expect(typingPushes(api)).toHaveLength(1);
-  });
-
-  it("falls back to the default typing key when given an empty string", async () => {
-    const api = await makeApi("matcher");
-    const { jsPsych } = makeJsPsych(api);
-    const el = display();
-    run(jsPsych, el, {
-      ...base,
-      typing_indicator: true,
-      typing_throttle: 0,
-      typing_key: "",
-    });
-
-    type(el, "the");
-    await flush();
-
-    const slot = api.get("matcher") as Record<string, unknown>;
-    expect(typeof slot["typing_at"]).toBe("number");
-    expect("" in slot).toBe(false);
   });
 
   it("emptying the input withdraws the typing mark immediately", async () => {
@@ -1039,7 +1108,7 @@ describe("multiplayer-reference-game: typing indicator", () => {
     await flush();
 
     const slot = api.get("matcher") as Record<string, unknown>;
-    const messages = slot["reference_game_chat_r0"] as Array<{ text: string }>;
+    const messages = slot["chat"] as Array<{ text: string }>;
     expect(messages.some((m) => m.text === "the star")).toBe(true);
     expect(slot["typing_at"]).toBeNull();
   });
@@ -1114,7 +1183,7 @@ describe("multiplayer-reference-game: typing indicator", () => {
     expect(el.querySelector(`.${P}-typing-hint`)).toBeNull();
   });
 
-  it("trial end withdraws the mark and stops listening", async () => {
+  it("trial end stops listening and typing", async () => {
     const api = await makeApi("matcher");
     api.pushAs("director", { joinedAt: 1 });
     const { jsPsych, finished } = makeJsPsych(api);
@@ -1131,10 +1200,10 @@ describe("multiplayer-reference-game: typing indicator", () => {
     expect(finished).toHaveLength(1);
     await flush();
 
-    // Round data landed, and the end-of-trial withdraw was sent.
+    // Round data landed. The typing mark lives in the round's own data, so there's nothing to
+    // withdraw for the next round.
     const slot = api.get("matcher") as Record<string, unknown>;
-    expect(slot["typing_at"]).toBeNull();
-    expect((slot["reference_game"] as any)["0"].assignment).toEqual({ 1: "b" });
+    expect((slot["submission"] as any).assignment).toEqual({ 1: "b" });
     // Typing after the end sends nothing further.
     const after = api.connection.pushes.length;
     type(el, "late");

@@ -1,4 +1,10 @@
 import {
+  getMultiplayer,
+  MultiplayerOutcome,
+  outcomeOf,
+  remainingParticipants,
+} from "@jspsych-multiplayer/utils";
+import {
   GroupSessionData,
   JsPsych,
   JsPsychPlugin,
@@ -21,7 +27,6 @@ import {
   assignObject,
   displayOrder,
   isComplete,
-  mergeRoundData,
   nextUnfilledSlot,
   readSubmission,
   runningScore,
@@ -198,8 +203,9 @@ const info = <const>{
       default: "Type a message…",
     },
     /**
-     * Carry the chat transcript across rounds (one shared log) instead of starting each round's
-     * panel empty (per-round log, namespaced by round).
+     * Carry the chat transcript across rounds (one shared log, kept in the session's shared data)
+     * instead of starting each round's panel empty (a log in the round's own trial data). Every
+     * reference-game trial with `chat_persists` shares the one log.
      */
     chat_persists: {
       type: ParameterType.BOOL,
@@ -213,22 +219,13 @@ const info = <const>{
     // ── Typing indicator ──────────────────────────────────────────────────────────────────────────
     /**
      * Show a "partner is typing…" hint driven by a timestamp each client maintains in its own
-     * slot. Off by default. This is only a chat-activity hint — it never gates trial progress, and
+     * data for the trial. Off by default. This is only a chat-activity hint — it never gates trial progress, and
      * a missing/stale timestamp only hides the hint. Cross-client clock skew can stretch or shrink
      * how long the hint shows, which is harmless for a hint.
      */
     typing_indicator: {
       type: ParameterType.BOOL,
       default: false,
-    },
-    /**
-     * Top-level slot key holding this participant's typing timestamp (`number`) or `null`. Both
-     * clients must use the same key; the values stay per-slot. Namespaced as a plugin-owned key —
-     * do not point it at a key the study writes for other purposes.
-     */
-    typing_key: {
-      type: ParameterType.STRING,
-      default: "typing_at",
     },
     /** Hide the hint this long after the partner's last keystroke, in ms. */
     typing_ttl: {
@@ -274,7 +271,8 @@ const info = <const>{
     },
     /**
      * Matcher response limit in ms. On expiry the matcher's CURRENT (possibly partial) assignment
-     * is submitted with `timed_out: true`, so both clients still reach feedback and end together.
+     * is submitted and scored, so both clients still reach feedback and end together, with
+     * `multiplayer_outcome: "timeout"`.
      */
     selection_timeout: {
       type: ParameterType.INT,
@@ -309,7 +307,10 @@ const info = <const>{
       type: ParameterType.INT,
       default: 3000,
     },
-    /** Show the cumulative score across rounds (summed from the matcher's pushed round data). */
+    /**
+     * Show the cumulative score across rounds: this round's `n_correct` plus the `n_correct` of
+     * this participant's earlier reference-game trials in the jsPsych data.
+     */
     show_running_score: {
       type: ParameterType.BOOL,
       default: false,
@@ -325,26 +326,19 @@ const info = <const>{
       default: "",
     },
     /**
-     * Round index (**required**). Must be UNIQUE per round in a timeline: per-round data is
-     * namespaced under `data_key[round]`, so reusing an index would replay an earlier round's
-     * submission. The trial fails loudly if this round already holds a submitted assignment. Usually
-     * `round: jsPsych.timelineVariable("round")`.
+     * Round index (**required**). It seeds the round's layouts, is recorded in the data, and is
+     * stamped on chat messages so `chat_persists` can tell rounds apart; use a UNIQUE value per
+     * round, usually `round: jsPsych.timelineVariable("round")`. Each round's shared data is kept
+     * apart by the trial's own scope, so don't give several rounds the same `multiplayer_scope`:
+     * the trial fails loudly if its scope already holds a submitted assignment.
      */
     round: {
       type: ParameterType.INT,
       default: undefined,
     },
     /**
-     * Group-session field this trial stores its round data under. Namespacing keeps it from
-     * colliding with other data a participant has pushed (a role, chat from another trial, …).
-     */
-    data_key: {
-      type: ParameterType.STRING,
-      default: "reference_game",
-    },
-    /**
-     * The partner's participantId. Null auto-detects the single other participant in the session,
-     * ignoring participants who have left the study.
+     * The partner's participantId. Null auto-detects the single other participant: the other
+     * member of a sealed group, or else the other connected participant.
      */
     partner_id: {
       type: ParameterType.STRING,
@@ -360,7 +354,10 @@ const info = <const>{
       type: ParameterType.BOOL,
       default: true,
     },
-    /** Include a copy of the full group snapshot in the trial data. Off by default to avoid bloat. */
+    /**
+     * Include a copy of every participant's shared data for this trial in the trial data. Off by
+     * default to avoid bloat.
+     */
     save_group: {
       type: ParameterType.BOOL,
       default: false,
@@ -369,7 +366,7 @@ const info = <const>{
      * Record the ordered log of the matcher's PRE-SUBMIT actions (every assign / reassign / clear, plus
      * any `gated_click` when `require_message_before_response` blocks a too-early click, with timestamps
      * relative to trial start) as `interaction_history`. The log stays LOCAL until submit — only the
-     * final assignment is ever pushed. Off by default to avoid bloat.
+     * final assignment is ever written. Off by default to avoid bloat.
      */
     save_interaction_history: {
       type: ParameterType.BOOL,
@@ -377,7 +374,7 @@ const info = <const>{
     },
     /**
      * Whole-round time limit, in ms: if the trial has not reached feedback after this many ms it
-     * ends with `ended_by: "timeout"` (and no assignment). This bounds a round whose partner stays
+     * ends with `multiplayer_outcome: "timeout"` (and no assignment). This bounds a round whose partner stays
      * connected but never responds; a partner who leaves the study ends the round through
      * `end_on_participant_left` instead. Null waits forever (the plugin warns when neither this nor
      * `selection_timeout` is set).
@@ -388,7 +385,8 @@ const info = <const>{
     },
     /**
      * End the round, before feedback, when the partner leaves the study (their presence becomes
-     * `left`). The trial then ends with `ended_by: "participant_left"` and no assignment.
+     * `left`). The trial then ends with `multiplayer_outcome: "participant_left"` and no
+     * assignment.
      */
     end_on_participant_left: {
       type: ParameterType.BOOL,
@@ -475,27 +473,18 @@ const info = <const>{
       default: undefined,
     },
     /**
-     * What ended the trial: `"submit"` (the matcher submitted), `"timeout"`
-     * (`round_timeout`/`selection_timeout`), `"participant_left"` (the partner left the study), or
-     * `"connection_lost"` (this participant's connection was lost for good).
+     * How the round ended: `"completed"` (the matcher submitted), `"timeout"` (`selection_timeout`
+     * submitted a partial assignment, or `round_timeout` ended the round with none),
+     * `"participant_left"` (the partner left the study), `"connection_lost"` (this participant's
+     * connection was lost for good), or `"cancelled"` (the experiment disconnected mid-round).
      */
-    ended_by: {
+    multiplayer_outcome: {
       type: ParameterType.STRING,
-      default: undefined,
-    },
-    /** True if the round ended because the partner left the study. */
-    partner_left: {
-      type: ParameterType.BOOL,
       default: undefined,
     },
     /** The participant whose departure ended the round, or null. */
     left_participant: {
       type: ParameterType.STRING,
-      default: undefined,
-    },
-    /** True if the round ended because this participant's connection was lost for good. */
-    connection_lost: {
-      type: ParameterType.BOOL,
       default: undefined,
     },
     /**
@@ -507,7 +496,7 @@ const info = <const>{
       array: true,
       default: undefined,
     },
-    /** The full group snapshot at trial end — only when `save_group`. */
+    /** Every participant's shared data for this trial, at trial end — only when `save_group`. */
     group: {
       type: ParameterType.OBJECT,
       default: undefined,
@@ -518,8 +507,14 @@ const info = <const>{
 };
 
 type Info = typeof info;
-type EndReason = "submit" | "timeout" | "participant_left" | "connection_lost";
 type Role = "director" | "matcher";
+
+/** Fields of each participant's data for the round, in the trial's own scope. */
+const SUBMISSION_KEY = "submission";
+const TYPING_KEY = "typing_at";
+const ROUND_CHAT_KEY = "chat";
+/** The session-scope field of the chat log every round shares under `chat_persists`. */
+const PERSISTENT_CHAT_KEY = "reference_game_chat";
 
 /** Class-name prefix, matching this repo's `jspsych-multiplayer-<plugin>-*` convention. */
 const P = "jspsych-multiplayer-reference-game";
@@ -541,7 +536,7 @@ const P = "jspsych-multiplayer-reference-game";
  * Like `plugin-multiplayer-chat`, the trial stays open and re-renders on every group-session
  * update: it subscribes to the shared session, merges the chat transcript, and watches for the
  * matcher's submitted assignment — the shared trigger on which both clients score, show feedback,
- * and end. Requires a connected multiplayer adapter — call `await jsPsych.multiplayer.connect(adapter)`
+ * and end. Each round's data lives in its trial's own part of the shared data. Requires a connected multiplayer adapter — call `await jsPsych.multiplayer.connect(adapter)`
  * before `jsPsych.run()`.
  *
  * @author Mandy Liao
@@ -556,13 +551,7 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
   // against `finishTrial()`, so an async `trial` that resolves after setup would end the trial
   // immediately. A sync `trial` makes jsPsych fire `on_load` itself and wait for `finishTrial()`.
   trial(display_element: HTMLElement, trial: TrialType<Info>) {
-    const api = this.jsPsych.multiplayer;
-    if (!api) {
-      throw new Error(
-        "multiplayer-reference-game: this version of jsPsych has no multiplayer module " +
-          "(jsPsych.multiplayer). Use a jsPsych release that includes it.",
-      );
-    }
+    const api = getMultiplayer(this.jsPsych, "multiplayer-reference-game");
     const me = api.participantId;
     if (me == null) {
       throw new Error(
@@ -570,8 +559,9 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
           "(await jsPsych.multiplayer.connect(adapter)) before this trial runs.",
       );
     }
-    // Captured so nested `function` declarations (no lexical `this`) can register timers too.
+    // Captured so nested `function` declarations (no lexical `this`) can use them too.
     const pluginAPI = this.jsPsych.pluginAPI;
+    const jsPsychData = this.jsPsych.data;
 
     // --- Resolve & validate configuration -------------------------------------------------------
     const stimuli = (trial.stimuli ?? []) as unknown as StimulusSpec[];
@@ -579,7 +569,6 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
     const ids = stimuli.map((s) => s?.id);
     const role = trial.role as Role;
     const round = trial.round as unknown as number;
-    const dataKey = trial.data_key;
     const k = targets.length;
 
     if (
@@ -621,15 +610,15 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
           "per round, e.g. round: jsPsych.timelineVariable('round').",
       );
     }
-    // Fail loud on a reused round index: per-round data is keyed by `round`, so if this round already
-    // holds a submitted assignment, a later trial would replay that stale submission (jumping straight
-    // to feedback) instead of running the round. Only a submitter (matcher) ever writes an assignment,
-    // so this catches the "forgot to increment round" / duplicate-index bug on the client that owns it.
-    if (readSubmission(api.getAll(), me, dataKey, round)) {
+    // Fail loud when this trial's scope already holds our submission: rounds that share a
+    // `multiplayer_scope` would replay that stale submission (jumping straight to feedback) instead
+    // of running the round. Only a submitter (matcher) ever writes an assignment, so this catches
+    // the bug on the client that owns it.
+    if (readSubmission(api.getAll(), me)) {
       throw new Error(
-        `multiplayer-reference-game: round ${round} already has a submitted assignment in this ` +
-          "participant's slot — round indices must be unique across the timeline (did `round` default " +
-          "or repeat?).",
+        `multiplayer-reference-game: round ${round}'s shared data already holds this ` +
+          "participant's submitted assignment — give each round its own `multiplayer_scope` " +
+          "(or leave it unset).",
       );
     }
 
@@ -673,10 +662,10 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
         ? (rawFeedbackContent[role] as Record<string, boolean>)
         : (rawFeedbackContent as Record<string, boolean>)) ?? {}),
     };
-    // Per-round chat namespacing: with `chat_persists` every round shares one log; without it each
-    // round gets its own key so the panel starts empty (old rounds' arrays stay in the slot,
-    // harmlessly, under their own keys).
-    const chatKey = trial.chat_persists ? `${dataKey}_chat` : `${dataKey}_chat_r${round}`;
+    // With `chat_persists` every round shares one log in the session scope; without it each round's
+    // log is in the round's own trial scope, so the panel starts empty.
+    const chatKey = trial.chat_persists ? PERSISTENT_CHAT_KEY : ROUND_CHAT_KEY;
+    const chatScope = trial.chat_persists ? { scope: "session" as const } : {};
     const seedBase = (trial.seed as string | null) ?? null;
     const columns =
       trial.rows != null && trial.rows > 0
@@ -703,15 +692,15 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
     }
 
     // The partner: explicit `partner_id`, or auto-detected as THE single other participant. Never
-    // guess among several — with a spectator/leftover slot present, picking the wrong one makes the
-    // director watch the wrong slot (→ hang) or mislabel data. `let` because a legitimate partner may
+    // guess among several — with a spectator present, picking the wrong one makes the director
+    // watch the wrong participant (→ hang) or mislabel data. `let` because a legitimate partner may
     // not have propagated yet (0 candidates → null now, re-resolved in subscribe once they appear).
     const explicitPartner = trial.partner_id as string | null;
     let partner: string | null;
     if (explicitPartner != null) {
       partner = explicitPartner;
     } else {
-      const others = partnerCandidates(me, api.getAll(), api.presence());
+      const others = remainingParticipants(api);
       if (others.length > 1) {
         throw new Error(
           "multiplayer-reference-game: cannot auto-detect the partner — " +
@@ -724,13 +713,11 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
 
     // This client's display order is deterministic in (session, seed, round, participant ids), so it
     // is stable across re-renders and reloads — and the partner's order is computable locally the same
-    // way (both ids are known), which is how `partner_order` lands in the data without an extra push.
+    // way (both ids are known), which is how `partner_order` lands in the data without an extra write.
     // Passing `partner` makes "independent" mode GUARANTEE the two layouts differ (N>1). Every
-    // shuffle goes through the session's shared shuffle so the two clients cannot disagree. The
-    // session is captured now because `partner_order` is computed at finish, which may come after
-    // disconnect() has detached it from jsPsych.multiplayer.
-    const session = api.session!;
-    const sessionShuffle: ShuffleFn = (key, list) => session.shuffle(key, list);
+    // shuffle goes through the session's shared shuffle so the two clients cannot disagree (it
+    // keeps working after the session closes, for `partner_order` at finish).
+    const sessionShuffle: ShuffleFn = (key, list) => api.shuffle(key, list);
     const myOrder = displayOrder(
       ids,
       role,
@@ -848,7 +835,6 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
         .${P}-chat-message.is-self .${P}-chat-sender { color: #2a6; }
         .${P}-chat-form { display: flex; gap: 0.5em; }
         .${P}-chat-input { flex: 1; font: inherit; }
-        .${P}-chat-error { color: #c00; font-size: 0.9em; margin-top: 0.3em; }
         .${P}-gate-hint { color: #a60; font-size: 0.9em; margin-bottom: 0.4em; font-style: italic; }
       `;
       document.head.appendChild(style);
@@ -1008,21 +994,17 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
     let finalScore: ScoreResult | null = null;
     let finalAssignment: SlotAssignment | null = null;
     let finalRt: number | null = null;
-    let finalReason: "submit" | "timeout" = "submit";
-    // The latest snapshot delivered to the subscriber. Reads go through it rather than api.getAll(),
-    // which throws once disconnect() has detached the session.
-    let lastGroup: GroupSessionData = api.getAll();
-    // Aborted when the trial ends, which removes the subscription.
+    let finalOutcome: "completed" | "timeout" = "completed";
+    // Ends the session-scope chat subscription `chat_persists` needs, which would otherwise outlive
+    // the trial. The trial-scope subscription ends with the trial by itself.
     const controller = new AbortController();
+    const chatGroup = (): GroupSessionData => api.getAll(chatScope);
     // `number`, not ReturnType<typeof setTimeout>: pluginAPI.setTimeout returns a numeric handle.
     let feedbackTimer: number | null = null;
     let selectionTimer: number | null = null;
     let roundTimer: number | null = null;
-    // The latest presence delivered to the subscriber, for the typing hint's TTL re-check.
-    let lastPresence: PresenceData = api.presence();
 
     const typingOn = Boolean(trial.typing_indicator) && chatOn;
-    const typingKey = (trial.typing_key as string | null) || "typing_at";
     const typingTtl =
       typeof trial.typing_ttl === "number" && trial.typing_ttl > 0 ? trial.typing_ttl : 2500;
     const typingThrottle =
@@ -1030,12 +1012,13 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
         ? trial.typing_throttle
         : 800;
 
-    // THIS client's own chat messages, read from our slot under `chatKey` (which may hold an earlier
-    // round's messages when `chat_persists` is on, or a reload's). Our own writes show up in the
-    // snapshot at once, so the slot always holds every message sent so far, including any whose
-    // write failed (those go out again with the next write).
+    // THIS client's own chat messages under `chatKey` (which hold earlier rounds' messages when
+    // `chat_persists` is on). Our own writes show up in reads at once, so this always holds every
+    // message sent so far.
     const readOwnMessages = (): ChatMessage[] =>
-      mergeMessages({ [me]: lastGroup[me] ?? {} }, chatKey).filter((m) => m.senderId === me);
+      mergeMessages({ [me]: api.get(me, chatScope) ?? {} }, chatKey).filter(
+        (m) => m.senderId === me,
+      );
     // This participant's own outgoing chat sequence counter, seeded past the HIGHEST seq already in
     // our slot (e.g. after a reload) so ids stay unique (max-based, not length-based — see the chat
     // plugin).
@@ -1066,9 +1049,9 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
     //  - sender: only the partner's message counts, so the matcher's own never opens their gate. If
     //    the partner is unresolved (auto-detect with several candidates) fall back to any other
     //    sender — a gate that can never open is the worse failure.
-    function updateGate(group: GroupSessionData) {
+    function updateGate() {
       if (partnerHasMessaged || !trial.require_message_before_response || !chatOn) return;
-      const opens = mergeMessages(group, chatKey).some(
+      const opens = mergeMessages(chatGroup(), chatKey).some(
         (m) =>
           (partner != null ? m.senderId === partner : m.senderId !== me) &&
           (m.round === round || (!trial.chat_persists && m.round == null)),
@@ -1080,9 +1063,9 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
 
     // Rebuild the transcript from scratch on each update. Idempotent (keyed by message id via
     // mergeMessages), so a notification that re-delivers seen messages changes nothing.
-    function renderChat(group: GroupSessionData) {
+    function renderChat() {
       if (!chatLog) return;
-      const transcript = mergeMessages(group, chatKey);
+      const transcript = mergeMessages(chatGroup(), chatKey);
       const pinnedToBottom = chatLog.scrollHeight - chatLog.scrollTop - chatLog.clientHeight < 4;
 
       chatLog.replaceChildren(
@@ -1138,40 +1121,27 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
       // `chat_persists` merges every round into a single log (see `updateGate`).
       const messages = appendOwnMessage(readOwnMessages(), text, me, nextSeq++, Date.now(), round);
 
-      // `update` merges ONLY the chat key into our slot, so everything else in it (joinedAt, earlier
-      // rounds, this round's submission) survives. It notifies the subscriber synchronously, which
-      // renders the new message. Best-effort: a failed write shows an inline note rather than
-      // crashing the trial, and heals itself — it stays in our slot and goes out with the next
-      // write. Do NOT roll nextSeq back on failure — a reused seq would forge a duplicate id that
-      // mergeMessages' dedup silently drops. A skipped seq is harmless; a reused one loses data.
-      api
-        .update({ [chatKey]: messages })
-        .catch((error) => showError(sendErrorText(error, "Couldn't send — please try again.")));
+      // `update` merges ONLY the chat key into our data, so everything else (this round's
+      // submission, typing mark) survives. It notifies subscribers synchronously, which renders the
+      // new message. The core retries a failed write itself, and a write only rejects once the
+      // session has closed, which ends the trial. Each message takes a fresh seq: a reused one would
+      // forge a duplicate id that mergeMessages' dedup silently drops.
+      api.update({ [chatKey]: messages }, chatScope).catch(() => {});
       if (typingOn) markTyping(null);
       updateChatAvailability();
     };
 
-    function showError(message: string) {
-      let note = display_element.querySelector(`.${P}-chat-error`) as HTMLElement | null;
-      if (!note) {
-        note = document.createElement("div");
-        note.className = `${P}-chat-error`;
-        (chatForm ?? status).after(note);
-      }
-      note.textContent = message;
-    }
-
     // --- Typing indicator ----------------------------------------------------------------------
     // A "partner is typing…" hint with no effect on trial flow. Each client keeps a timestamp (or
-    // null) at `typingKey` in its OWN slot; the partner's slot is read, never written. `update`
-    // merges only that key, so a timestamp can't overwrite chat or round data, and the session
-    // combines timestamps written while an earlier write is in flight. Failures are ignored: a
-    // lost timestamp only hides a hint.
+    // null) under `typing_at` in its OWN data for the round; the partner's is read, never written.
+    // `update` merges only that key, so a timestamp can't overwrite chat or round data, and the
+    // session combines timestamps written while an earlier write is in flight. Failures are
+    // ignored: a lost timestamp only hides a hint.
     let typingTimer: number | null = null;
     let lastTypingPing = 0;
     const markTyping = (ts: number | null): void => {
       if (!typingOn) return;
-      api.update({ [typingKey]: ts }).catch(() => {});
+      api.update({ [TYPING_KEY]: ts }).catch(() => {});
     };
     const typingLabel = (): string => {
       const custom = trial.typing_label as string | null;
@@ -1199,7 +1169,7 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
     }
     function updateTypingHint(group: GroupSessionData, presence: PresenceData) {
       if (!typingOn || ended) return;
-      const at = partner != null ? group[partner]?.[typingKey] : null;
+      const at = partner != null ? group[partner]?.[TYPING_KEY] : null;
       // A partner who is away or has left isn't typing, whatever their last timestamp says
       const fresh =
         partner != null &&
@@ -1211,7 +1181,7 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
       // further. Re-check when the TTL lapses instead of leaving a stale hint up.
       if (typingTimer != null) clearTimeout(typingTimer);
       typingTimer = fresh
-        ? pluginAPI.setTimeout(() => updateTypingHint(lastGroup, lastPresence), typingTtl)
+        ? pluginAPI.setTimeout(() => updateTypingHint(api.getAll(), api.presence()), typingTtl)
         : null;
     }
     const onTypingInput = () => {
@@ -1286,9 +1256,9 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
       submitted = true;
       const rt = now();
       const score = scoreAssignment(assignment, targets, { ordered, scoring });
-      // Only the FINAL assignment is pushed — the pre-submit action log stays local (it lands in the
-      // trial data via save_interaction_history, never on the network). n_correct rides along so
-      // both clients can show a cheap running score across rounds without re-knowing past targets.
+      // Only the FINAL assignment is written — the pre-submit action log stays local (it lands in the
+      // trial data via save_interaction_history, never on the network). Both clients score the
+      // submission themselves; n_correct rides along for anyone reading the shared data.
       const payload: Record<string, unknown> = {
         assignment,
         rt,
@@ -1296,14 +1266,10 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
         n_targets: k,
         ...(reason === "timeout" ? { timed_out: true } : {}),
       };
-      // `update` merges ONLY `dataKey` into our slot, leaving the chat keys alone. The rounds map
-      // itself still has to be read — earlier rounds live in it, written by earlier trials — but it
-      // is the one key written back. The write notifies the subscriber synchronously, which reads
-      // our own submission and enters feedback.
-      const rounds = mergeRoundData(lastGroup[me] ?? {}, dataKey, round, payload)[dataKey];
-      api
-        .update({ [dataKey]: rounds })
-        .catch((error) => showError(sendErrorText(error, "Couldn't submit — connection trouble.")));
+      // `update` merges ONLY the submission into our data for the round, leaving the chat alone.
+      // The write notifies the subscriber synchronously, which reads our own submission and enters
+      // feedback. A write only rejects once the session has closed, which ends the trial.
+      api.update({ [SUBMISSION_KEY]: payload }).catch(() => {});
     };
 
     const onGridClick = (e: Event) => {
@@ -1429,9 +1395,8 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
         const timedOut = sub.timed_out ? " (time ran out)" : "";
         let running = "";
         if (trial.show_running_score) {
-          const matcherId = isMatcher ? me : partner;
-          const total = runningScore(matcherId ? lastGroup[matcherId] : undefined, dataKey);
-          running = ` — total so far: ${total}`;
+          const earlier = jsPsychData.get().filter({ trial_type: info.name }).values();
+          running = ` — total so far: ${runningScore(earlier) + score.nCorrect}`;
         }
         feedbackEl.textContent = `${summary}${timedOut}${running}`;
         feedbackEl.classList.add(score.correct ? "is-correct" : "is-wrong");
@@ -1444,7 +1409,7 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
       feedbackShown = true;
       finalAssignment = sub.assignment;
       finalScore = scoreAssignment(sub.assignment, targets, { ordered, scoring });
-      finalReason = sub.timed_out ? "timeout" : "submit";
+      finalOutcome = sub.timed_out ? "timeout" : "completed";
       if (isMatcher) finalRt = typeof sub.rt === "number" ? sub.rt : null;
       if (selectionTimer != null) clearTimeout(selectionTimer);
       if (roundTimer != null) clearTimeout(roundTimer);
@@ -1452,26 +1417,26 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
       updateChatAvailability();
 
       if (!showFeedback) {
-        end(finalReason);
+        end(finalOutcome);
         return;
       }
       renderFeedback(sub, finalScore);
       const duration = trial.feedback_duration as number | null;
       if (typeof duration === "number" && duration > 0) {
-        feedbackTimer = pluginAPI.setTimeout(() => end(finalReason), duration);
+        feedbackTimer = pluginAPI.setTimeout(() => end(finalOutcome), duration);
       } else {
         const cont = document.createElement("button");
         cont.type = "button";
         cont.className = `${P}-continue`;
         cont.textContent = "Continue";
-        // Continue only ADVANCES past feedback; it does not change WHY the round ended. Preserve the
-        // underlying reason ("submit"/"timeout") so a played round is never mislabelled.
-        cont.addEventListener("click", () => end(finalReason));
+        // Continue only ADVANCES past feedback; it does not change HOW the round ended. Preserve the
+        // underlying outcome ("completed"/"timeout") so a played round is never mislabelled.
+        cont.addEventListener("click", () => end(finalOutcome));
         feedbackEl.after(cont);
       }
     }
 
-    const end = (reason: EndReason, leftParticipant: string | null = null) => {
+    const end = (outcome: MultiplayerOutcome, leftParticipant: string | null = null) => {
       if (ended) return; // guard against a second trigger (e.g. a timer racing the Continue button)
       ended = true;
       controller.abort();
@@ -1479,9 +1444,6 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
       if (selectionTimer != null) clearTimeout(selectionTimer);
       if (roundTimer != null) clearTimeout(roundTimer);
       if (typingTimer != null) clearTimeout(typingTimer);
-      // Withdraw our typing mark so the next round (same key under `chat_persists`) never inherits
-      // a stale "typing" flag. Fire-and-forget; rejected (and ignored) if the session has closed.
-      markTyping(null);
       grid.removeEventListener("click", onGridClick);
       grid.removeEventListener("keydown", onGridKeydown);
       slotsRow.removeEventListener("click", onSlotsClick);
@@ -1489,8 +1451,8 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
       chatForm?.removeEventListener("submit", onChatSubmit);
       chatInput?.removeEventListener("input", onTypingInput);
 
-      const group = lastGroup;
-      const transcript = mergeMessages(group, chatKey);
+      // Reads keep returning the last state after the session closes
+      const transcript = mergeMessages(chatGroup(), chatKey);
       const data: Record<string, unknown> = {
         role,
         round,
@@ -1504,10 +1466,8 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
         rt: finalRt,
         message_count: transcript.length,
         messages_sent: transcript.filter((m) => m.senderId === me).length,
-        ended_by: reason,
-        partner_left: reason === "participant_left",
+        multiplayer_outcome: outcome,
         left_participant: leftParticipant,
-        connection_lost: reason === "connection_lost",
       };
       if (trial.save_transcript) data.chat_transcript = transcript;
       if (trial.save_orders) {
@@ -1527,7 +1487,7 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
       }
       if (trial.save_interaction_history && isMatcher) data.interaction_history = history;
       // Copied so trial data doesn't hold the multiplayer API's frozen snapshot
-      if (trial.save_group) data.group = JSON.parse(JSON.stringify(group));
+      if (trial.save_group) data.group = JSON.parse(JSON.stringify(api.getAll()));
       this.jsPsych.finishTrial(data);
     };
 
@@ -1542,66 +1502,84 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
     updateChatAvailability();
 
     // subscribe() calls back at once with the current state, which renders the existing chat and
-    // opens the gate if the partner described this round before this trial was constructed.
-    api.subscribe(
-      (group, presence) => {
-        if (ended) return;
-        lastGroup = group;
-        lastPresence = presence;
-        // The session calls subscribers one last time when it closes, with our own presence "left"
-        if (presence[me] === "left") {
-          end("connection_lost");
-          return;
-        }
-        // Resolve the partner once it propagates (only when auto-detecting and still unknown, and
-        // only to the SINGLE other participant — never guess among several).
-        if (partner == null && explicitPartner == null) {
-          const others = partnerCandidates(me, group, presence);
-          if (others.length === 1) partner = others[0];
-        }
-        onGroupUpdate(group);
-        try {
-          updateTypingHint(group, presence);
-        } catch {
-          // A malformed typing frame must not tear down the subscription — worst case the hint hides.
-        }
-        // A partner who leaves before feedback can never finish the round. Checked after the
-        // update, so a submission that arrived with the departure still counts; once feedback is
-        // showing the round is complete, so a departure then changes nothing.
-        if (
-          trial.end_on_participant_left &&
-          !ended &&
-          !feedbackShown &&
-          partner != null &&
-          presence[partner] === "left"
-        ) {
-          end("participant_left", partner);
-        }
-      },
-      { signal: controller.signal },
-    );
-
-    function onGroupUpdate(group: GroupSessionData) {
-      try {
-        // Before renderChat: the gate governs whether clicks are honoured, so it must not be
-        // downstream of a chat-panel render failure.
-        updateGate(group);
-      } catch {
-        // A malformed frame must not leave the matcher permanently gated.
+    // opens the gate if the partner described this round before this trial was constructed. This
+    // subscription ends with the trial; `ended` covers the moment between finishTrial() and then.
+    api.subscribe((group, presence) => {
+      if (ended) return;
+      // Resolve the partner once it propagates (only when auto-detecting and still unknown, and
+      // only to the SINGLE other participant — never guess among several).
+      if (partner == null && explicitPartner == null) {
+        const others = remainingParticipants(api);
+        if (others.length === 1) partner = others[0];
       }
-      try {
-        renderChat(group);
-      } catch {
-        // A bad render frame must not tear down the subscription or the trial.
-      }
+      onChatUpdate();
       try {
         if (!feedbackShown) {
           const matcherId = isMatcher ? me : partner;
-          const sub = matcherId ? readSubmission(group, matcherId, dataKey, round) : undefined;
+          const sub = matcherId ? readSubmission(group, matcherId) : undefined;
           if (sub) enterFeedback(sub);
         }
       } catch {
         // A malformed frame must not propagate into the session's notify loop.
+      }
+      try {
+        updateTypingHint(group, presence);
+      } catch {
+        // A malformed typing frame must not tear down the subscription — worst case the hint hides.
+      }
+      // A partner who leaves before feedback can never finish the round. Checked after the
+      // update, so a submission that arrived with the departure still counts; once feedback is
+      // showing the round is complete, so a departure then changes nothing.
+      if (
+        trial.end_on_participant_left &&
+        !ended &&
+        !feedbackShown &&
+        partner != null &&
+        presence[partner] === "left"
+      ) {
+        end("participant_left", partner);
+      }
+    });
+
+    // The persistent chat log is in the session scope, which the subscription above doesn't cover
+    if (trial.chat_persists && chatOn && !ended) {
+      api.subscribe(
+        () => {
+          if (!ended) onChatUpdate();
+        },
+        { scope: "session", signal: controller.signal },
+      );
+    }
+
+    // A wait that never succeeds, for the session closing: it then fails with why. The trial
+    // ending cancels it too (and aborting the experiment does), which must not end anything, but
+    // must end the session-scope subscription above.
+    if (!ended) {
+      api
+        .wait(() => false)
+        .catch((error) => {
+          const outcome = outcomeOf(error);
+          if (ended || outcome === null) return;
+          if (outcome === "cancelled" && api.status !== "closed") {
+            controller.abort();
+            return;
+          }
+          end(outcome);
+        });
+    }
+
+    function onChatUpdate() {
+      try {
+        // Before renderChat: the gate governs whether clicks are honoured, so it must not be
+        // downstream of a chat-panel render failure.
+        updateGate();
+      } catch {
+        // A malformed frame must not leave the matcher permanently gated.
+      }
+      try {
+        renderChat();
+      } catch {
+        // A bad render frame must not tear down the subscription or the trial.
       }
     }
 
@@ -1621,26 +1599,6 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
       }, trial.round_timeout as number);
     }
   }
-}
-
-/**
- * Participants who could be this participant's partner: everyone else in the session except those
- * who have left the study. When several remain, prefer the connected ones, so a leftover slot from
- * an earlier pairing doesn't block auto-detection.
- */
-function partnerCandidates(me: string, group: GroupSessionData, presence: PresenceData): string[] {
-  const others = [...new Set([...Object.keys(group), ...Object.keys(presence)])].filter(
-    (id) => id !== me && presence[id] !== "left",
-  );
-  if (others.length <= 1) return others;
-  const connected = others.filter((id) => presence[id] === "connected");
-  return connected.length >= 1 ? connected : others;
-}
-
-function sendErrorText(error: unknown, fallback: string): string {
-  return (error as { name?: unknown } | null)?.name === "MultiplayerConnectionClosedError"
-    ? "The connection was lost."
-    : fallback;
 }
 
 /** Escape a string for safe interpolation into a double-quoted HTML attribute. */

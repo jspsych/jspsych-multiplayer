@@ -6,7 +6,10 @@
  * deterministic-consensus logic that every client must compute identically.
  */
 
-/** A group-session snapshot: participantId -> that participant's pushed data. */
+/**
+ * A snapshot: participantId -> that participant's data. The plugin passes each participant's
+ * session data merged under their data from the role trial.
+ */
 export type Snapshot = Record<string, any>;
 
 /** `group` is reserved for future partitioning/matching; v1 populates only `role`. */
@@ -17,7 +20,7 @@ export interface RoleAssignment {
 
 export type RoleMap = Record<string, RoleAssignment>;
 
-/** Context passed to ranking/lookup/custom strategies so they can reach round-scoped data. */
+/** Context passed to ranking/lookup/custom strategies. */
 export interface Ctx {
   ids: string[];
   round: number;
@@ -49,7 +52,7 @@ export interface AssignOptions {
   round?: number;
   /** For "rotate": use a balanced (Latin-square) rotation instead of a simple shift. */
   balanced?: boolean;
-  /** Ordering key for attribute/outcome ranking. Entry is whole; read round data at entry.rounds[ctx.round]. */
+  /** Ordering key for attribute/outcome ranking, read from the participant's whole entry. */
   rankBy?: (entry: any, id: string, ctx: Ctx) => number;
   /** Direct lookup: the role *is* this value. Must return one of the declared roles. */
   roleFrom?: (entry: any, id: string, ctx: Ctx) => string;

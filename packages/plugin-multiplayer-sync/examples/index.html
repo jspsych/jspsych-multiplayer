@@ -3,14 +3,14 @@
   <head>
     <meta charset="utf-8" />
     <title>jsPsychMultiplayerSync Example</title>
-    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@5cb6b05bec8ca0e409145453220803b408cd7e50/packages/jspsych/dist/index.browser.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@4df7fbb672806086c7e118e53aba2262f27edf68/packages/jspsych/dist/index.browser.min.js"></script>
     <script src="https://unpkg.com/@jspsych/plugin-html-keyboard-response"></script>
     <!-- Once this plugin package is published, load it from a CDN instead:
          <script src="https://unpkg.com/@jspsych-multiplayer/plugin-multiplayer-sync"></script> -->
     <script src="../dist/index.browser.min.js"></script>
     <link
       rel="stylesheet"
-      href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@5cb6b05bec8ca0e409145453220803b408cd7e50/packages/jspsych/css/jspsych.css"
+      href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@4df7fbb672806086c7e118e53aba2262f27edf68/packages/jspsych/css/jspsych.css"
     />
   </head>
 
@@ -33,13 +33,14 @@
     //      import JatosAdapter from "@jspsych-multiplayer/adapter-multiplayer-jatos";
     //      await jsPsych.multiplayer.connect(new JatosAdapter());
 
-    // 2. A synchronization barrier (a "waiting room"): push this client's readiness into the shared
-    //    group session, show a waiting message, and end the trial only once every expected
+    // 2. A synchronization barrier (a "waiting room"): write this client's readiness to the trial's
+    //    shared data, show a waiting message, and end the trial only once every expected
     //    participant has arrived. `wait_for` is the same predicate you would pass to
     //    jsPsych.multiplayer.wait().
     const lobby = {
       type: jsPsychMultiplayerSync,
-      push_data: { ready: true },
+      write_data: { ready: true },
+      participants: [], // keep waiting if someone joins and leaves again
       wait_for: (group) => Object.keys(group).length >= 2, // hold until both players are present
       message: "<p>Waiting for the other player to join…</p>",
       timeout: 60000, // give up after 60s

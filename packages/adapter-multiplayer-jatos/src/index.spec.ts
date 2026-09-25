@@ -7,8 +7,9 @@ import {
   MultiplayerConnection,
 } from "jspsych";
 
-import { stripMeta } from "../../../test-utils/memory-backend";
+import { scopeData } from "../../../test-utils/memory-backend";
 import JatosAdapter from ".";
+import { SEALED_KEY } from "./sealed-key";
 
 /**
  * These tests drive the adapter against a mock of the `jatos` global injected by jatos.js.
@@ -28,7 +29,7 @@ function makeMockJatos(
   workerId: string | number = "worker-99",
 ) {
   // What the JATOS server holds; the local copy is wiped while the channel is closed
-  const store: Record<string, Record<string, unknown>> = {};
+  const store: Record<string, unknown> = {};
   let wiped = false;
   /** The group result ID jatos.js sets when the channel opens. */
   let groupId: string | null = "77";
@@ -71,7 +72,7 @@ function makeMockJatos(
     }),
     groupSession: {
       set: jest.fn(async (key: string, value: unknown) => {
-        store[key] = value as Record<string, unknown>;
+        store[key] = JSON.parse(JSON.stringify(value));
         serverChanged();
       }),
       getAll: jest.fn(() => (wiped ? {} : JSON.parse(JSON.stringify(store)))),
@@ -202,6 +203,7 @@ function connectOptions(signal = new AbortController().signal) {
     signal,
     onChange: jest.fn(),
     onStatus: jest.fn((status: ConnectionStatus) => statuses.push(status)),
+    onResumed: jest.fn(),
   };
   return { options, statuses };
 }
@@ -263,6 +265,16 @@ describe("construction", () => {
   test("throws a helpful error when the jatos global is missing", () => {
     delete (globalThis as Record<string, unknown>).jatos;
     expect(() => new JatosAdapter()).toThrow(/jatos global is not defined/);
+  });
+
+  test("warns that the removed timeout options are ignored, naming their replacements", () => {
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+    new JatosAdapter({ connectTimeoutMs: 5, closeAfterReconnectingMs: 5 } as never);
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/connectTimeoutMs.*connectTimeout/));
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringMatching(/closeAfterReconnectingMs.*reconnectTimeout/),
+    );
+    warn.mockRestore();
   });
 });
 
@@ -372,14 +384,21 @@ describe("connect", () => {
     expect(mock.jatos.joinGroup).toHaveBeenCalledTimes(2);
   });
 
-  test("rejects with a diagnostic if JATOS never reports success or failure", async () => {
+  test("jsPsych's connect timeout aborts a join JATOS never answers", async () => {
     jest.useFakeTimers();
-    const { options } = connectOptions();
-    const assertion = new JatosAdapter({ connectTimeoutMs: 5 })
-      .connect(options)
+    const jsPsych = initJsPsych();
+    const assertion = jsPsych.multiplayer
+      .connect(new JatosAdapter(), { connectTimeout: 5000 })
       .catch((e: unknown) => e);
-    await jest.advanceTimersByTimeAsync(5);
-    expect(((await assertion) as Error).message).toMatch(/timed out after 5 ms/);
+    await jest.advanceTimersByTimeAsync(5000);
+    expect(await assertion).toMatchObject({ name: "MultiplayerError", code: "timeout" });
+    // The join settles later; the adapter releases jatos.js for the next connection
+    mock.refuse("gave up");
+    await flushPromises();
+    const { options } = connectOptions();
+    const next = new JatosAdapter().connect(options);
+    mock.open();
+    open.push(await next);
   });
 
   test("an already-aborted signal rejects without joining", async () => {
@@ -421,6 +440,15 @@ describe("reading", () => {
     mock.memberOpen(2002);
     expect(connection.getAll()).toEqual({ "1001": { a: 1 }, "2002": { b: 2 } });
     expect(connection.connectedParticipants()).toEqual(["1001", "2002"]);
+  });
+
+  test("getAll() returns each payload unchanged and leaves out the adapter's own keys", async () => {
+    const payload = { $mp: { v: 1, instance: "i", epoch: 1 }, session: { a: 1 }, scopes: {} };
+    mock.store["1001"] = payload;
+    mock.store[SEALED_KEY] = { by: "1001", members: ["1001"] };
+    mock.store["$other"] = 1;
+    const { connection } = await connected();
+    expect(connection.getAll()).toEqual({ "1001": payload });
   });
 
   test("getAll() returns {} when JATOS reports a null session", async () => {
@@ -473,7 +501,7 @@ describe("connection status", () => {
     expect(statuses).toEqual(["reconnecting"]);
   });
 
-  test("by default, a channel that stays down never reports closed", async () => {
+  test("a channel that stays down never reports closed by itself", async () => {
     jest.useFakeTimers();
     const { statuses } = await connected();
     mock.drop();
@@ -483,32 +511,21 @@ describe("connection status", () => {
     expect(statuses).toEqual(["reconnecting", "connected"]);
   });
 
-  test("with closeAfterReconnectingMs, a channel that stays down that long reports closed", async () => {
+  test("jsPsych's reconnectTimeout gives up on a channel that stays down, and leaves the group", async () => {
     jest.useFakeTimers();
-    const { statuses } = await connected(new JatosAdapter({ closeAfterReconnectingMs: 30_000 }));
+    const jsPsych = initJsPsych();
+    const connecting = jsPsych.multiplayer.connect(new JatosAdapter(), {
+      reconnectTimeout: 30_000,
+    });
+    mock.open();
+    await connecting;
     mock.drop();
     jest.advanceTimersByTime(29_999);
-    expect(statuses).toEqual(["reconnecting"]);
+    expect(jsPsych.multiplayer.status).toBe("reconnecting");
     jest.advanceTimersByTime(1);
-    expect(statuses).toEqual(["reconnecting", "closed"]);
-
-    // jatos.js reopening afterward doesn't revive the connection
-    mock.open();
-    expect(statuses).toEqual(["reconnecting", "closed"]);
-  });
-
-  test("closeAfterReconnectingMs sets how long to wait, and null waits forever", async () => {
-    jest.useFakeTimers();
-    const short = await connected(new JatosAdapter({ closeAfterReconnectingMs: 100 }));
-    mock.drop();
-    jest.advanceTimersByTime(100);
-    expect(short.statuses).toEqual(["reconnecting", "closed"]);
-    await short.connection.disconnect();
-
-    const never = await connected(new JatosAdapter({ closeAfterReconnectingMs: null }));
-    mock.drop();
-    jest.advanceTimersByTime(10 * 60_000);
-    expect(never.statuses).toEqual(["reconnecting"]);
+    await flushPromises();
+    expect(jsPsych.multiplayer.status).toBe("closed");
+    expect(mock.jatos.leaveGroup).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -541,7 +558,7 @@ describe("push", () => {
     ]);
   });
 
-  test("throws after exhausting all retry attempts, preserving the cause", async () => {
+  test("rejects after a few attempts, preserving the cause", async () => {
     jest.useFakeTimers();
     const { connection } = await connected();
     const underlying = new Error("version conflict");
@@ -551,45 +568,48 @@ describe("push", () => {
     await jest.runAllTimersAsync();
     const err = (await assertion) as Error & { cause?: unknown };
 
-    expect(err.message).toMatch(/after 8 attempts/);
+    expect(err.message).toMatch(/after 3 attempts/);
     expect(err.cause).toBe(underlying);
-    expect(mock.jatos.groupSession.set).toHaveBeenCalledTimes(8);
+    expect(mock.jatos.groupSession.set).toHaveBeenCalledTimes(3);
   });
 
-  test("a push made while the channel is down is sent once it reopens", async () => {
+  test("a push made while the channel is down rejects at once, without writing", async () => {
     const { connection } = await connected();
     mock.drop();
-    let done = false;
-    const pushing = connection.push({ x: 1 }).then(() => (done = true));
-    await flushPromises();
-    expect(done).toBe(false);
+    await expect(connection.push({ x: 1 })).rejects.toThrow(/channel is down/);
     expect(mock.jatos.groupSession.set).not.toHaveBeenCalled();
-
-    mock.open();
-    await pushing;
-    expect(mock.store["1001"]).toEqual({ x: 1 });
   });
 
-  test("a write that fails because the channel dropped is retried after it reopens", async () => {
+  test("a write that fails because the channel dropped rejects without retrying", async () => {
     const { connection } = await connected();
+    const underlying = new Error("No open group channel");
     mock.jatos.groupSession.set.mockImplementationOnce(async () => {
       mock.drop();
-      throw new Error("No open group channel");
+      throw underlying;
     });
-    const pushing = connection.push({ x: 1 });
-    await flushPromises();
-    mock.open();
-    await pushing;
-    expect(mock.store["1001"]).toEqual({ x: 1 });
+    const err = (await connection.push({ x: 1 }).catch((e: unknown) => e)) as Error & {
+      cause?: unknown;
+    };
+    expect(err.cause).toBe(underlying);
+    expect(mock.jatos.groupSession.set).toHaveBeenCalledTimes(1);
   });
 
-  test("a push waiting for the channel rejects once the connection is lost", async () => {
+  test("a write that failed while the channel was down reaches the group once it reopens", async () => {
     jest.useFakeTimers();
-    const { connection } = await connected(new JatosAdapter({ closeAfterReconnectingMs: 30_000 }));
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+    const jsPsych = await jatosSession();
     mock.drop();
-    const assertion = connection.push({ x: 1 }).catch((e: unknown) => e);
-    jest.advanceTimersByTime(30_000);
-    expect(((await assertion) as Error).message).toMatch(/stayed closed/);
+    let done = false;
+    const writing = jsPsych.multiplayer.update({ x: 1 }).then(() => (done = true));
+    await jest.advanceTimersByTimeAsync(5000);
+    expect(done).toBe(false);
+
+    mock.open();
+    await jest.advanceTimersByTimeAsync(0);
+    await writing;
+    expect(scopeData(mock.store["1001"])).toEqual({ x: 1 });
+    await jsPsych.multiplayer.disconnect();
+    warn.mockRestore();
   });
 
   test("push rejects after disconnect", async () => {
@@ -651,7 +671,7 @@ describe("with the jsPsych multiplayer session", () => {
     await connecting;
 
     await jsPsych.multiplayer.update({ ready: true });
-    expect(stripMeta(mock.store["1001"])).toEqual({ ready: true });
+    expect(scopeData(mock.store["1001"])).toEqual({ ready: true });
 
     mock.drop();
     expect(jsPsych.multiplayer.status).toBe("reconnecting");
@@ -755,20 +775,189 @@ describe("forming groups", () => {
     expect(connection.group!().sealed).toBe(true);
   });
 
-  test("the seal reaches members JATOS doesn't tell, through the session", async () => {
+  test("sealGroup() is left out when jatos.js has no setGroupFixed()", async () => {
+    delete (mock.jatos as { setGroupFixed?: unknown }).setGroupFixed;
     mock.jatos.batchProperties.maxActiveMembers = 2;
+    const { connection } = await connected();
+    expect(connection.sealGroup).toBeUndefined();
+    mock.memberOpen(2002);
+    expect(connection.group!().sealed).toBe(false);
+  });
+
+  test("without setGroupFixed(), jsPsych's sealGroup() fails as unsupported", async () => {
+    delete (mock.jatos as { setGroupFixed?: unknown }).setGroupFixed;
     const jsPsych = await jatosSession();
-    const waiting = jsPsych.multiplayer.waitForGroup();
-    // The peer reads the server's data only, and JATOS never tells it the group was fixed
-    const peer = await serverPeer();
-    await expect(waiting).resolves.toEqual({ size: 2, members: ["1001", "2002"], sealed: true });
+    await expect(jsPsych.multiplayer.sealGroup()).rejects.toMatchObject({ code: "unsupported" });
+    await jsPsych.multiplayer.disconnect();
+  });
+
+  test("once sealed, members who leave stay on the roster", async () => {
+    mock.jatos.batchProperties.maxActiveMembers = 2;
+    const { connection } = await connected();
+    mock.memberOpen(2002);
     await flushPromises();
-    expect(peer.multiplayer.group()).toEqual({
+    mock.memberLeave(2002);
+    expect(mock.jatos.groupMembers).toEqual([1001]);
+    expect(connection.group!()).toEqual({ size: 2, members: ["1001", "2002"], sealed: true });
+  });
+});
+
+describe("telling the group it is sealed", () => {
+  /** Another member publishes a seal record, as its adapter does once JATOS confirms. */
+  function publish(record: unknown) {
+    mock.store[SEALED_KEY] = record;
+    mock.fireGroupSession();
+  }
+
+  test("the member whose fix is confirmed publishes the sorted roster", async () => {
+    mock.jatos.batchProperties.maxActiveMembers = 3;
+    await connected();
+    mock.memberOpen(3003);
+    mock.memberOpen(2002);
+    await flushPromises();
+    expect(mock.store[SEALED_KEY]).toEqual({ by: "1001", members: ["1001", "2002", "3003"] });
+  });
+
+  test("a member JATOS doesn't tell learns of the seal from the record", async () => {
+    mock.jatos.batchProperties.maxActiveMembers = 2;
+    const { connection, options } = await connected(new JatosAdapter({ sealWhenFull: false }));
+    mock.memberOpen(2002);
+    (options.onChange as jest.Mock).mockClear();
+    publish({ by: "2002", members: ["1001", "2002"] });
+    expect(connection.group!()).toEqual({ size: 2, members: ["1001", "2002"], sealed: true });
+    expect(options.onChange).toHaveBeenCalled();
+
+    // It never asks JATOS itself, and sealing again succeeds at once
+    await connection.sealGroup!();
+    expect(mock.jatos.setGroupFixed).not.toHaveBeenCalled();
+  });
+
+  test("with sealWhenFull, a member stops asking once it learns of the seal", async () => {
+    mock.jatos.batchProperties.maxActiveMembers = 2;
+    // JATOS lists the group's members as the channel opens
+    mock.jatos.groupMembers = [2002];
+    mock.store[SEALED_KEY] = { by: "2002", members: ["1001", "2002"] };
+    const { connection } = await connected();
+    mock.memberOpen(2002);
+    await flushPromises();
+    expect(connection.group!().sealed).toBe(true);
+    expect(mock.jatos.setGroupFixed).not.toHaveBeenCalled();
+  });
+
+  test("a member who learned of the seal keeps dropouts on the roster", async () => {
+    const { connection } = await connected(new JatosAdapter({ sealWhenFull: false }));
+    mock.memberOpen(2002);
+    mock.memberOpen(3003);
+    publish({ by: "2002", members: ["1001", "2002", "3003"] });
+    mock.memberLeave(2002);
+    // A record rewritten without the dropout doesn't shrink the roster
+    publish({ by: "3003", members: ["1001", "3003"] });
+    expect(connection.group!().members).toEqual(["1001", "2002", "3003"]);
+  });
+
+  test("doesn't publish again when the record already has everyone", async () => {
+    mock.jatos.groupMembers = [2002];
+    mock.store[SEALED_KEY] = { by: "2002", members: ["1001", "2002"] };
+    const { connection } = await connected(new JatosAdapter({ sealWhenFull: false }));
+    mock.memberOpen(2002);
+    // Sealing with a trusted record present resolves at once
+    await connection.sealGroup!();
+    expect(mock.jatos.groupSession.set).not.toHaveBeenCalled();
+    expect(mock.jatos.setGroupFixed).not.toHaveBeenCalled();
+  });
+
+  test("a record published while the channel was down is written once it reopens", async () => {
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+    const { connection } = await connected(new JatosAdapter({ sealWhenFull: false }));
+    mock.memberOpen(2002);
+    mock.jatos.groupSession.set.mockImplementationOnce(async () => {
+      mock.drop();
+      throw new Error("No open group channel");
+    });
+    await connection.sealGroup!();
+    expect(connection.group!().sealed).toBe(true);
+    await flushPromises();
+    expect(mock.store[SEALED_KEY]).toBeUndefined();
+
+    mock.open();
+    await flushPromises();
+    expect(mock.store[SEALED_KEY]).toEqual({ by: "1001", members: ["1001", "2002"] });
+    warn.mockRestore();
+  });
+
+  test("a failed publish is retried with backoff", async () => {
+    jest.useFakeTimers();
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+    const { connection } = await connected(new JatosAdapter({ sealWhenFull: false }));
+    mock.memberOpen(2002);
+    mock.jatos.groupSession.set.mockRejectedValueOnce(new Error("conflict"));
+    mock.jatos.groupSession.set.mockRejectedValueOnce(new Error("conflict"));
+    mock.jatos.groupSession.set.mockRejectedValueOnce(new Error("conflict"));
+    await connection.sealGroup!();
+    await jest.advanceTimersByTimeAsync(1000);
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/retrying/), expect.anything());
+    await jest.advanceTimersByTimeAsync(1000);
+    expect(mock.store[SEALED_KEY]).toEqual({ by: "1001", members: ["1001", "2002"] });
+    warn.mockRestore();
+  });
+
+  describe("ignores a record that doesn't match the group", () => {
+    let warn: jest.SpyInstance;
+    beforeEach(() => {
+      warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+    });
+    afterEach(() => warn.mockRestore());
+
+    async function recordIsIgnored(record: unknown) {
+      const { connection } = await connected(new JatosAdapter({ sealWhenFull: false }));
+      mock.memberOpen(2002);
+      mock.memberOpen(3003);
+      publish(record);
+      expect(connection.group!()).toEqual({
+        size: null,
+        members: ["1001", "2002", "3003"],
+        sealed: false,
+      });
+      expect(warn).toHaveBeenCalledTimes(1);
+      // The same record is reported once
+      mock.fireGroupSession();
+      expect(warn).toHaveBeenCalledTimes(1);
+    }
+
+    test("without this participant on it", () =>
+      recordIsIgnored({ by: "2002", members: ["2002", "3003"] }));
+
+    test("without a current member on it", () =>
+      recordIsIgnored({ by: "2002", members: ["1001", "2002"] }));
+
+    test("without its writer on it", () =>
+      recordIsIgnored({ by: "4004", members: ["1001", "2002", "3003"] }));
+
+    test("naming someone never seen in the group", () =>
+      recordIsIgnored({ by: "2002", members: ["1001", "2002", "3003", "9999"] }));
+
+    test("that is malformed", () => recordIsIgnored({ members: "everyone" }));
+  });
+
+  test("a dropout who wrote data before this member joined may be on the roster", async () => {
+    mock.store["2002"] = { $mp: {} };
+    const { connection } = await connected(new JatosAdapter({ sealWhenFull: false }));
+    mock.memberOpen(3003);
+    publish({ by: "3003", members: ["1001", "2002", "3003"] });
+    expect(connection.group!()).toEqual({
       size: null,
-      members: ["1001", "2002"],
+      members: ["1001", "2002", "3003"],
       sealed: true,
     });
-    await peer.multiplayer.disconnect();
+  });
+
+  test("with jsPsych, waitForGroup() resolves for the member JATOS didn't tell", async () => {
+    mock.jatos.batchProperties.maxActiveMembers = 2;
+    const jsPsych = await jatosSession(new JatosAdapter({ sealWhenFull: false }));
+    mock.memberOpen(2002);
+    const waiting = jsPsych.multiplayer.waitForGroup();
+    publish({ by: "2002", members: ["1001", "2002"] });
+    await expect(waiting).resolves.toEqual({ size: 2, members: ["1001", "2002"], sealed: true });
     await jsPsych.multiplayer.disconnect();
   });
 });
@@ -816,50 +1005,62 @@ describe("reconnecting on the same page", () => {
     open.push(await second);
   });
 
-  test("a join that keeps being refused fails at the connect timeout", async () => {
+  test("a join that keeps being refused stops when the connect is aborted", async () => {
     jest.useFakeTimers();
     mock.leaveSlowly();
     const first = await connected();
     await first.connection.disconnect();
 
-    const { options } = connectOptions();
-    const second = new JatosAdapter({ connectTimeoutMs: 2000 })
-      .connect(options)
-      .catch((e: unknown) => e);
-    await jest.advanceTimersByTimeAsync(2000);
-    expect(((await second) as Error).message).toMatch(/timed out/);
+    const controller = new AbortController();
+    const { options } = connectOptions(controller.signal);
+    const second = new JatosAdapter().connect(options).catch((e: unknown) => e);
+    await jest.advanceTimersByTimeAsync(1000);
+    const joins = mock.jatos.joinGroup.mock.calls.length;
+    controller.abort();
+    expect(((await second) as Error).message).toMatch(/cancelled/);
+    await jest.advanceTimersByTimeAsync(5000);
+    expect(mock.jatos.joinGroup).toHaveBeenCalledTimes(joins);
   });
 });
 
 describe("rejoining", () => {
-  test("a participant whose channel reopens after leaving rejoins", async () => {
+  test("a participant whose channel reopens within the dropout timeout is connected again", async () => {
     jest.useFakeTimers();
     const jsPsych = await jatosSession();
     await jsPsych.multiplayer.update({ round: 2 });
-    const rejoined = jest.fn();
-    const restarted = jest.fn();
-    const peer = await serverPeer({
-      dropoutTimeout: 5000,
-      onParticipantRejoined: rejoined,
-      onParticipantRestarted: restarted,
-    });
+    const left = jest.fn();
+    const peer = await serverPeer({ dropoutTimeout: 5000, onParticipantLeft: left });
     expect(peer.multiplayer.presence()["1001"]).toBe("connected");
 
     mock.drop();
     expect(jsPsych.multiplayer.status).toBe("reconnecting");
     expect(peer.multiplayer.presence()["1001"]).toBe("away");
-    // Long past the dropout timeout; by default the adapter keeps waiting
-    jest.advanceTimersByTime(10 * 60_000);
-    expect(peer.multiplayer.presence()["1001"]).toBe("left");
-    expect(jsPsych.multiplayer.status).toBe("reconnecting");
+    jest.advanceTimersByTime(4000);
 
     mock.open();
     await flushPromises();
     expect(jsPsych.multiplayer.status).toBe("connected");
     expect(peer.multiplayer.presence()["1001"]).toBe("connected");
-    expect(rejoined).toHaveBeenCalledWith("1001");
-    expect(restarted).not.toHaveBeenCalled();
+    expect(left).not.toHaveBeenCalled();
     expect(peer.multiplayer.get("1001")).toEqual({ round: 2 });
+
+    await peer.multiplayer.disconnect();
+    await jsPsych.multiplayer.disconnect();
+  });
+
+  test("a participant gone past the dropout timeout stays left when their channel reopens", async () => {
+    jest.useFakeTimers();
+    const jsPsych = await jatosSession();
+    const peer = await serverPeer({ dropoutTimeout: 5000 });
+    mock.drop();
+    jest.advanceTimersByTime(10 * 60_000);
+    expect(peer.multiplayer.presence()["1001"]).toBe("left");
+    // By default the adapter keeps waiting
+    expect(jsPsych.multiplayer.status).toBe("reconnecting");
+
+    mock.open();
+    await flushPromises();
+    expect(peer.multiplayer.presence()["1001"]).toBe("left");
 
     await peer.multiplayer.disconnect();
     await jsPsych.multiplayer.disconnect();
@@ -869,18 +1070,11 @@ describe("rejoining", () => {
     jest.useFakeTimers();
     mock.leaveSlowly();
     const jsPsych = await jatosSession();
-    const rejoined = jest.fn();
-    const restarted = jest.fn();
-    const peer = await serverPeer({
-      dropoutTimeout: 1000,
-      onParticipantRejoined: rejoined,
-      onParticipantRestarted: restarted,
-    });
+    const left = jest.fn();
+    const peer = await serverPeer({ dropoutTimeout: 5000, onParticipantLeft: left });
 
     await jsPsych.multiplayer.disconnect();
     expect(peer.multiplayer.presence()["1001"]).toBe("away");
-    jest.advanceTimersByTime(1000);
-    expect(peer.multiplayer.presence()["1001"]).toBe("left");
 
     const connecting = jsPsych.multiplayer.connect(new JatosAdapter());
     await flushPromises();
@@ -891,10 +1085,9 @@ describe("rejoining", () => {
     await flushPromises();
 
     expect(jsPsych.multiplayer.participantId).toBe("1001");
-    expect(jsPsych.multiplayer.previousInstance).toBeNull();
+    expect(jsPsych.multiplayer.restarted).toBe(false);
     expect(peer.multiplayer.presence()["1001"]).toBe("connected");
-    expect(rejoined).toHaveBeenCalledWith("1001");
-    expect(restarted).not.toHaveBeenCalled();
+    expect(left).not.toHaveBeenCalled();
 
     await peer.multiplayer.disconnect();
     await jsPsych.multiplayer.disconnect();
@@ -903,16 +1096,17 @@ describe("rejoining", () => {
   test("a reloaded page under the same study result id counts as restarted", async () => {
     jest.useFakeTimers();
     const first = await jatosSession();
-    const restarted = jest.fn();
-    const peer = await serverPeer({ dropoutTimeout: 1000, onParticipantRestarted: restarted });
+    const left = jest.fn();
+    const peer = await serverPeer({ dropoutTimeout: 1000, onParticipantLeft: left });
     await first.multiplayer.disconnect();
 
     // A reload: a new page (new jsPsych) under the same study result id
     const reloaded = await jatosSession();
     await flushPromises();
-    expect(reloaded.multiplayer.previousInstance).not.toBeNull();
+    expect(reloaded.multiplayer.restarted).toBe(true);
+    expect(reloaded.multiplayer.status).toBe("closed");
     expect(peer.multiplayer.presence()["1001"]).toBe("left");
-    expect(restarted).toHaveBeenCalledWith("1001");
+    expect(left).toHaveBeenCalledWith("1001");
 
     await peer.multiplayer.disconnect();
     await reloaded.multiplayer.disconnect();

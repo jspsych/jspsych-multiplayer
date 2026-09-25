@@ -39,18 +39,17 @@ timeline.push({
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `score` | `number` | `null` | This participant's final score. Usually a function, evaluated when the trial starts, e.g. `() => jsPsych.data.get().select("points").sum()`. If it isn't a finite number, this participant still sees the board but isn't on it, and a warning is logged. |
-| `label` | `string \| null` | `null` | The name other players see on this participant's row. `null` shows their participant ID. Can be a function. |
-| `data_key` | `string \| null` | `null` | The field in each slot where the score is stored. `null` uses `scoreboard-1` for the first scoreboard, `scoreboard-2` for the second, and so on (see [Several scoreboards](#several-scoreboards)). |
-| `group_size` | `number \| null` | `null` | How many scores to wait for before showing the board. Set it to the number of players. Scores from participants who have left don't count toward it (they still appear on the board). In a [sealed group](../guides/forming-groups), `null` means the group's members who haven't left. Otherwise `null` shows the board at once, from whoever has reported, and logs a warning. |
-| `timeout` | `number \| null` | `30000` | The longest time to wait for `group_size` scores, in ms. When it runs out, the board is shown from whoever has reported, with `timed_out: true`. `null` waits indefinitely. |
+| `label` | `string \| null` | `null` | The name other players see on this participant's row. `null` shows their participant ID. Can be a function. `display_label` overrides it. |
+| `group_size` | `number \| null` | `null` | How many scores to wait for before showing the board. Set it to the number of players. Participants who have left don't count toward it. In a [sealed group](../guides/forming-groups), `null` means the group's members who haven't left. Otherwise `null` shows the board at once, from whoever has reported, and logs a warning. |
+| `timeout` | `number \| null` | `30000` | The longest time to wait for `group_size` scores, in ms. When it runs out, the board is shown from whoever has reported, with `multiplayer_outcome: "timeout"`. `null`, `0`, or a negative number waits indefinitely (not recommended). |
 | `on_timeout` | `function \| null` | `null` | Called with the jsPsych instance if `timeout` runs out, just before the partial board is shown. The trial does not end here; it still ends on the button. |
-| `participants` | `string[] \| null` | `null` | The participants the board waits for. If one of them leaves before `group_size` scores are in, the board is shown from whoever has reported, with `partner_left: true`. `null` means every other participant who is connected when this participant reports. In a [sealed group](../guides/forming-groups), `null` means the rest of the group's members who haven't left, including any who are only `away`. `[]` ignores departures. |
+| `participants` | `string[] \| null` | `null` | The participants the board waits for. If one of them leaves before `group_size` scores are in, the board is shown from whoever has reported, with `multiplayer_outcome: "participant_left"`. `null` means the other members of a [sealed group](../guides/forming-groups) who haven't left, or else every other participant who is connected when this participant reports. `[]` ignores departures. |
 | `sort` | `string` | `"desc"` | `"desc"` ranks the highest score first; `"asc"` ranks the lowest first (for times or errors). |
 | `tie_method` | `string` | `"standard"` | How tied scores are ranked. `"standard"` skips ranks after a tie (1, 2, 2, 4); `"dense"` doesn't (1, 2, 2, 3). |
 | `title` | HTML string | `"<h2>Final scores</h2>"` | Shown above the table. |
 | `show_rank` | `boolean` | `true` | Show the rank column. |
-| `highlight_self` | `boolean` | `true` | Show this participant's own row in bold on a yellow background. |
-| `display_label` | `(id, group) => string` | `null` | The name shown on each row, given the participant ID and the shared data. Overrides `label`. `group` is frozen, so don't modify it. |
+| `highlight_self` | `boolean` | `true` | Highlight this participant's own row. |
+| `display_label` | `(id, group) => string` | `null` | The name shown on each row, given the participant ID and the session's shared data (see [Names from earlier trials](#names-from-earlier-trials)). Overrides `label`. `group` is frozen, so don't modify it. |
 | `score_format` | `(score) => string` | `null` | How each score is shown, e.g. `(s) => s.toFixed(0) + " pts"`. The data keeps the raw number. |
 | `button_label` | `string \| null` | `"Continue"` | The label of the button that ends the trial. `null` shows no button, so the trial never ends (a warning is logged). |
 | `message` | HTML string | `"<p>Waiting for all players to finish…</p>"` | Shown while waiting for the group. |
@@ -63,18 +62,15 @@ timeline.push({
 | `my_rank` | `number \| null` | This participant's rank (1 is best). `null` if they didn't report a valid score. |
 | `my_score` | `number \| null` | This participant's score. `null` if they didn't report a valid score. |
 | `num_players` | `number` | How many participants are on the board. |
-| `data_key` | `string` | The field the scores were stored under: your `data_key`, or the generated `scoreboard-N`. |
-| `timed_out` | `boolean` | `true` if `timeout` ran out before `group_size` scores arrived. The board may be missing players. |
-| `partner_left` | `boolean` | `true` if the board was shown early because a participant in `participants` left. |
-| `left_participant` | `string \| null` | The ID of the participant who left, when `partner_left` is `true`. |
-| `connection_lost` | `boolean` | `true` if the board was shown early because this participant's own connection was lost for good. |
-| `error` | `string \| null` | The message of any other failure, such as this participant's score failing to send. `null` otherwise. |
+| `multiplayer_outcome` | `string \| null` | How waiting for the group ended: `"completed"` (`group_size` scores arrived), `"timeout"`, `"participant_left"` (a participant in `participants` left), or `"connection_lost"` (this participant's connection was lost for good). The board may be missing players for anything but `"completed"`. `null` when reporting failed some other way (see `error`). |
+| `left_participant` | `string \| null` | The ID of the participant who left, when `multiplayer_outcome` is `"participant_left"`. |
+| `error` | `string \| null` | The message of any other failure, such as this participant's score failing to send. `null` otherwise. The board is still shown. |
 
-[Handling dropouts](../guides/handling-dropouts) explains `partner_left`, `left_participant`,
-`connection_lost`, and how to branch on them. Whatever ended the wait, the participant still sees
+[Handling dropouts](../guides/handling-dropouts) explains `multiplayer_outcome` and
+`left_participant`, and how to branch on them. Whatever ended the wait, the participant still sees
 a board built from the scores that arrived, with a short note above it, and still clicks
-**Continue**. If the experiment ends or is aborted while the trial is waiting, the trial stops
-without showing a board and records no data.
+**Continue**. Their own row always appears. If the experiment ends or is aborted while the trial
+is waiting, the trial stops without showing a board and records no data.
 
 ## How players are ranked
 
@@ -84,13 +80,25 @@ and are listed in order of participant ID, so every participant sees the rows in
 
 ## Several scoreboards
 
-Each scoreboard needs its own `data_key`, so that scores from an earlier board don't count toward
-a later one. With the default `null`, the first scoreboard a participant reaches uses
-`scoreboard-1`, the second `scoreboard-2`, and so on. This matches across participants as long
-as everyone reaches the same scoreboards in the same order.
+Each scoreboard trial shares scores in its own part of the shared data (its [trial
+scope](../guides/how-it-works)), so scores reported to an earlier board never count toward a later
+one. You don't need to name anything. Scores come from each participant's own jsPsych data, not
+from the shared data.
 
-Give a scoreboard an explicit `data_key` if only some participants reach it (for example, inside a
-`conditional_function`). The count also starts over if a participant reloads the page.
+## Names from earlier trials
+
+To show names that participants chose in an earlier trial, write them to the session scope, which
+lasts the whole session, and look them up in `display_label`. Its second argument is the session's
+shared data:
+
+```js
+// In the trial where participants choose a name:
+on_finish: (data) =>
+  jsPsych.multiplayer.update({ name: data.response.name }, { scope: "session" }),
+
+// On the scoreboard:
+display_label: (id, group) => group[id]?.name ?? id,
+```
 
 ## Using the result in later trials
 
@@ -109,12 +117,19 @@ A four-player game in which each player's name, entered earlier, appears on thei
 by a screen only the winner sees:
 
 ```js
-let myName = "";
+const nameEntry = {
+  type: jsPsychSurveyText,
+  questions: [{ prompt: "Choose a player name", name: "name" }],
+  on_finish: (data) =>
+    jsPsych.multiplayer.update({ name: data.response.name }, { scope: "session" }),
+};
+
+// … the game's trials, each recording `phase: "game"` and `points` in its data …
 
 const scoreboard = {
   type: jsPsychMultiplayerScoreboard,
   score: () => jsPsych.data.get().filter({ phase: "game" }).select("points").sum(),
-  label: () => myName,
+  display_label: (id, group) => group[id]?.name ?? id,
   group_size: 4,
   timeout: 60000,
   score_format: (score) => `${score} pts`,
@@ -132,7 +147,7 @@ const winnerScreen = {
   conditional_function: () => jsPsychMultiplayerScoreboard.getMyRank() === 1,
 };
 
-timeline.push(scoreboard, winnerScreen);
+timeline.push(nameEntry, /* … */ scoreboard, winnerScreen);
 ```
 
 For a reaction-time game where lower is better, set `sort: "asc"`.

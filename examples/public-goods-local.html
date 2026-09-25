@@ -7,7 +7,7 @@
          Until it merges, load the PR's preview build from jsDelivr instead of the published `jspsych`.
          This URL is pinned to #3694 commit f309a68 (preview SHA 49e6a93) — see examples/README.md
          "Running it" for how to find/re-pin the current preview link. -->
-    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@5cb6b05bec8ca0e409145453220803b408cd7e50/packages/jspsych/dist/index.browser.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@4df7fbb672806086c7e118e53aba2262f27edf68/packages/jspsych/dist/index.browser.min.js"></script>
     <script src="https://unpkg.com/@jspsych/plugin-html-button-response"></script>
     <script src="https://unpkg.com/@jspsych/plugin-html-keyboard-response"></script>
     <!-- The multiplayer packages. These resolve once the sibling packages are built in this repo;
@@ -18,7 +18,7 @@
     <script src="../packages/plugin-multiplayer-countdown/dist/index.browser.min.js"></script>
     <link
       rel="stylesheet"
-      href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@5cb6b05bec8ca0e409145453220803b408cd7e50/packages/jspsych/css/jspsych.css"
+      href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@4df7fbb672806086c7e118e53aba2262f27edf68/packages/jspsych/css/jspsych.css"
     />
   </head>
 
@@ -41,9 +41,9 @@
     //                                  (Swap in adapter-multiplayer-jatos for a real deployment;
     //                                  nothing else in the timeline changes.)
     //   • plugin-multiplayer-sync    — the lobby, and the "wait for both contributions" barrier, are
-    //                                  each one declarative push-then-wait.
+    //                                  each one declarative write-then-wait.
     //   • plugin-multiplayer-countdown — used here NOT as a trial but through its exported statics
-    //                                  (startedAtKey / resolveStartedAt / computeRemaining / formatTime).
+    //                                  (resolveStartedAt / computeRemaining / formatTime).
     //                                  This is the plugin's flagship "render a synced timer DURING
     //                                  another trial" use: the contribution buttons are a normal
     //                                  html-button-response, and we draw the shared deadline into it.
@@ -60,15 +60,21 @@
     const N_PLAYERS = 2; // this demo is sized for two tabs
     const CONTRIB_MS = 20 * 1000; // length of the timed contribution window
 
-    // The consensus key the synced contribution timer resolves its start from. We reuse the countdown
-    // plugin's own key helper so the demo and the plugin agree on the slot layout byte-for-byte.
-    const START_KEY = jsPsychMultiplayerCountdown.startedAtKey("pg_contribution");
+    // The key the synced contribution timer resolves its start from. It is written and read only
+    // during the contribution trial, so it lives in that trial's own part of the shared data (the
+    // default for every read and write made during a trial).
+    const START_KEY = "contribution_started_at";
 
     const jsPsych = initJsPsych();
 
-    // A refreshed tab gets a new participant id and joins as a new participant: a page that
-    // reloaded can't rejoin the round it left.
+    // A refreshed tab keeps its participant id, but its experiment starts over, so jsPsych reports it
+    // as restarted (see the connect() call at the bottom).
     const localAdapter = new jsPsychAdapterMultiplayerLocal();
+
+    // Shows a message in place of the experiment (connect failed, or this tab was reloaded).
+    function showMessage(html) {
+      document.body.innerHTML = `<div style="max-width: 40em; margin: 4em auto; text-align: center;">${html}</div>`;
+    }
 
     let myContribution = null; // this player's chosen contribution, 0..ENDOWMENT (null = timed out → 0)
     let contribInterval = null; // the contribution clock's repaint interval, cleared on trial end
@@ -80,18 +86,20 @@
       type: jsPsychMultiplayerSync,
       // A lobby counts who is here, so someone leaving shouldn't end the wait
       participants: [],
-      push_data: { status: "ready" },
-      // Count connected players; slots stay after a player leaves
-      wait_for: (_group, presence) =>
-        Object.values(presence).filter((status) => status === "connected").length >= N_PLAYERS,
+      // Written to this trial's own part of the shared data, which is what wait_for sees
+      write_data: { here: true },
+      // Count connected players who reached the lobby; data stays after a player leaves
+      wait_for: (group, presence) =>
+        Object.keys(group).filter((id) => group[id].here && presence[id] === "connected").length >=
+        N_PLAYERS,
       message: `<p>Waiting for another player to join…</p>
                <p>Open this page in another tab (keep the <code>?mp_session=</code> in the URL) to add a player.</p>`,
     };
 
     // ── Contribution phase (timed, simultaneous) ────────────────────────────────────────────────
     // A normal button-response for the DECISION, with a shared countdown drawn on top of it via the
-    // countdown plugin's statics. Every client resolves the same start (the minimum start timestamp
-    // across all slots), so both tabs show the same remaining time and the window closes together
+    // countdown plugin's statics. Every client resolves the same start (the earliest start timestamp
+    // any player wrote), so both tabs show the same remaining time and the window closes together
     // within clock skew + latency. `trial_duration` is the hard per-client cutoff; the visible clock
     // is the group-synced one. (This is the same skew tradeoff the countdown README documents: the
     // displayed deadline is consensus, the moment a given client is actually forced off is its own.)
@@ -107,19 +115,13 @@
       trial_duration: CONTRIB_MS,
       response_ends_trial: true,
       on_load: () => {
-        // Register this client's start (keep-if-present) exactly as the countdown plugin does, so a
-        // refresh resumes the same deadline. `update` merges just this key, leaving the `status` the
-        // lobby wrote intact. The write is fire-and-forget; the timer falls back to our own start
-        // until (possibly lower) peer timestamps arrive.
-        const me = jsPsych.multiplayer.participantId;
-        const mine = jsPsych.multiplayer.get(me) ?? {};
-        const already = typeof mine[START_KEY] === "number" && Number.isFinite(mine[START_KEY]);
-        const ownStart = already ? mine[START_KEY] : Date.now();
-        if (!already) {
-          jsPsych.multiplayer
-            .update({ [START_KEY]: ownStart })
-            .catch((err) => console.error("public-goods: publishing the start time failed", err));
-        }
+        // Register this client's start time, as the countdown plugin does. The write is
+        // fire-and-forget; the timer falls back to our own start until (possibly earlier) peer
+        // timestamps arrive.
+        const ownStart = Date.now();
+        jsPsych.multiplayer
+          .update({ [START_KEY]: ownStart })
+          .catch((err) => console.error("public-goods: publishing the start time failed", err));
 
         const clockEl = document.getElementById("pg-clock");
         const paint = () => {
@@ -145,19 +147,16 @@
     };
 
     // ── Publish + barrier ───────────────────────────────────────────────────────────────────────
-    // Push our contribution (preserving the start timestamp already in our slot) and hold until both
-    // players have submitted, so neither reveal screen renders a half-finished round.
+    // Write our contribution and hold until both players have submitted, so neither reveal screen
+    // renders a half-finished round. `save_group` records the trial's shared data (everyone's
+    // contribution) in this trial's jsPsych data, where the reveal reads it. If the other player
+    // leaves first, the trial ends with multiplayer_outcome "participant_left".
     const submitAndWait = {
       type: jsPsychMultiplayerSync,
-      push_data: () => {
-        const me = jsPsych.multiplayer.participantId;
-        const mine = jsPsych.multiplayer.get(me) ?? {};
-        return { ...mine, contribution: myContribution };
-      },
-      wait_for: (group, presence) =>
-        Object.keys(group).filter(
-          (id) => group[id]?.contribution != null && presence[id] === "connected",
-        ).length >= N_PLAYERS,
+      write_data: () => ({ contribution: myContribution }),
+      wait_for: (group) =>
+        Object.values(group).filter((entry) => entry.contribution != null).length >= N_PLAYERS,
+      save_group: true,
       message: () => `<p>You contributed <strong>${myContribution}</strong>. Waiting for the other player…</p>`,
     };
 
@@ -166,13 +165,18 @@
       type: jsPsychHtmlKeyboardResponse,
       stimulus: () => {
         const me = jsPsych.multiplayer.participantId;
-        const group = jsPsych.multiplayer.getAll();
-        const presence = jsPsych.multiplayer.presence();
-        // Leftover slots from earlier runs stay in the session, so count only players still here
-        const contributions = Object.keys(group)
-          .filter((id) => presence[id] !== "left")
-          .map((id) => group[id].contribution ?? 0);
-        const pool = contributions.reduce((a, b) => a + b, 0);
+        // The barrier's saved snapshot of everyone's contribution
+        const barrier = jsPsych.data.get().filter({ trial_type: "multiplayer-sync" }).last(1).values()[0];
+        if (barrier.multiplayer_outcome !== "completed") {
+          return `<h2>Round cancelled</h2>
+                  <p>${
+                    barrier.multiplayer_outcome === "participant_left"
+                      ? "The other player left"
+                      : "The connection was lost"
+                  } before both contributions were in.</p>`;
+        }
+        const group = barrier.group;
+        const pool = Object.values(group).reduce((sum, entry) => sum + (entry.contribution ?? 0), 0);
         const share = (pool * MULTIPLIER) / N_PLAYERS;
         const myContrib = group[me]?.contribution ?? 0;
         const myPayoff = ENDOWMENT - myContrib + share;
@@ -208,8 +212,19 @@
 
     // Connect the backend, then run. Everything above is backend-agnostic — swapping the adapter is
     // the only change needed to move from local two-tab testing to a networked deployment.
-    jsPsych.multiplayer.connect(localAdapter).then(() => {
-      jsPsych.run([lobby, contribution, submitAndWait, reveal, doneScreen]);
-    });
+    jsPsych.multiplayer
+      .connect(localAdapter)
+      .then(() => {
+        // A reloaded tab keeps its participant id, but the group has moved on without it
+        if (jsPsych.multiplayer.restarted) {
+          showMessage("<p>You reloaded this page, so you can't rejoin the round. Please close this tab.</p>");
+          return;
+        }
+        jsPsych.run([lobby, contribution, submitAndWait, reveal, doneScreen]);
+      })
+      .catch((error) => {
+        console.error(error);
+        showMessage("<p>Couldn't connect. Please reload the page to try again.</p>");
+      });
   </script>
 </html>

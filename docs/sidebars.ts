@@ -12,6 +12,7 @@ const sidebars: SidebarsConfig = {
     "guides/forming-groups",
     "guides/ultimatum-game",
     "guides/handling-dropouts",
+    "guides/upgrading",
   ],
   reference: [
     "reference/multiplayer-api",

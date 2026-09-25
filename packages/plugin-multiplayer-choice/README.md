@@ -1,10 +1,10 @@
 # plugin-multiplayer-choice
 
 A **simultaneous group decision** for multiplayer experiments. Every participant picks one of the
-same options; the trial pushes that pick and waits (a barrier) until the whole group has chosen, then
+same options; the trial writes that pick to the trial's shared data and waits (a barrier) until the whole group has chosen, then
 optionally reveals the outcome. It is the engine under simultaneous-move paradigms —
 **prisoner's dilemma, public-goods contributions, dictator/coordination games** — packaging the
-choose → push → wait → reveal flow as one declarative trial.
+choose → write → wait → reveal flow as one declarative trial.
 
 Two reveal modes cover the attributed and the anonymous cases:
 
@@ -15,7 +15,7 @@ Two reveal modes cover the attributed and the anonymous cases:
   Combine it with `record_choices_by_player: false` to keep the recorded data anonymous too.
 
 It builds on the jsPsych multiplayer API (`@jspsych/jspsych` group sessions). Like
-[`plugin-multiplayer-sync`](../plugin-multiplayer-sync) it is a **barrier** trial (push → wait), but
+[`plugin-multiplayer-sync`](../plugin-multiplayer-sync) it is a **barrier** trial (write → wait), but
 it owns the option UI and the "everyone has chosen" condition, and adds a reveal. Keep the scoring in
 your own game: pass a `payoff` hook, or (the default) leave it off and derive payoffs from
 `choices_by_player` in `on_finish`.
@@ -57,12 +57,11 @@ API adapter (e.g. JATOS group sessions).
 | `choices`                  | string[]      | _undefined_ (required)                              | The options this participant can pick from — button contents (HTML allowed, experimenter-authored), like `html-button-response`. The clicked option's zero-based **index** is the value shared with the group.                                                  |
 | `prompt`                   | HTML string   | `null`                                              | Question / instructions rendered above the option buttons.                                                                                                                                                                                                      |
 | `button_html`              | fn            | `null`                                              | `(choice, index) => html` producing each button's markup (jsPsych convention). Null uses a plain `jspsych-btn`.                                                                                                                                                 |
-| `data_key`                 | string        | `null`                                              | Session field this participant's choice is stored under. `null` generates `choice-1`, `choice-2`, … so every choice trial has its own key (see **Choice keys**).                                                                                                |
 | `expected_players`         | int           | `null`                                              | Group size, **including this participant**, that must choose before the barrier lifts. Set it to the exact expected count. `null` counts the members of a sealed group (`jsPsych.multiplayer.group().sealed`) who haven't left; without a sealed group it is required.                                                                                                                                      |
 | `waiting_message`          | HTML string   | `"<p>Waiting for the other players to choose…</p>"` | Shown after this participant chooses, while waiting for the rest of the group.                                                                                                                                                                                  |
-| `timeout`                  | int           | `null`                                              | Milliseconds to wait for the group **after** choosing. On expiry the trial proceeds with whoever chose, flagged `timed_out: true`, and `on_timeout` fires. `null` waits indefinitely. Does not bound how long this participant takes to pick.                   |
+| `timeout`                  | int           | `null`                                              | Milliseconds to wait for the group **after** choosing. On expiry the trial proceeds with whoever chose, with `multiplayer_outcome: "timeout"`, and `on_timeout` fires. `null`, `0`, or a negative value waits indefinitely. Does not bound how long this participant takes to pick.                   |
 | `on_timeout`               | fn            | `null`                                              | `(waitError) => void` called if `timeout` elapses before the group has all chosen.                                                                                                                                                                              |
-| `participants`             | array \| null | `null`                                              | Participants the barrier depends on. If one leaves the session first, the trial proceeds with whoever chose, flagged `partner_left: true`. `null` means every other participant who is connected when this participant chooses; `[]` ignores departures. |
+| `participants`             | array \| null | `null`                                              | Participants the barrier depends on. If one leaves the session first, the trial proceeds with whoever chose, with `multiplayer_outcome: "participant_left"`. `null` means the other members of a sealed group who haven't left, or else every other participant connected when this participant chooses; `[]` ignores departures. |
 | `reveal`                   | bool          | `true`                                              | Reveal the group's decision after the barrier. `false` ends the trial as soon as the group has chosen.                                                                                                                                                          |
 | `reveal_mode`              | string        | `"players"`                                         | `"players"` lists every player's choice, attributed. `"tally"` shows per-option counts + the plurality winner only — never who chose what.                                                                                                                      |
 | `reveal_prompt`            | HTML string   | `null`                                              | Heading rendered above the reveal.                                                                                                                                                                                                                              |
@@ -87,45 +86,40 @@ API adapter (e.g. JATOS group sessions).
 | `is_tie`            | bool   | `true` when two or more options shared the top count, so there is no single winner.                                             |
 | `tied_options`      | object | The options sharing the top count when `is_tie` is true (`choices` order); empty otherwise.                                     |
 | `my_payoff`         | float  | This client's payoff from the `payoff` hook; `null` if no hook (or it threw/returned a non-number).                             |
-| `data_key`          | string | The session field the choices were stored under (`data_key`, or the generated `choice-N`).                                      |
-| `timed_out`         | bool   | `true` if the trial proceeded because `timeout` elapsed rather than because everyone had chosen.                                |
-| `partner_left`      | bool   | `true` if the trial proceeded because a participant in `participants` left the session.                                         |
-| `left_participant`  | string | The ID of the participant who left, when `partner_left` is true; `null` otherwise.                                              |
-| `connection_lost`   | bool   | `true` if the trial proceeded because this participant's connection was lost for good.                                          |
-| `wait_error`        | string | The message of the error that ended the barrier without the full group; `null` otherwise.                                       |
+| `multiplayer_outcome` | string | How the barrier ended: `"completed"` (everyone chose), `"timeout"`, `"participant_left"` (a participant in `participants` left), or `"connection_lost"`. On any outcome but `"completed"` the trial proceeds with whoever chose so far. |
+| `left_participant`  | string | The ID of the participant who left, when `multiplayer_outcome` is `"participant_left"`; `null` otherwise.                        |
 
 ## How the barrier works
 
-Each client writes `{ index, label }` under `data_key` when it chooses, merged into its slot so other
-data survives. The barrier condition is "at least `expected_players` participants who haven't left
-the session have a valid choice **within the option range**", checked over the shared snapshot on
-every update — the same deterministic-consensus idea the other multiplayer plugins use. A participant
-without a valid, in-range integer `index` under `data_key` is not counted as having chosen, so a
-stray write of other data never trips the barrier early, and the barrier's count always agrees with
-the `tally`/`n_players` the trial records. The recorded outcome includes every choice made under
-`data_key`, including one from a participant who has since left.
+Each client writes `{ index, label }` under the key `choice` in its part of the trial's shared data
+when it chooses, merged in so other data survives. The barrier condition is "at least
+`expected_players` participants who haven't left the session have a valid choice **within the option
+range**", checked over the trial's shared data on every update — the same deterministic-consensus idea
+the other multiplayer plugins use. A participant without a valid, in-range integer `index` is not
+counted as having chosen, so a stray write of other data never trips the barrier early, and the
+barrier's count always agrees with the `tally`/`n_players` the trial records. The recorded outcome
+includes every choice made in the trial, including one from a participant who has since left.
 
 The trial does not hang when the group can't finish. It proceeds with whoever has chosen so far if
-`timeout` elapses (`timed_out: true`, and `on_timeout` is called), if a participant in `participants`
-leaves (`partner_left: true`), or if this participant's connection is lost (`connection_lost: true`).
-An experiment should decide (e.g. in `on_finish`) how to treat those cases.
+`timeout` elapses (`multiplayer_outcome: "timeout"`, and `on_timeout` is called), if a participant in
+`participants` leaves (`"participant_left"`), or if this participant's connection is lost
+(`"connection_lost"`). An experiment should decide (e.g. in `on_finish`) how to treat those cases. If
+the experiment ends or aborts while the barrier holds, the trial stops quietly and records nothing.
 
-### Choice keys
+### Each trial has its own shared data
 
-Each choice trial stores choices under its own `data_key`, so a choice left over from an earlier
-trial can never count toward a later one. By default the key is `choice-1` for the first choice
-trial this participant reaches, `choice-2` for the second, and so on. Participants have to pass the
-barriers in the same order, so the Nth choice trial gets the same key for everyone, however many
-other trials each participant saw. Set an explicit `data_key` for a choice trial that only some
-participants reach (for example inside a `conditional_function`); the default count also starts over
-if the page reloads. An explicit `data_key` is used as-is and doesn't advance the default count.
+During a trial, `jsPsych.multiplayer` reads and writes that trial's own part of the shared data, so a
+choice made in an earlier trial can never count toward a later one. Participants running the same
+timeline share each trial's data because it is named by the trial's position in the timeline (or by
+the trial's `multiplayer_scope` parameter). To use a round's result later, read it from the trial's
+jsPsych data (`choices_by_player`, `winner`, …).
 
 ## Anonymous polls (tally mode)
 
 `reveal_mode: "tally"` turns the trial into a group poll: the reveal shows one bar per option with
 its count, the plurality **winner** (or a **tie**), and a "(you)" marker on this client's own pick —
 never a participant → choice mapping. The tally labels options from the trial's own `choices`
-(experimenter-authored), not from peer-pushed strings, so no untrusted per-participant text is
+(experimenter-authored), not from peer-written strings, so no untrusted per-participant text is
 rendered. Set `record_choices_by_player: false` to also drop the attributed map from the recorded
 data:
 
@@ -147,8 +141,8 @@ const nextGame = {
 
 > **What "anonymous" means here.** Tally mode anonymizes the plugin's **output** — the reveal DOM and
 > (with `record_choices_by_player: false`) the recorded data. It does **not** anonymize the shared
-> session state: each client's raw pick still sits in its own per-participant slot, so a participant
-> who inspects the session snapshot or network traffic (e.g. with devtools) can see peers' picks.
+> shared data: each client's raw pick still sits in its own part of the trial's shared data, so a
+> participant who inspects the shared data or network traffic (e.g. with devtools) can see peers' picks.
 > True unlinkability would require server-side aggregation, which no client-side plugin can provide.
 > For cooperative research settings the output-level guarantee is usually what matters; do not rely
 > on it against an adversarial participant.
@@ -193,11 +187,10 @@ The full decision map is saved in `choices_by_player` (unless disabled), the agg
 ```js
 import MultiplayerChoice from "@jspsych-multiplayer/plugin-multiplayer-choice";
 
-// e.g. tally a public-goods round from a snapshot:
-// (data.data_key holds the key the trial used, e.g. "choice-1")
-const choices = MultiplayerChoice.collectChoices(group, data.data_key); // { id: { index, label } }
+// e.g. tally a round from a snapshot of the trial's shared data, where choices are under "choice":
+const choices = MultiplayerChoice.collectChoices(group, "choice"); // { id: { index, label } }
 // or re-tally and resolve the winner yourself:
-const counts = MultiplayerChoice.tally(group, data.data_key, ["Red", "Green", "Blue"]);
+const counts = MultiplayerChoice.tally(group, "choice", ["Red", "Green", "Blue"]);
 const result = MultiplayerChoice.plurality(counts); // { winner, isTie }
 ```
 

@@ -1,13 +1,15 @@
 import { startTimeline } from "@jspsych/test-utils";
 import { GroupSessionData } from "jspsych";
 
-import { MemoryHub } from "../../../test-utils/memory-backend";
-import { startedAtKey } from "./countdown-core";
+import { MemoryHub, scopeData } from "../../../test-utils/memory-backend";
+import { STARTED_AT_KEY } from "./countdown-core";
 import MultiplayerCountdownPlugin from ".";
 
 /**
- * Connect "me" to an in-memory hub (optionally pre-seeded with slots, as if written by earlier
- * trials) and hand the plugin a jsPsych stand-in whose `multiplayer` is the real session.
+ * Connect "me" to an in-memory hub (optionally pre-seeded with data, as if written earlier) and hand
+ * the plugin a jsPsych stand-in whose `multiplayer` is the real session. No trial is running in the
+ * core, so the plugin's reads and writes use the session scope here; the startTimeline tests at the
+ * end cover the trial scope.
  *
  * `pluginAPI.setTimeout` is a real (here: faked) `setTimeout` that also records its handle, and
  * `clearAllTimeouts` drops every recorded one — the same registry jsPsych keeps, so
@@ -16,9 +18,10 @@ import MultiplayerCountdownPlugin from ".";
  */
 async function setup(seed: GroupSessionData = {}) {
   const hub = new MemoryHub();
-  hub.data = { ...seed };
+  for (const [id, data] of Object.entries(seed)) if (id !== "me") hub.addPeer(id, data);
   const me = await hub.join("me", { connect: { dropoutTimeout: null } });
   const multiplayer = me.jsPsych.multiplayer;
+  if (seed.me) await multiplayer.update(seed.me);
   const finished: Array<Record<string, any>> = [];
   const timeouts: Array<ReturnType<typeof setTimeout>> = [];
   const jsPsych = {
@@ -58,14 +61,13 @@ const timeText = (el: HTMLElement) =>
 const base = {
   duration: 5000,
   mode: "countdown",
-  name: "t",
   stimulus: null,
   prompt: null,
   format: null,
   save_group: false,
 };
 
-const KEY = startedAtKey("t");
+const KEY = STARTED_AT_KEY;
 const BASE = 1_000_000; // fixed fake "now" so Date.now() is deterministic
 
 async function run(params: Record<string, unknown>, seed?: GroupSessionData) {
@@ -87,11 +89,6 @@ describe("multiplayer-countdown plugin", () => {
   });
 
   describe("required-param validation (the core deliberately does not validate)", () => {
-    it("throws when `name` is missing or empty", async () => {
-      await expect(run({ name: undefined })).rejects.toThrow(/`name` parameter is required/);
-      await expect(run({ name: "   " })).rejects.toThrow(/`name` parameter is required/);
-    });
-
     it("throws when `duration` is missing or non-positive", async () => {
       await expect(run({ duration: undefined })).rejects.toThrow(
         /`duration` parameter is required/,
@@ -146,7 +143,8 @@ describe("multiplayer-countdown plugin", () => {
       started_at: BASE,
       own_started_at: BASE,
       mode: "countdown",
-      connection_lost: false,
+      multiplayer_outcome: "completed",
+      left_participant: null,
     });
     expect(finished[0].displayed_duration).toEqual(expect.any(Number));
   });
@@ -163,7 +161,7 @@ describe("multiplayer-countdown plugin", () => {
     expect(finished[0].mode).toBe("countup");
   });
 
-  it("a late joiner resumes at the group's remaining time (min-across-slots), not full duration", async () => {
+  it("a late joiner resumes at the group's remaining time (min across participants), not full duration", async () => {
     const { el } = await run({ duration: 5000 }, { peer: { [KEY]: BASE - 2000 } });
     // min start = BASE-2000, so remaining = 5000 - 2000 = 3000ms, not the full 5000.
     expect(timeText(el)).toBe("0:03");
@@ -174,15 +172,15 @@ describe("multiplayer-countdown plugin", () => {
     expect(finished).toHaveLength(0);
 
     // A peer whose start is >1s older than ours drops the consensus min below now-duration → expired.
-    hub.seed("peer", { [KEY]: BASE - 2000 });
+    hub.addPeer("peer", { [KEY]: BASE - 2000 });
 
     expect(finished).toHaveLength(1);
     expect(finished[0].started_at).toBe(BASE - 2000); // ended off the consensus min, not own start
   });
 
-  it("warns and ends immediately when the countdown has already expired at start (reused name)", async () => {
+  it("warns and ends immediately when the countdown has already expired at start", async () => {
     const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
-    // A stale timestamp from an earlier same-named countdown
+    // A timestamp from an earlier trial that shared this trial's scope and ran the clock out
     const { finished } = await run({ duration: 1000 }, { me: { [KEY]: BASE - 2000 } });
 
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("already expired"));
@@ -190,7 +188,8 @@ describe("multiplayer-countdown plugin", () => {
     expect(finished[0].started_at).toBe(BASE - 2000);
   });
 
-  it("surfaces a registration write failure loudly (console.error) and keeps displaying", async () => {
+  it("keeps displaying while the backend refuses the timestamp write (the core retries it)", async () => {
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
     const err = jest.spyOn(console, "error").mockImplementation(() => {});
     const { jsPsych, finished, me } = await setup();
     me.connection.pushImpl = () => Promise.reject(new Error("network down"));
@@ -198,10 +197,25 @@ describe("multiplayer-countdown plugin", () => {
     new MultiplayerCountdownPlugin(jsPsych as never).trial(el, { ...base } as never);
     await flushMicro();
 
-    expect(err).toHaveBeenCalledWith(expect.stringContaining("failed to push"), expect.any(Error));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("retried"), expect.any(Error));
+    expect(err).not.toHaveBeenCalled();
     // Non-fatal: the trial keeps running from this client's own start time.
     expect(finished).toHaveLength(0);
     expect(timeText(el)).toBe("0:05");
+  });
+
+  it("runs from its own start time when the connection was lost before the trial", async () => {
+    const { jsPsych, finished, me } = await setup();
+    me.connection.options.onStatus("closed");
+    const el = display();
+    new MultiplayerCountdownPlugin(jsPsych as never).trial(el, {
+      ...base,
+      duration: 1000,
+    } as never);
+
+    expect(timeText(el)).toBe("0:01");
+    jest.advanceTimersByTime(1000);
+    expect(finished[0]).toMatchObject({ started_at: BASE, multiplayer_outcome: "connection_lost" });
   });
 
   it("keeps counting down and records connection_lost when the connection closes", async () => {
@@ -209,7 +223,11 @@ describe("multiplayer-countdown plugin", () => {
     me.connection.options.onStatus("closed");
     jest.advanceTimersByTime(1000);
     expect(finished).toHaveLength(1);
-    expect(finished[0]).toMatchObject({ started_at: BASE, connection_lost: true });
+    expect(finished[0]).toMatchObject({
+      started_at: BASE,
+      multiplayer_outcome: "connection_lost",
+      left_participant: null,
+    });
   });
 
   it("announces only the final 5 seconds to screen readers, once per second", async () => {
@@ -252,7 +270,7 @@ describe("multiplayer-countdown plugin", () => {
 
     // A late peer write and further time must not re-render or re-finish.
     const before = timeText(el);
-    hub.seed("peer", { [KEY]: BASE - 100_000 });
+    hub.addPeer("peer", { [KEY]: BASE - 100_000 });
     jest.advanceTimersByTime(1000);
     expect(finished).toHaveLength(1);
     expect(timeText(el)).toBe(before);
@@ -296,23 +314,67 @@ describe("multiplayer-countdown plugin", () => {
   it("runs through the real jsPsych parameter pipeline (startTimeline smoke test)", async () => {
     jest.useRealTimers(); // startTimeline drives real async; fake timers would stall it
     jest.spyOn(console, "warn").mockImplementation(() => {}); // already-expired path warns; silence it
-    // Pre-seed an already-elapsed start so the trial ends SYNCHRONOUSLY at load: expectFinished
-    // flushes microtasks rather than waiting real wall-clock, so a 100 ms tick would never fire.
+    // Seed a peer's already-elapsed start in the trial's scope so the trial ends SYNCHRONOUSLY at
+    // load: expectFinished flushes microtasks rather than waiting real wall-clock, so a 100 ms tick
+    // would never fire.
     const hub = new MemoryHub();
-    hub.data = { me: { [startedAtKey("smoke")]: 0 } };
+    hub.addPeer("peer");
+    hub.seed("peer", { [KEY]: 0 }, { scope: "#0" });
     const { jsPsych } = await hub.join("me");
 
     const { getData, expectFinished } = await startTimeline(
-      [{ type: MultiplayerCountdownPlugin, name: "smoke", duration: 1000, save_group: true }],
+      [{ type: MultiplayerCountdownPlugin, duration: 1000, save_group: true }],
       jsPsych,
     );
     await expectFinished();
 
     const data = getData().values()[0];
     expect(data.mode).toBe("countdown");
-    expect(data.started_at).toBe(0); // resolved off the pre-seeded consensus start
-    expect(data.own_started_at).toBe(0); // kept (keep-if-present), not refreshed to Date.now()
+    expect(data.started_at).toBe(0); // resolved off the peer's earlier start
+    expect(data.own_started_at).toBeGreaterThan(0);
     expect(data.displayed_duration).toEqual(expect.any(Number));
-    expect(data.group).toEqual({ me: { [startedAtKey("smoke")]: 0 } });
+    expect(data.group).toEqual({ peer: { [KEY]: 0 }, me: { [KEY]: data.own_started_at } });
+    expect(data.multiplayer_outcome).toBe("completed");
+    expect(data).not.toHaveProperty("connection_lost");
+    // The timestamp went to the trial's scope, not the session scope
+    expect(scopeData(hub.data.me)).toBeUndefined();
+  });
+
+  it("starts every countdown fresh, without a name to keep them apart", async () => {
+    jest.useRealTimers();
+    const hub = new MemoryHub();
+    const { jsPsych } = await hub.join("me");
+    const countdown = { type: MultiplayerCountdownPlugin, duration: 150 };
+
+    const { getData, finished } = await startTimeline([countdown, countdown], jsPsych);
+    await finished;
+
+    const [first, second] = getData().values();
+    expect(first.multiplayer_outcome).toBe("completed");
+    expect(second.multiplayer_outcome).toBe("completed");
+    expect(second.started_at).toBeGreaterThanOrEqual(first.started_at + 150);
+    expect(scopeData(hub.data.me, "#0")).toEqual({ [KEY]: first.own_started_at });
+    expect(scopeData(hub.data.me, "#1")).toEqual({ [KEY]: second.own_started_at });
+  });
+
+  it("shares one clock across trials that share a multiplayer_scope", async () => {
+    jest.useRealTimers();
+    const hub = new MemoryHub();
+    const { jsPsych } = await hub.join("me");
+    const countdown = { type: MultiplayerCountdownPlugin, multiplayer_scope: "phase" };
+
+    const { getData, finished } = await startTimeline(
+      [
+        { ...countdown, duration: 100 },
+        { ...countdown, duration: 300 },
+      ],
+      jsPsych,
+    );
+    await finished;
+
+    const [first, second] = getData().values();
+    expect(second.started_at).toBe(first.started_at);
+    expect(second.own_started_at).toBe(first.own_started_at); // kept, not re-stamped
+    expect(second.displayed_duration).toBeLessThan(300);
   });
 });

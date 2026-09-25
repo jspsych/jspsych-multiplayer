@@ -1,6 +1,5 @@
 import {
   SlotStorage,
-  generateId,
   participantIdFromKey,
   readAllSlots,
   readPresent,
@@ -113,14 +112,5 @@ describe("local-store presence", () => {
     writePresence(storage, "mp", "sess", "alice", 1000);
     removePresence(storage, "mp", "sess", "alice");
     expect(readPresent(storage, "mp", "sess", 1000, 500)).toEqual([]);
-  });
-});
-
-describe("generateId", () => {
-  test("produces distinct, non-empty ids", () => {
-    const a = generateId();
-    const b = generateId();
-    expect(a).toBeTruthy();
-    expect(a).not.toBe(b);
   });
 });

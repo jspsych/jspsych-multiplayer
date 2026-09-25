@@ -8,7 +8,7 @@
          This URL is pinned to #3694 commit f309a68 (preview SHA 49e6a93). A SHA-pinned URL keeps
          loading indefinitely (it never 404s); what goes stale is the #3694 API it was pinned against,
          so if the demo misbehaves against a newer #3694, re-pin — see examples/README.md "Running it". -->
-    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@5cb6b05bec8ca0e409145453220803b408cd7e50/packages/jspsych/dist/index.browser.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@4df7fbb672806086c7e118e53aba2262f27edf68/packages/jspsych/dist/index.browser.min.js"></script>
     <script src="https://unpkg.com/@jspsych/plugin-survey-text"></script>
     <script src="https://unpkg.com/@jspsych/plugin-html-button-response"></script>
     <!-- The multiplayer packages resolve from the sibling packages' built dist/ in this repo (run
@@ -23,7 +23,7 @@
     <script src="../packages/plugin-multiplayer-choice/dist/index.browser.min.js?v=1"></script>
     <link
       rel="stylesheet"
-      href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@5cb6b05bec8ca0e409145453220803b408cd7e50/packages/jspsych/css/jspsych.css"
+      href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@4df7fbb672806086c7e118e53aba2262f27edf68/packages/jspsych/css/jspsych.css"
     />
     <style>
       .jspsych-multiplayer-choice-options {
@@ -47,14 +47,14 @@
     // Participants pick a display name, wait in a lobby, then plugin-multiplayer-match partitions the
     // group into PAIRS by deterministic consensus (every client computes the SAME pairing from the
     // shared snapshot — no coordinator). Each pair is shown who they're matched with, then plays one
-    // round of Prisoner's Dilemma with plugin-multiplayer-choice, namespaced PER PAIR so two pairs
+    // round of Prisoner's Dilemma with plugin-multiplayer-choice, scoped PER PAIR so two pairs
     // don't count each other's moves. It composes four packages:
     //   • adapter-multiplayer-local — the network backend. localStorage + cross-tab signalling, so it
     //                                 all runs by OPENING TWO (or any even number of) BROWSER TABS.
-    //   • plugin-multiplayer-sync   — the lobby: push your name, wait until MIN_PLAYERS present.
+    //   • plugin-multiplayer-sync   — the lobby: wait until EXPECTED_PLAYERS are present.
     //   • plugin-multiplayer-match  — the matchmaker: partitions the group into pairs; exposes this
     //                                 client's partners via jsPsychMultiplayerMatch.getMyMatch().
-    //   • plugin-multiplayer-choice — the round: each pair plays a Prisoner's Dilemma, keyed per pair.
+    //   • plugin-multiplayer-choice — the round: each pair plays a Prisoner's Dilemma in its own scope.
     //
     // match is the odd primitive out: it has NO UI of its own — it's a short barrier that just resolves
     // "who is with whom". This demo shows its value by USING that result (a partner reveal + a paired
@@ -82,25 +82,25 @@
     const jsPsych = initJsPsych();
 
     // Connecting the adapter is the only network setup the timeline needs. The adapter tracks
-    // presence itself, including when a tab closes. A refreshed tab gets a new participant id and
-    // joins as a new participant: a page that reloaded can't rejoin the group it left.
+    // presence itself, including when a tab closes. A refreshed tab keeps its participant id, but its
+    // experiment starts over, so jsPsych reports it as restarted (see the connect() call at the bottom).
     const localAdapter = new jsPsychAdapterMultiplayerLocal();
 
-    // Players who pushed a name in the lobby and are still connected. Slots stay after a player
-    // leaves, so presence, not the slot, says who is here.
-    const namedPresent = (group, presence) =>
-      Object.keys(group).filter((id) => group[id]?.name && presence[id] === "connected").length;
+    // Shows a message in place of the experiment (connect failed, or this tab was reloaded).
+    function showMessage(html) {
+      document.body.innerHTML = `<div style="max-width: 40em; margin: 4em auto; text-align: center;">${html}</div>`;
+    }
 
-    // Map a participant id to the display name it pushed in the lobby; our own id reads "You".
+    // Map a participant id to the display name it wrote in the name trial; our own id reads "You".
+    // Names live in the SESSION scope of the shared data, so every later trial can read them.
     const nameOfId = (id) =>
       id === jsPsych.multiplayer.participantId
         ? "You"
-        : (jsPsych.multiplayer.get(id) || {}).name || "A player";
-
-    let myName = "";
+        : jsPsych.multiplayer.get(id, { scope: "session" })?.name || "A player";
 
     // 1) Ask for a display name. The preamble states up front how many players this demo needs, so
-    //    whoever opens it knows to open exactly that many tabs.
+    //    whoever opens it knows to open exactly that many tabs. The name is written with
+    //    { scope: "session" }: data written during a trial without it belongs to that trial only.
     const nameTrial = {
       type: jsPsychSurveyText,
       preamble: `<div style="max-width:34em;margin:0 auto 1.2em;padding:0.8em 1em;border:1px solid #ccc;border-radius:8px;background:#f6f8fa;">
@@ -112,20 +112,25 @@
                  </div>`,
       questions: [{ prompt: "Choose a display name:", required: true, name: "name" }],
       on_finish: (data) => {
-        myName = (data.response.name || "").trim() || "Anonymous";
+        const name = (data.response.name || "").trim() || "Anonymous";
+        jsPsych.multiplayer.update({ name }, { scope: "session" });
       },
     };
 
-    // 2) Lobby: publish our name + join time, then wait until enough named players are present.
+    // 2) Lobby: mark ourselves as here, then wait until enough players are here.
     const lobbyTrial = {
       type: jsPsychMultiplayerSync,
       // A lobby counts who is here, so someone leaving shouldn't end the wait
       participants: [],
-      push_data: () => ({ name: myName, joinedAt: Date.now() }),
+      // Written to this trial's own part of the shared data, which is what wait_for sees
+      write_data: { here: true },
       // NB: the sync plugin's waiting-HTML parameter is `message`, not `prompt`.
       message: `<p>Waiting for ${EXPECTED_PLAYERS} players to join…</p>
                <p>Open this page in another tab (keep the <code>?mp_session=</code> in the URL) to add a player.</p>`,
-      wait_for: (group, presence) => namedPresent(group, presence) >= EXPECTED_PLAYERS,
+      // Count players who reached the lobby and are still connected; data stays after a player leaves
+      wait_for: (group, presence) =>
+        Object.keys(group).filter((id) => group[id].here && presence[id] === "connected").length >=
+        EXPECTED_PLAYERS,
     };
 
     // 3) Match: partition the group into pairs. It's a short barrier with no UI — it just resolves the
@@ -154,15 +159,18 @@
       },
     };
 
-    // 4b) The paired round. `data_key` is derived from the pair's members so each pair keeps a separate
-    //     ballot (two pairs don't count each other's moves); `expected_players` is the pair size, so the
-    //     barrier lifts once BOTH partners have chosen. `payoff` scores the round with the PD matrix.
+    // 4b) The paired round. `multiplayer_scope` names the trial's part of the shared data after the
+    //     pair's members, so each pair keeps a separate ballot (two pairs don't count each other's
+    //     moves). `expected_players` is the pair size, so the barrier lifts once BOTH partners have
+    //     chosen, and `participants` limits the barrier to this pair, so a player leaving another
+    //     pair doesn't end this one. `payoff` scores the round with the PD matrix.
     const choiceTrial = {
       type: jsPsychMultiplayerChoice,
       choices: MOVES,
       prompt: "<p>Prisoner's Dilemma — do you <strong>Cooperate</strong> or <strong>Defect</strong>?</p>",
-      data_key: () => "pd_" + [...jsPsychMultiplayerMatch.getMyMatch().members].sort().join("_"),
+      multiplayer_scope: () => "pd_" + [...jsPsychMultiplayerMatch.getMyMatch().members].sort().join("_"),
       expected_players: () => jsPsychMultiplayerMatch.getMyMatch().members.length,
+      participants: () => jsPsychMultiplayerMatch.getMyPartners(),
       waiting_message: "<p>Your move is locked in — waiting for your partner…</p>",
       player_label: nameOfId,
       payoff: (choices, me) => {
@@ -192,12 +200,12 @@
           stimulus: () => {
             const m =
               jsPsych.data.get().filter({ trial_type: "multiplayer-match" }).values()[0] || {};
-            if (m.partner_left || m.connection_lost) {
+            if (m.multiplayer_outcome === "participant_left" || m.multiplayer_outcome === "connection_lost") {
               return `<h2>No match</h2><p>${
-                m.partner_left ? "A player left" : "The connection was lost"
+                m.multiplayer_outcome === "participant_left" ? "A player left" : "The connection was lost"
               } before everyone could be matched.</p>`;
             }
-            return m.timed_out
+            return m.multiplayer_outcome === "timeout"
               ? `<h2>No match</h2><p>Couldn't get all ${EXPECTED_PLAYERS} players matched in time — make sure exactly ${EXPECTED_PLAYERS} tabs joined the <em>same</em> session (the one <code>?mp_session=…</code>).</p>`
               : `<h2>No partner this round</h2><p>There was an odd number of players, so you're sitting this one out.</p>`;
           },
@@ -221,7 +229,13 @@
         const otherId = Object.keys(byPlayer).find((id) => id !== me);
         const myMove = (byPlayer[me] || {}).label ?? "—";
         const theirMove = otherId ? byPlayer[otherId].label : "—";
-        return `<h2>Round over</h2>
+        const note =
+          c.multiplayer_outcome === "participant_left"
+            ? "<p>Your partner left before choosing.</p>"
+            : c.multiplayer_outcome === "connection_lost"
+              ? "<p>Your connection was lost before both moves were in.</p>"
+              : "";
+        return `<h2>Round over</h2>${note}
                 <p>You chose <strong>${myMove}</strong>; your partner chose <strong>${theirMove}</strong>.</p>
                 <p>Your payoff: <strong>${c.my_payoff ?? "—"}</strong> point(s).</p>`;
       },
@@ -229,14 +243,25 @@
 
     // Connect the backend, then run. Everything above is backend-agnostic — swapping the adapter on
     // the line below is the only change needed to move from local two-tab testing to JATOS.
-    jsPsych.multiplayer.connect(localAdapter).then(() => {
-      jsPsych
-        .run([nameTrial, lobbyTrial, matchTrial, gameNode, spectatorNode, doneTrial])
-        .then(() => {
-          jsPsych.getDisplayElement().innerHTML = `
-            <h2>Demo complete</h2>
-            <p>You can close this browser tab now.</p>`;
-        });
-    });
+    jsPsych.multiplayer
+      .connect(localAdapter)
+      .then(() => {
+        // A reloaded tab keeps its participant id, but the group has moved on without it
+        if (jsPsych.multiplayer.restarted) {
+          showMessage("<p>You reloaded this page, so you can't rejoin the game. Please close this tab.</p>");
+          return;
+        }
+        return jsPsych
+          .run([nameTrial, lobbyTrial, matchTrial, gameNode, spectatorNode, doneTrial])
+          .then(() => {
+            jsPsych.getDisplayElement().innerHTML = `
+              <h2>Demo complete</h2>
+              <p>You can close this browser tab now.</p>`;
+          });
+      })
+      .catch((error) => {
+        console.error(error);
+        showMessage("<p>Couldn't connect to the game. Please reload the page to try again.</p>");
+      });
   </script>
 </html>

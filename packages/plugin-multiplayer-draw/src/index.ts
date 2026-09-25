@@ -1,4 +1,11 @@
 import {
+  getMultiplayer,
+  isMultiplayerError,
+  MultiplayerOutcome,
+  outcomeOf,
+  remainingParticipants,
+} from "@jspsych-multiplayer/utils";
+import {
   GroupSessionData,
   JsPsych,
   JsPsychPlugin,
@@ -34,15 +41,6 @@ const info = <const>{
     prompt: {
       type: ParameterType.HTML_STRING,
       default: "",
-    },
-    /**
-     * Group-session field this trial stores its stroke array under. Namespacing keeps the drawing
-     * from colliding with other data a participant has pushed (e.g. a role), and lets two draw
-     * trials in one timeline keep separate canvases.
-     */
-    data_key: {
-      type: ParameterType.STRING,
-      default: "draw_strokes",
     },
     /** Canvas width:height ratio. Fixed and shared across clients so normalized points stay geometrically consistent regardless of each client's viewport. */
     aspect_ratio: {
@@ -90,7 +88,8 @@ const info = <const>{
     },
     /**
      * Predicate `(group, presence) => boolean` evaluated on every update; the trial ends as soon as
-     * it returns true. Both arguments are frozen snapshots; don't modify them.
+     * it returns true. `group` holds this trial's data; both arguments are frozen snapshots, so
+     * don't modify them.
      */
     end_when: {
       type: ParameterType.FUNCTION,
@@ -106,8 +105,10 @@ const info = <const>{
     },
     /**
      * How to label each participant in the roster. `(participantId, group, presence) => string`.
-     * Defaults to showing the raw participant id; supply this to show display names (e.g. read a
-     * `name` field a lobby wrote into each participant's slot). Only used when `show_roster` is true.
+     * Defaults to showing the raw participant id; supply this to show display names. `group` holds
+     * this trial's data, so read a name an earlier trial wrote from the session scope, e.g.
+     * `(id) => jsPsych.multiplayer.get(id, { scope: "session" })?.name ?? id`. Only used when
+     * `show_roster` is true.
      */
     roster_label: {
       type: ParameterType.FUNCTION,
@@ -119,8 +120,9 @@ const info = <const>{
       default: true,
     },
     /**
-     * End the trial when a participant who was connected when it started leaves the study
-     * (their presence becomes `left`). The trial then ends with `ended_by: "participant_left"`.
+     * End the trial when another participant leaves the study (their presence becomes `left`):
+     * a member of the sealed group, or, without one, a participant who was connected when the
+     * trial started. The trial then ends with `multiplayer_outcome: "participant_left"`.
      */
     end_on_participant_left: {
       type: ParameterType.BOOL,
@@ -150,16 +152,11 @@ const info = <const>{
       default: undefined,
     },
     /**
-     * What ended the trial: `"duration"`, `"button"`, `"condition"`, `"participant_left"`, or
-     * `"connection_lost"`.
+     * How the trial ended: `"completed"` (by one of its end conditions), `"participant_left"`,
+     * `"connection_lost"`, or `"cancelled"` (the experiment disconnected during the trial).
      */
-    ended_by: {
+    multiplayer_outcome: {
       type: ParameterType.STRING,
-      default: undefined,
-    },
-    /** True if the trial ended because another participant left the study. */
-    partner_left: {
-      type: ParameterType.BOOL,
       default: undefined,
     },
     /** The participant whose departure ended the trial, or null. */
@@ -167,9 +164,12 @@ const info = <const>{
       type: ParameterType.STRING,
       default: undefined,
     },
-    /** True if the trial ended because this participant's connection was lost for good. */
-    connection_lost: {
-      type: ParameterType.BOOL,
+    /**
+     * Which end condition completed the trial: `"duration"`, `"button"`, or `"condition"`
+     * (`end_when`). Null when the trial didn't complete (see `multiplayer_outcome`).
+     */
+    ended_by: {
+      type: ParameterType.STRING,
       default: undefined,
     },
   },
@@ -178,7 +178,10 @@ const info = <const>{
 };
 
 type Info = typeof info;
-type EndReason = "duration" | "button" | "condition" | "participant_left" | "connection_lost";
+type EndCondition = "duration" | "button" | "condition";
+
+/** The group-session field each participant keeps their stroke array under. */
+const STROKES_KEY = "draw_strokes";
 
 /**
  * **multiplayer-draw**
@@ -195,6 +198,9 @@ type EndReason = "duration" | "button" | "condition" | "participant_left" | "con
  * participant leaves the study (unless `end_on_participant_left` is false) or when this
  * participant's connection is lost for good.
  *
+ * Strokes live in the trial's own part of the shared data, so each draw trial starts with a blank
+ * canvas. Give several draw trials the same `multiplayer_scope` to keep drawing on one canvas.
+ *
  * Requires a connected multiplayer adapter — call `await jsPsych.multiplayer.connect(adapter)` before
  * `jsPsych.run()`.
  *
@@ -209,13 +215,7 @@ class MultiplayerDrawPlugin implements JsPsychPlugin<Info> {
   // Deliberately synchronous (returns undefined, NOT a Promise) — see plugin-multiplayer-chat for
   // why: jsPsych races a returned promise against `finishTrial()`.
   trial(display_element: HTMLElement, trial: TrialType<Info>) {
-    const api = this.jsPsych.multiplayer;
-    if (!api) {
-      throw new Error(
-        "multiplayer-draw: this version of jsPsych has no multiplayer module (jsPsych.multiplayer). " +
-          "Use a jsPsych release that includes it.",
-      );
-    }
+    const api = getMultiplayer(this.jsPsych, "multiplayer-draw");
     const me = api.participantId;
     if (me == null) {
       throw new Error(
@@ -223,7 +223,6 @@ class MultiplayerDrawPlugin implements JsPsychPlugin<Info> {
           "(await jsPsych.multiplayer.connect(adapter)) before this trial runs.",
       );
     }
-    const dataKey = trial.data_key;
     const aspectRatio = trial.aspect_ratio > 0 ? trial.aspect_ratio : 4 / 3;
     const colors = trial.colors.length > 0 ? trial.colors : DEFAULT_COLORS;
     const brushSizes = trial.brush_sizes.length > 0 ? trial.brush_sizes : DEFAULT_BRUSH_SIZES;
@@ -342,7 +341,7 @@ class MultiplayerDrawPlugin implements JsPsychPlugin<Info> {
     // This participant's strokes, kept locally because an in-progress stroke gains points between
     // writes. Seeded from our slot (e.g. after a reload) with fresh copies: slot data is frozen,
     // and these strokes are modified (redo updates `ts`).
-    let ownStrokes: Stroke[] = readStrokes(api.get(me), dataKey).map((stroke) => ({
+    let ownStrokes: Stroke[] = readStrokes(api.get(me), STROKES_KEY).map((stroke) => ({
       ...stroke,
       points: stroke.points.map((point) => ({ ...point })),
     }));
@@ -357,17 +356,6 @@ class MultiplayerDrawPlugin implements JsPsychPlugin<Info> {
 
     const start = performance.now();
     let ended = false;
-    // Participants connected when the trial starts; if one of them leaves, the trial can end.
-    const initialPresence = api.presence();
-    const presentAtStart = Object.keys(initialPresence).filter(
-      (id) => id !== me && initialPresence[id] === "connected",
-    );
-    // The latest snapshot delivered to the subscriber. end() reads from it rather than calling
-    // api.getAll(), which throws once disconnect() has detached the session.
-    let lastGroup: GroupSessionData = api.getAll();
-    let lastPresence: PresenceData = initialPresence;
-    // Aborted when the trial ends, which removes the subscription.
-    const controller = new AbortController();
     // `number`, not ReturnType<typeof setTimeout>: pluginAPI.setTimeout returns a numeric handle.
     let endTimer: number | null = null;
     let resizeTimer: number | null = null;
@@ -413,12 +401,12 @@ class MultiplayerDrawPlugin implements JsPsychPlugin<Info> {
 
     function doFullRepaint(group: GroupSessionData) {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-      const { instruction, nextStates } = planRepaint(group, dataKey);
+      const { instruction, nextStates } = planRepaint(group, STROKES_KEY);
       if (instruction.kind === "full-repaint") {
         for (const stroke of instruction.strokes) strokeSegment(stroke, 0);
       }
       paintStates = nextStates;
-      if (roster) updateRoster(group, lastPresence);
+      if (roster) updateRoster(group, api.presence());
     }
 
     function applyUpdate(group: GroupSessionData, presence: PresenceData) {
@@ -431,7 +419,7 @@ class MultiplayerDrawPlugin implements JsPsychPlugin<Info> {
         // work, and for any future non-opaque brush it would darken overlaps). Our own undo/redo
         // repaint directly, and a peer-triggered full repaint below still paints everyone.
         if (authorId === me) continue;
-        const strokes = readStrokes(group[authorId], dataKey);
+        const strokes = readStrokes(group[authorId], STROKES_KEY);
         // NB: do NOT early-continue on an empty array. When a peer undoes their LAST stroke their
         // slot becomes empty, and skipping here would leave that stroke painted on our canvas forever
         // (planAuthorPaint below is what detects the vanished strokeId and asks for a full repaint).
@@ -456,11 +444,12 @@ class MultiplayerDrawPlugin implements JsPsychPlugin<Info> {
       if (roster) updateRoster(group, presence);
     }
 
-    // The group snapshot as this client should see it right now: the latest snapshot with our own
+    // The group as this client should see it right now: everyone's latest data with our own
     // `ownStrokes` on top. Between write ticks, an in-progress stroke has points that haven't been
     // written yet, so a full repaint from this keeps its tail from vanishing until the next write.
     function localGroup(): GroupSessionData {
-      return { ...lastGroup, [me]: { ...(lastGroup[me] ?? {}), [dataKey]: ownStrokes } };
+      const group = api.getAll();
+      return { ...group, [me]: { ...(group[me] ?? {}), [STROKES_KEY]: ownStrokes } };
     }
 
     function updateRoster(group: GroupSessionData, presence: PresenceData) {
@@ -487,9 +476,9 @@ class MultiplayerDrawPlugin implements JsPsychPlugin<Info> {
       // Always writes the author's FULL current array, so the write is idempotent and order-
       // insensitive: core coalesces updates issued while one is in flight into a single follow-up
       // write, and the surviving one still carries every point drawn so far.
-      // Self-healing: a failed write stays in our slot and the next write carries the full current
-      // array again, so no manual retry is needed.
-      api.update({ [dataKey]: ownStrokes }).catch(showSendError);
+      // The core retries a failed write itself, and a write only rejects once the session has
+      // closed, which ends the trial.
+      api.update({ [STROKES_KEY]: ownStrokes }).catch(() => {});
     }
 
     // Tick the in-progress stroke's pushes with a self-rescheduling `pluginAPI.setTimeout`, NOT a
@@ -520,20 +509,6 @@ class MultiplayerDrawPlugin implements JsPsychPlugin<Info> {
         pushTimer = null;
       }
     };
-
-    function showSendError(error: unknown) {
-      if (ended) return;
-      let note = display_element.querySelector(".jspsych-multiplayer-draw-error") as HTMLElement;
-      if (!note) {
-        note = document.createElement("div");
-        note.className = "jspsych-multiplayer-draw-error";
-        canvasWrap.after(note);
-      }
-      note.textContent =
-        (error as { name?: unknown } | null)?.name === "MultiplayerConnectionClosedError"
-          ? "The connection was lost, so drawing can no longer be shared."
-          : "Connection trouble — retrying automatically.";
-    }
 
     // --- Pointer handling ---------------------------------------------------------------------
     function pointFromEvent(e: PointerEvent): Point {
@@ -656,7 +631,7 @@ class MultiplayerDrawPlugin implements JsPsychPlugin<Info> {
         ownStrokes = undoLastStroke(ownStrokes);
       }
       doFullRepaint(localGroup()); // our own writes don't repaint us, so repaint here
-      api.update({ [dataKey]: ownStrokes }).catch(showSendError);
+      flushPush();
       updateUndoRedoButtons();
     };
     undoButton.addEventListener("click", onUndoClick);
@@ -668,7 +643,7 @@ class MultiplayerDrawPlugin implements JsPsychPlugin<Info> {
       strokeToRestore.ts = Date.now(); // update timestamp so it renders on top collaboratively
       ownStrokes.push(strokeToRestore);
       doFullRepaint(localGroup()); // our own writes don't repaint us, so repaint here
-      api.update({ [dataKey]: ownStrokes }).catch(showSendError);
+      flushPush();
       updateUndoRedoButtons();
     };
     redoButton.addEventListener("click", onRedoClick);
@@ -685,12 +660,15 @@ class MultiplayerDrawPlugin implements JsPsychPlugin<Info> {
     window.addEventListener("resize", onResize);
 
     // --- Ending -------------------------------------------------------------------------------
-    const end = (reason: EndReason, leftParticipant: string | null = null) => {
+    const end = (
+      outcome: MultiplayerOutcome,
+      endedBy: EndCondition | null,
+      leftParticipant: string | null = null,
+    ) => {
       if (ended) return;
       ended = true;
       endActiveStroke(); // stops the push ticking too, but only when a stroke was active…
       stopPushTicking(); // …so stop it unconditionally rather than lean on that invariant.
-      controller.abort();
       if (endTimer != null) clearTimeout(endTimer);
       if (resizeTimer != null) clearTimeout(resizeTimer);
       window.removeEventListener("resize", onResize);
@@ -705,19 +683,21 @@ class MultiplayerDrawPlugin implements JsPsychPlugin<Info> {
       endButton?.removeEventListener("click", onEndClick);
 
       // Copied so trial data doesn't hold the multiplayer API's frozen arrays
-      const merged: Stroke[] = JSON.parse(JSON.stringify(orderedStrokes(localGroup(), dataKey)));
+      const merged: Stroke[] = JSON.parse(
+        JSON.stringify(orderedStrokes(localGroup(), STROKES_KEY)),
+      );
       this.jsPsych.finishTrial({
         ...(trial.store_full_strokes ? { strokes: merged } : {}),
         stroke_count: merged.length,
         strokes_drawn: merged.filter((s) => s.authorId === me).length,
         draw_time: Math.round(performance.now() - start),
-        ended_by: reason,
-        partner_left: reason === "participant_left",
+        multiplayer_outcome: outcome,
         left_participant: leftParticipant,
-        connection_lost: reason === "connection_lost",
+        ended_by: endedBy,
       });
     };
-    const onEndClick = () => end("button");
+    const complete = (endedBy: EndCondition) => end("completed", endedBy);
+    const onEndClick = () => complete("button");
     endButton?.addEventListener("click", onEndClick);
 
     // --- Wire up --------------------------------------------------------------------------------
@@ -731,43 +711,46 @@ class MultiplayerDrawPlugin implements JsPsychPlugin<Info> {
     doFullRepaint(localGroup());
 
     // subscribe() calls back at once with the current state, so end_when is checked before the
-    // trial is visible.
-    api.subscribe(
-      (group, presence) => {
-        if (ended) return;
-        lastGroup = group;
-        lastPresence = presence;
-        // The session calls subscribers one last time when it closes, with our own presence "left"
-        if (presence[me] === "left") {
-          end("connection_lost");
-          return;
-        }
-        try {
-          applyUpdate(group, presence);
-        } catch {
-          // A bad paint frame must not tear down the subscription or the trial.
-        }
-        let shouldEnd = false;
-        try {
-          shouldEnd =
-            typeof trial.end_when === "function" && Boolean(trial.end_when(group, presence));
-        } catch {
-          // A throwing end_when predicate must not propagate into the session's notify loop.
-        }
-        if (shouldEnd) {
-          end("condition");
-          return;
-        }
-        if (trial.end_on_participant_left) {
-          const gone = presentAtStart.find((id) => presence[id] === "left");
-          if (gone !== undefined) end("participant_left", gone);
-        }
-      },
-      { signal: controller.signal },
-    );
+    // trial is visible. The subscription ends with the trial; `ended` covers the moment between
+    // finishTrial() and then.
+    api.subscribe((group, presence) => {
+      if (ended) return;
+      try {
+        applyUpdate(group, presence);
+      } catch {
+        // A bad paint frame must not tear down the subscription or the trial.
+      }
+      let shouldEnd = false;
+      try {
+        shouldEnd =
+          typeof trial.end_when === "function" && Boolean(trial.end_when(group, presence));
+      } catch {
+        // A throwing end_when predicate must not propagate into the session's notify loop.
+      }
+      if (shouldEnd) complete("condition");
+    });
+
+    // A wait that never succeeds, for how the trial can end from outside: it fails when a
+    // participant it depends on leaves, or when the session closes. The trial ending cancels it too
+    // (and aborting the experiment does), which must not end anything.
+    if (!ended) {
+      api
+        .wait(() => false, {
+          participants: trial.end_on_participant_left ? remainingParticipants(api) : [],
+        })
+        .catch((error) => {
+          const outcome = outcomeOf(error);
+          if (ended || outcome === null) return;
+          if (outcome === "cancelled" && api.status !== "closed") return;
+          end(outcome, null, isMultiplayerError(error) ? (error.participantId ?? null) : null);
+        });
+    }
 
     if (hasDuration && !ended) {
-      endTimer = this.jsPsych.pluginAPI.setTimeout(() => end("duration"), trial.duration as number);
+      endTimer = this.jsPsych.pluginAPI.setTimeout(
+        () => complete("duration"),
+        trial.duration as number,
+      );
     }
   }
 }

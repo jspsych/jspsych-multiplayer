@@ -2,7 +2,10 @@
   "extends": "@jspsych/config/tsconfig.contrib.json",
   "compilerOptions": {
     "baseUrl": ".",
-    "resolveJsonModule": true
+    "resolveJsonModule": true,
+    "paths": {
+      "@jspsych-multiplayer/utils": ["../utils/src"]
+    }
   },
   "include": ["src"]
 }

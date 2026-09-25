@@ -1,47 +1,33 @@
+import { generateId, sessionIdFromUrl, tabId, validateId } from "@jspsych-multiplayer/utils";
 import type { FirebaseOptions } from "firebase/app";
 import type { Database } from "firebase/database";
 import type {
   AdapterConnectOptions,
-  GroupSessionData,
   GroupState,
   MultiplayerAdapter,
   MultiplayerConnection,
 } from "jspsych";
 
-import {
-  FirebaseBackend,
-  RawSessionSnapshot,
-  TransactionValue,
-  Unsubscribe,
-} from "./firebase-backend";
+import { DbNode, FirebaseBackend, TransactionValue, Unsubscribe } from "./firebase-backend";
 import { createRealBackend } from "./real-backend";
 
-const SESSION_PARAM = "mp_session";
-const DEFAULT_PATH_PREFIX = "mp-sessions";
-const DEFAULT_CONNECT_TIMEOUT_MS = 20000;
+const ADAPTER_NAME = "FirebaseAdapter";
+const DEFAULT_NAMESPACE = "mp-sessions";
+
+/** Prefix of the sessionStorage keys that keep this tab's participant id and matchmaking group. */
+const STORAGE_PREFIX = "jspsych-multiplayer-firebase";
 
 /** The value written to a presence node. Only its existence matters. */
 const PRESENT = "1";
 
-/** The value of a member's entry in a matchmaking group node. Only its existence matters. */
-const MEMBER = "1";
+/** How many times connect() looks for a group with room before giving up. */
+const MAX_CLAIM_ATTEMPTS = 50;
 
-/**
- * The key under a matchmaking group node that holds the final roster, as a JSON array, once the
- * group is sealed. A participant id can never contain ":", so it can't collide with a member.
- */
-const SEALED_KEY = ":sealed";
+/** How long connect() waits before looking again when the filling group is full but not yet sealed. */
+const FULL_GROUP_RETRY_MS = 250;
 
-/** How many groups connect() tries before giving up, when each fills before it gets a place. */
-const MAX_CLAIM_ATTEMPTS = 20;
-
-/**
- * Characters that must not appear in an id/session/prefix. RTDB forbids `. # $ [ ] /` in keys; we
- * ALSO forbid `:` — not for Firebase, but for cross-adapter portability, since the local adapter uses
- * `:` as its key-namespace separator and an id minted/accepted here may be replayed against it in a
- * demo swap. Validating against the union keeps ids portable both ways.
- */
-const FORBIDDEN_KEY_CHARS = /[.#$[\]/:]/;
+/** How many times sealGroup() retries when the seats change while it seals. */
+const MAX_SEAL_ATTEMPTS = 5;
 
 export interface FirebaseAdapterOptions {
   /** A Firebase app config object (the adapter initializes + owns a dedicated app per connection). */
@@ -50,28 +36,35 @@ export interface FirebaseAdapterOptions {
   database?: Database;
 
   /**
-   * Session namespace. All participant slots live under `<pathPrefix>/<sessionId>`. Defaults to the
-   * `?mp_session=` URL parameter, or a fresh random id reflected back into the URL so the link can be
-   * shared with the other players.
+   * The group's session. All participant slots live under `<namespace>/<sessionId>`. Defaults to
+   * the `?mp_session=` URL parameter, or a fresh random id written into the URL so the link can be
+   * shared with the other players. Incompatible with `matchmaking`.
    */
   sessionId?: string;
-  /** This participant's id. Defaults to a fresh locally-minted id (NOT the auth uid — see
-   *  `useUidAsParticipantId`). Rejected if combined with `useUidAsParticipantId`. */
+  /**
+   * This participant's id. Defaults to an id kept for this browser tab (see `persistParticipant`).
+   * Incompatible with `useUidAsParticipantId`.
+   */
   participantId?: string;
   /**
-   * Use the anonymous-auth uid as this participant's id (uid-as-key mode), which enables the strict
-   * uid-as-slot-key security rules. Incompatible with a supplied `participantId` (constructing with
-   * both throws). Default `false`.
+   * Keep the default participant id in this tab's sessionStorage, so a reload of the tab comes back
+   * as the same participant (in the same matchmaking group), and jsPsych reports it as a restart.
+   * With `false`, every page load is a new participant. Ignored when `participantId` is given or
+   * `useUidAsParticipantId` is set. Default `true`.
+   */
+  persistParticipant?: boolean;
+  /**
+   * Use the anonymous-auth uid as this participant's id. An adapter that owns its Firebase app
+   * keeps the uid per tab, so this also survives a reload. Incompatible with a supplied
+   * `participantId`. Default `false`.
    */
   useUidAsParticipantId?: boolean;
   /**
-   * Register a `<pathPrefix>-memberships/<uid> = sessionId` record during `connect()`, before the
-   * session listener attaches. The recommended (session-locked) security rules make that record
-   * FIRST-WRITE-WINS and require it to match on every session read/write, which is what enforces
-   * "a client can only touch the session it first joined" — the enforcement lives in the
-   * server-evaluated rules; this write is just the client's half of the handshake. Defaults to the
-   * value of `useUidAsParticipantId` (the locked rules need uid-as-key). Set `false` when using the
-   * quick-start rules, which have no memberships node.
+   * Register a `<namespace>-memberships/<uid> = sessionId` record during `connect()`, before the
+   * session listener attaches. The recommended rules make that record first-write-wins and require
+   * it for every read and write of the session, which locks each anonymous identity to the one
+   * session it first joined. The quick-start rules allow the record too, so the default works with
+   * both rule sets. Set `false` only with custom rules that have no memberships node. Default `true`.
    */
   sessionBinding?: boolean;
 
@@ -83,10 +76,8 @@ export interface FirebaseAdapterOptions {
    */
   matchmaking?: MatchmakingOptions;
 
-  /** RTDB path namespace. Defaults to `"mp-sessions"`. */
-  pathPrefix?: string;
-  /** Timeout (ms) for the await-first-snapshot step of `connect()`. Default `20000`. */
-  connectTimeoutMs?: number;
+  /** Names the adapter's RTDB nodes (see the README's rules). Defaults to `"mp-sessions"`. */
+  namespace?: string;
 
   /** Inject a `FirebaseBackend` (for tests). Defaults to the real `firebase/*` implementation. */
   backend?: FirebaseBackend;
@@ -101,6 +92,13 @@ export interface MatchmakingOptions {
   /** How many participants each group holds. The group is sealed once it has this many. */
   groupSize: number;
 }
+
+/** Options from earlier versions, and what replaced them. */
+const REMOVED_OPTIONS: Record<string, string> = {
+  pathPrefix: "it was renamed to `namespace`",
+  connectTimeoutMs:
+    "pass `connectTimeout` to jsPsych.multiplayer.connect() instead, which covers the whole connection",
+};
 
 /**
  * A Firebase Realtime Database multiplayer adapter: real cross-device multiplayer with essentially no
@@ -121,10 +119,15 @@ export default class FirebaseAdapter implements MultiplayerAdapter {
   private readonly config: ConnectionConfig;
 
   constructor(options: FirebaseAdapterOptions = {}) {
+    for (const [name, replacement] of Object.entries(REMOVED_OPTIONS)) {
+      if (name in options) {
+        throw new Error(`${ADAPTER_NAME}: the \`${name}\` option was removed; ${replacement}.`);
+      }
+    }
     if (options.useUidAsParticipantId && options.participantId !== undefined) {
       throw new Error(
-        "FirebaseAdapter: `useUidAsParticipantId` is incompatible with a supplied `participantId` " +
-          "— the uid becomes the id in that mode. Pass one or the other, not both.",
+        `${ADAPTER_NAME}: \`useUidAsParticipantId\` is incompatible with a supplied ` +
+          "`participantId` — the uid becomes the id in that mode. Pass one or the other, not both.",
       );
     }
 
@@ -132,29 +135,35 @@ export default class FirebaseAdapter implements MultiplayerAdapter {
     if (matchmaking) {
       if (options.sessionId !== undefined) {
         throw new Error(
-          "FirebaseAdapter: `matchmaking` assigns each participant's session, so it can't be " +
+          `${ADAPTER_NAME}: \`matchmaking\` assigns each participant's session, so it can't be ` +
             "combined with `sessionId`.",
         );
       }
-      validateKey("matchmaking.lobby", matchmaking.lobby ?? "");
+      validateId(ADAPTER_NAME, "matchmaking.lobby", matchmaking.lobby);
       if (!Number.isInteger(matchmaking.groupSize) || matchmaking.groupSize < 1) {
         throw new Error(
-          `FirebaseAdapter: matchmaking.groupSize must be a positive integer (got ${matchmaking.groupSize}).`,
+          `${ADAPTER_NAME}: matchmaking.groupSize must be a positive integer (got ${matchmaking.groupSize}).`,
         );
       }
     }
 
-    const useUid = options.useUidAsParticipantId ?? false;
-    const pathPrefix = options.pathPrefix ?? DEFAULT_PATH_PREFIX;
+    const namespace = validateId(ADAPTER_NAME, "namespace", options.namespace ?? DEFAULT_NAMESPACE);
+    const persist = options.persistParticipant ?? true;
     // With matchmaking, connect() gets the session from the lobby instead
-    const sessionId = matchmaking ? null : (options.sessionId ?? resolveSessionId());
-    // Minted once, so every connection made with this adapter reuses the same id. In uid mode the
+    const sessionId = matchmaking
+      ? null
+      : validateId(ADAPTER_NAME, "sessionId", options.sessionId ?? sessionIdFromUrl());
+    // Resolved once, so every connection made with this adapter reuses the same id. In uid mode the
     // id comes from sign-in instead.
-    const participantId = useUid ? null : (options.participantId ?? generateId());
-
-    validateKey("pathPrefix", pathPrefix);
-    if (sessionId !== null) validateKey("sessionId", sessionId);
-    if (participantId !== null) validateKey("participantId", participantId);
+    let participantId: string | null = null;
+    if (!options.useUidAsParticipantId) {
+      participantId = validateId(
+        ADAPTER_NAME,
+        "participantId",
+        options.participantId ??
+          (persist ? tabId(`${STORAGE_PREFIX}:${namespace}:participant`) : generateId()),
+      );
+    }
 
     const injected = options.backend;
     this.config = {
@@ -162,10 +171,11 @@ export default class FirebaseAdapter implements MultiplayerAdapter {
       matchmaking: matchmaking
         ? { lobby: matchmaking.lobby, groupSize: matchmaking.groupSize }
         : null,
-      pathPrefix,
+      namespace,
       participantId,
-      sessionBinding: options.sessionBinding ?? useUid,
-      connectTimeoutMs: options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS,
+      sessionBinding: options.sessionBinding ?? true,
+      groupStorageKey:
+        matchmaking && persist ? `${STORAGE_PREFIX}:${namespace}:lobby:${matchmaking.lobby}` : null,
       // Build the real backend per connection (not at construction) so each connection gets a fresh
       // app — goOffline() tears the old one down. Unit tests inject a fake and never reach this
       // path, so the firebase SDK is never loaded under test.
@@ -196,15 +206,30 @@ interface ConnectionConfig {
   /** Null with matchmaking, where connect() gets it from the lobby. */
   sessionId: string | null;
   matchmaking: MatchmakingOptions | null;
-  pathPrefix: string;
+  namespace: string;
   /** Null in uid-as-key mode, where the id is the auth uid. */
   participantId: string | null;
   sessionBinding: boolean;
-  connectTimeoutMs: number;
+  /** Where this tab remembers its matchmaking group, or null when it doesn't. */
+  groupStorageKey: string | null;
   backendFactory: () => Promise<FirebaseBackend>;
 }
 
 type OwnStatus = "connected" | "reconnecting" | "closed";
+
+/** A place in a matchmaking group: who holds it (auth uid) and as which participant. */
+interface Seat {
+  uid: string;
+  id: string;
+}
+
+/** A matchmaking group node, parsed. `roster` is the sealed roster, or null while it fills. */
+interface GroupNode {
+  seats: Map<number, Seat>;
+  roster: Map<number, Seat> | null;
+}
+
+const EMPTY_GROUP: GroupNode = { seats: new Map(), roster: null };
 
 /**
  * One open connection to a Firebase session. The core's reads are synchronous but every Firebase read
@@ -219,13 +244,18 @@ class FirebaseConnection implements MultiplayerConnection {
   group?: () => GroupState;
   sealGroup?: () => Promise<void>;
 
-  /** The matchmaking group node: a member entry per member, plus the roster once sealed. */
-  private groupNode: Record<string, string> = {};
-  /** Whether our member entry may exist, so disconnect() knows to free our place. */
-  private memberWritten = false;
+  /** The matchmaking group node, mirrored. */
+  private groupNode: GroupNode = EMPTY_GROUP;
+  /** Our seat in a group that is still filling, so disconnect() knows to free it. */
+  private seat: number | null = null;
+  /** Whether this connection has handled the seal (cancelled its seat's removal). */
+  private sealHandled = false;
+  /** A seal in progress, so overlapping calls share it. */
+  private sealing: Promise<void> | null = null;
 
   private backend: FirebaseBackend | null = null;
-  private mirror: GroupSessionData = {};
+  private uid = "";
+  private mirror: Record<string, unknown> = {};
   private present = new Set<string>();
 
   /** Set by disconnect(); after it, no callback reaches the core. */
@@ -239,6 +269,8 @@ class FirebaseConnection implements MultiplayerConnection {
   /** Whether `.info/connected` has been true at least once since connecting. */
   private hadFirstConnection = false;
   private status: OwnStatus = "connected";
+  /** A restore of our presence (and seat) in progress, so overlapping triggers share it. */
+  private restoring: Promise<boolean> | null = null;
 
   private readonly unsubscribes: Unsubscribe[] = [];
 
@@ -251,20 +283,17 @@ class FirebaseConnection implements MultiplayerConnection {
     if (matchmaking) {
       this.group = () => ({
         size: matchmaking.groupSize,
-        ...readGroup(this.groupNode),
+        ...readGroup(this.groupNode, matchmaking.groupSize),
       });
       this.sealGroup = () => this.seal();
     }
   }
 
-  /** Connect, sign in, bind the session, load both nodes, and announce our presence. */
+  /** Connect, sign in, find the group, bind the session, load the nodes, and announce presence. */
   async open(): Promise<void> {
-    const { signal } = this.options;
     const check = () => {
       if (this.openError) throw this.openError;
-      if (signal.aborted || this.closed) {
-        throw new Error("FirebaseAdapter: connect() was cancelled.");
-      }
+      this.throwIfCancelled();
     };
     check();
 
@@ -274,39 +303,50 @@ class FirebaseConnection implements MultiplayerConnection {
 
     const uid = await backend.signIn();
     check();
-    if (this.config.participantId === null) {
-      validateKey("participantId (auth uid)", uid);
-      this.participantId = uid;
-    } else {
-      this.participantId = this.config.participantId;
-    }
+    this.uid = uid;
+    this.participantId =
+      this.config.participantId ?? validateId(ADAPTER_NAME, "participantId (auth uid)", uid);
 
     if (this.config.matchmaking) {
-      this.sessionId = await this.claimPlace(backend, uid);
+      this.sessionId = await this.claimPlace(backend);
       check();
     }
 
     // Session binding: claim (or re-assert) this uid's membership BEFORE the session listener
-    // attaches — under the recommended session-locked rules, reading the session already requires a
-    // matching membership record. The record is first-write-wins server-side (`.validate` makes it
-    // immutable), so re-asserting the SAME session on a rejoin succeeds and claiming a DIFFERENT
-    // one is denied. Never removed on disconnect: the binding IS the security property.
+    // attaches — under the recommended rules, reading the session already requires a matching
+    // membership record. The record is first-write-wins server-side, so re-asserting the SAME
+    // session on a reload succeeds and claiming a DIFFERENT one is denied. Never removed on
+    // disconnect: the binding IS the security property.
     if (this.config.sessionBinding) {
       try {
-        await backend.set(this.membershipPath(uid), this.sessionId);
+        await backend.set(this.membershipPath(), this.sessionId);
       } catch (err) {
         throw new Error(
-          "FirebaseAdapter: registering session membership failed — either this client's anonymous " +
-            `identity is already bound to a different session (rejoining "${this.sessionId}" ` +
-            "from a browser profile that first joined another session; use a fresh tab/profile or " +
-            "clear site data), or the security rules are missing the memberships block (see the " +
-            `README's recommended rules). Underlying error: ${
-              err instanceof Error ? err.message : String(err)
-            }`,
+          `${ADAPTER_NAME}: registering session membership failed — either this client's anonymous ` +
+            `identity is already bound to a different session (joining "${this.sessionId}" from a ` +
+            "tab or browser profile that first joined another session; use a fresh tab or clear " +
+            "site data), or the security rules are missing the memberships node (see the README's " +
+            `rules). Underlying error: ${errorMessage(err)}`,
         );
       }
       check();
     }
+
+    // Slot claim: record which uid owns this participant id in this session. The recommended
+    // rules make it first-write-wins and require it for writes to the participant's data slot and
+    // presence node, so nobody else can write them.
+    try {
+      await backend.set(this.ownerPath(), uid);
+    } catch (err) {
+      throw new Error(
+        `${ADAPTER_NAME}: claiming participant "${this.participantId}" in session ` +
+          `"${this.sessionId}" failed — either another browser identity already claimed this ` +
+          "participant id (a supplied id reused on another device, or a reload that lost its " +
+          "anonymous sign-in), or the security rules are missing the owners node (see the " +
+          `README's rules). Underlying error: ${errorMessage(err)}`,
+      );
+    }
+    check();
 
     await this.loadNodes(backend);
     check();
@@ -325,12 +365,14 @@ class FirebaseConnection implements MultiplayerConnection {
     );
     check();
     this.opened = true;
+    if (this.config.matchmaking) this.handleGroupChange();
   }
 
   /**
-   * Attach the session and presence listeners and wait until both have delivered a first snapshot,
-   * so the core never reads an empty mirror. A rules denial, a silent hang, and an abort all settle
-   * the wait; connect()'s cleanup then removes whatever listeners were attached.
+   * Attach the session, presence, and (with matchmaking) group listeners, and wait until each has
+   * delivered a first snapshot, so the core never reads an empty mirror. A rules denial or an abort
+   * settles the wait; connect()'s cleanup then removes whatever listeners were attached. The core's
+   * `connectTimeout` aborts the signal when connecting takes too long.
    */
   private loadNodes(backend: FirebaseBackend): Promise<void> {
     const { signal } = this.options;
@@ -343,34 +385,23 @@ class FirebaseConnection implements MultiplayerConnection {
       const finish = (fn: () => void) => {
         if (settled) return;
         settled = true;
-        clearTimeout(timer);
         signal.removeEventListener("abort", onAbort);
         fn();
       };
       const fail = (error: Error) => finish(() => reject(error));
-      const onAbort = () => fail(new Error("FirebaseAdapter: connect() was cancelled."));
+      const onAbort = () => fail(cancelledError());
       const maybeResolve = () => {
         if (sessionLoaded && presenceLoaded && groupLoaded) finish(resolve);
       };
-
-      const timer = setTimeout(() => {
-        fail(
-          new Error(
-            `FirebaseAdapter: connect() timed out after ${this.config.connectTimeoutMs}ms waiting ` +
-              "for the first session snapshot. Check the database URL, network, and that your " +
-              "security rules grant read access to this session (see the README rules recipe).",
-          ),
-        );
-      }, this.config.connectTimeoutMs);
       signal.addEventListener("abort", onAbort, { once: true });
 
       // A cancelled listener means we can no longer see the session. Before the first snapshots it
       // rejects connect(); once connected, it closes the connection.
       const onListenerError = (node: string) => (error: Error) => {
         const wrapped = new Error(
-          `FirebaseAdapter: the ${node} listener was cancelled — this is almost always a ` +
+          `${ADAPTER_NAME}: the ${node} listener was cancelled — this is almost always a ` +
             `security-rules denial. Grant read access to this session's ${node} node (see the ` +
-            `README rules recipe). Underlying error: ${error.message}`,
+            `README's rules). Underlying error: ${error.message}`,
         );
         if (!settled) {
           fail(wrapped);
@@ -385,9 +416,9 @@ class FirebaseConnection implements MultiplayerConnection {
       this.unsubscribes.push(
         backend.onValue(
           this.sessionPath(),
-          (snapshot) => {
+          (value) => {
             if (this.closed) return;
-            this.mirror = decodeSession(snapshot);
+            this.mirror = decodeSession(value);
             sessionLoaded = true;
             maybeResolve();
             this.options.onChange();
@@ -399,12 +430,13 @@ class FirebaseConnection implements MultiplayerConnection {
       this.unsubscribes.push(
         backend.onValue(
           this.presenceRootPath(),
-          (snapshot) => {
+          (value) => {
             if (this.closed) return;
-            this.present = new Set(Object.keys(snapshot ?? {}));
+            this.present = new Set(childKeys(value));
             presenceLoaded = true;
             maybeResolve();
             this.options.onChange();
+            this.checkOwnPresence();
           },
           onListenerError("presence"),
         ),
@@ -413,12 +445,13 @@ class FirebaseConnection implements MultiplayerConnection {
       this.unsubscribes.push(
         backend.onValue(
           this.groupPath(),
-          (snapshot) => {
+          (value) => {
             if (this.closed) return;
-            this.groupNode = snapshot ?? {};
+            this.groupNode = parseGroup(value);
             groupLoaded = true;
             maybeResolve();
             this.options.onChange();
+            this.handleGroupChange();
           },
           onListenerError("group"),
         ),
@@ -430,101 +463,248 @@ class FirebaseConnection implements MultiplayerConnection {
 
   /**
    * Get a place in a group and return its session id. A participant already bound to a session
-   * (uid mode, after a same-tab reload) goes back to that group. Otherwise the lobby names the
-   * group that is filling; when it has no room, the lobby moves on to a new group and we try that.
-   * Every step is a transaction, so the server settles who gets the last place.
+   * (session binding), or whose tab remembers a group (`persistParticipant`), goes back to that
+   * group. Otherwise the lobby names the group that is filling; once that group is sealed, the
+   * lobby moves on to a new group. Seats are taken with transactions, so the server settles who
+   * gets the last place.
    */
-  private async claimPlace(backend: FirebaseBackend, uid: string): Promise<string> {
+  private async claimPlace(backend: FirebaseBackend): Promise<string> {
     if (this.config.sessionBinding) {
-      const bound = await backend.get(this.membershipPath(uid));
-      if (bound !== null) {
-        if (await this.claimIn(backend, bound)) return bound;
+      const bound = await backend.get(this.membershipPath());
+      this.throwIfCancelled();
+      if (typeof bound === "string" && bound !== "") {
+        if (await this.claimIn(backend, bound)) return this.remember(bound);
         throw new Error(
-          `FirebaseAdapter: this participant's group ("${bound}") filled up without them, and ` +
+          `${ADAPTER_NAME}: this participant's group ("${bound}") filled up without them, and ` +
             "the session-locked rules don't let them join another. Open the study in a new tab.",
         );
       }
     }
+    const remembered = this.rememberedGroup();
+    if (remembered !== null && (await this.claimIn(backend, remembered))) {
+      return remembered;
+    }
+
     const lobby = this.lobbyPath();
     for (let attempt = 0; attempt < MAX_CLAIM_ATTEMPTS; attempt++) {
       this.throwIfCancelled();
+      // Point an empty lobby at a new group; otherwise just read where it points
       const pointer = await backend.transaction(lobby, (current) =>
-        typeof current === "string" && current !== "" ? current : generateId(),
+        typeof current === "string" && current !== "" ? undefined : generateId(),
       );
       const sessionId = pointer.value;
       if (typeof sessionId !== "string") {
-        throw new Error("FirebaseAdapter: the lobby node doesn't hold a session id.");
+        throw new Error(`${ADAPTER_NAME}: the lobby node doesn't hold a session id.`);
       }
-      if (await this.claimIn(backend, sessionId)) return sessionId;
-      // Full or sealed: point the lobby at a new group, unless someone already has
-      await backend.transaction(lobby, (current) =>
-        current === sessionId ? generateId() : current,
-      );
+      if (await this.claimIn(backend, sessionId)) return this.remember(sessionId);
+
+      const group = parseGroup(await backend.get(this.groupPath(sessionId)));
+      if (group.roster) {
+        // Sealed: point the lobby at a new group, unless someone already has. The rules only
+        // allow moving the lobby off a sealed group.
+        await backend
+          .transaction(lobby, (current) => (current === sessionId ? generateId() : undefined))
+          .catch(() => {});
+      } else {
+        // Full but not sealed yet: its members seal it in a moment
+        await sleep(FULL_GROUP_RETRY_MS, this.options.signal);
+      }
     }
     throw new Error(
-      `FirebaseAdapter: couldn't find a group with room after ${MAX_CLAIM_ATTEMPTS} tries.`,
+      `${ADAPTER_NAME}: couldn't find a group with room after ${MAX_CLAIM_ATTEMPTS} tries.`,
     );
   }
 
   /**
-   * Take a place in the group `sessionId`, or confirm we already have one. Returns false if the
-   * group is full or was sealed without us.
+   * Take a seat in the group `sessionId`, or confirm we already have one. Returns false if the
+   * group is full, or was sealed without us.
    */
   private async claimIn(backend: FirebaseBackend, sessionId: string): Promise<boolean> {
     const { groupSize } = this.config.matchmaking!;
-    const id = this.participantId;
-    const memberPath = this.groupPath(sessionId) + "/" + id;
-    // Arm the removal first, so a drop right after the claim can't leave a place taken forever.
-    // The rules check an onDisconnect when it is armed, so they refuse it for a sealed group;
-    // the claim below then finds out whether we're on its roster.
-    const armed = await backend.onDisconnectRemove(memberPath).then(
+    const groupPath = this.groupPath(sessionId);
+    const node = parseGroup(await backend.get(groupPath));
+    this.throwIfCancelled();
+    if (node.roster) return this.onRoster(node.roster);
+
+    const own = findSeat(node.seats, this.uid, this.participantId, groupSize);
+    if (own !== null) return this.settleSeat(backend, sessionId, own);
+
+    const mine: Seat = { uid: this.uid, id: this.participantId };
+    for (let seat = 0; seat < groupSize; seat++) {
+      if (node.seats.has(seat)) continue;
+      let committed: boolean;
+      try {
+        ({ committed } = await backend.transaction(`${groupPath}/seats/${seat}`, (current) =>
+          current === null ? { ...mine } : undefined,
+        ));
+      } catch (err) {
+        // The rules refuse seats in a sealed group
+        const now = parseGroup(await backend.get(groupPath));
+        if (now.roster) return this.onRoster(now.roster);
+        throw err;
+      }
+      this.throwIfCancelled();
+      if (committed) return this.settleSeat(backend, sessionId, seat);
+    }
+    return false;
+  }
+
+  /**
+   * After taking (or finding) our seat: arm its removal, so a drop frees the place while the group
+   * fills, and seal the group if that seat was its last free one. The removal is armed after the
+   * seat is taken because the rules only let a client remove a seat it holds; a tab that closes in
+   * between leaves a ghost seat, which the group then seals with as a dropout.
+   */
+  private async settleSeat(
+    backend: FirebaseBackend,
+    sessionId: string,
+    seat: number,
+  ): Promise<boolean> {
+    const { groupSize } = this.config.matchmaking!;
+    const seatPath = `${this.groupPath(sessionId)}/seats/${seat}`;
+    const armed = await backend.onDisconnectRemove(seatPath).then(
       () => true,
       () => false,
     );
-    const result = await backend.transaction(this.groupPath(sessionId), (current) =>
-      takePlace(current, id, groupSize),
-    );
-    const { members, sealed } = readGroup(asNode(result.value));
-    if (!members.includes(id)) {
-      if (armed) await backend.cancelOnDisconnect(memberPath).catch(() => {});
-      return false;
+    const node = parseGroup(await backend.get(this.groupPath(sessionId)));
+    if (node.roster) {
+      // Sealed meanwhile. Our seat no longer matters: the roster is final.
+      if (armed) await backend.cancelOnDisconnect(seatPath).catch(() => {});
+      const onRoster = this.onRoster(node.roster);
+      if (!onRoster) await backend.remove(seatPath).catch(() => {});
+      return onRoster;
     }
-    if (sealed) {
-      // Our place is on the final roster now, so a later drop mustn't remove it
-      if (armed) await backend.cancelOnDisconnect(memberPath).catch(() => {});
-    } else {
-      if (!armed) await backend.onDisconnectRemove(memberPath);
-      this.memberWritten = true;
+    if (!armed) {
+      throw new Error(`${ADAPTER_NAME}: couldn't arm the removal of this participant's seat.`);
+    }
+    this.seat = seat;
+    if (occupied(node.seats, groupSize) >= groupSize) {
+      await this.sealIn(backend, sessionId);
     }
     return true;
   }
 
+  /** Whether we're on a sealed roster. A sealed roster needs no seat of ours to free. */
+  private onRoster(roster: Map<number, Seat>): boolean {
+    this.seat = null;
+    return [...roster.values()].some((seat) => seat.id === this.participantId);
+  }
+
   /** Seal the group with the members it has now. Sealing a sealed group succeeds. */
-  private async seal(): Promise<void> {
+  private seal(): Promise<void> {
     const backend = this.backend;
     if (this.closed || !backend) {
-      throw new Error("FirebaseAdapter: sealGroup() called on a closed connection.");
+      return Promise.reject(
+        new Error(`${ADAPTER_NAME}: sealGroup() called on a closed connection.`),
+      );
     }
-    const id = this.participantId;
-    const result = await backend.transaction(this.groupPath(), (current) => {
-      const node = asNode(current);
-      if (node[SEALED_KEY] !== undefined) return undefined;
-      return { ...node, [SEALED_KEY]: JSON.stringify(sortedIds([...memberIds(node), id])) };
+    this.sealing ??= this.sealIn(backend, this.sessionId).finally(() => {
+      this.sealing = null;
     });
-    if (!readGroup(asNode(result.value)).sealed) {
-      throw new Error("FirebaseAdapter: the group could not be sealed.");
+    return this.sealing;
+  }
+
+  /**
+   * Write the sealed roster: a copy of the seats, naming the seat of the member who sealed. The
+   * rules accept it only from a member, only once, and only when each entry matches the seat as it
+   * is on the server, so a seat that changes meanwhile makes us read again and retry.
+   */
+  private async sealIn(backend: FirebaseBackend, sessionId: string): Promise<void> {
+    const { groupSize } = this.config.matchmaking!;
+    const groupPath = this.groupPath(sessionId);
+    let lastError: unknown = null;
+    for (let attempt = 0; attempt < MAX_SEAL_ATTEMPTS; attempt++) {
+      const node = parseGroup(await backend.get(groupPath));
+      if (node.roster) break;
+      const own = findSeat(node.seats, this.uid, this.participantId, groupSize);
+      if (own === null) {
+        throw new Error(`${ADAPTER_NAME}: only a member of the group can seal it.`);
+      }
+      const seats: DbNode = {};
+      for (const [index, seat] of node.seats) {
+        if (index < groupSize) seats[String(index)] = { uid: seat.uid, id: seat.id };
+      }
+      try {
+        await backend.transaction(`${groupPath}/sealed`, (current) =>
+          current === null ? { by: String(own), seats } : undefined,
+        );
+      } catch (err) {
+        lastError = err;
+      }
     }
-    // The sealed roster is final, so a later drop mustn't remove our entry
-    await backend.cancelOnDisconnect(this.groupPath() + "/" + id).catch(() => {});
+    const node = parseGroup(await backend.get(groupPath));
+    if (!node.roster) {
+      throw new Error(
+        `${ADAPTER_NAME}: the group could not be sealed.` +
+          (lastError ? ` Underlying error: ${errorMessage(lastError)}` : ""),
+      );
+    }
+    if (sessionId === this.sessionId) await this.handleSeal(backend, node.roster);
+  }
+
+  /**
+   * React to a new group snapshot: once sealed, stop our seat's armed removal (the roster is final)
+   * and close if we're not on it; while filling, seal a full group whose last member didn't.
+   */
+  private handleGroupChange(): void {
+    const backend = this.backend;
+    if (!this.opened || this.closed || !backend) return;
+    const { groupSize } = this.config.matchmaking!;
+    const { roster, seats } = this.groupNode;
+    if (roster) {
+      void this.handleSeal(backend, roster);
+    } else if (this.seat !== null && occupied(seats, groupSize) >= groupSize) {
+      void this.seal().catch((err) => {
+        console.error(`${ADAPTER_NAME}: failed to seal the full group`, err);
+      });
+    }
+  }
+
+  private async handleSeal(backend: FirebaseBackend, roster: Map<number, Seat>): Promise<void> {
+    if (this.sealHandled) return;
+    this.sealHandled = true;
+    const seat = this.seat;
+    const onRoster = this.onRoster(roster);
+    if (seat !== null) {
+      await backend.cancelOnDisconnect(this.seatPath(seat)).catch(() => {});
+    }
+    if (!onRoster && this.opened) {
+      console.error(`${ADAPTER_NAME}: this participant's group was sealed without them.`);
+      this.reportStatus("closed");
+    }
+  }
+
+  /** The group this tab remembers joining in this lobby, if any. */
+  private rememberedGroup(): string | null {
+    const key = this.config.groupStorageKey;
+    if (key === null) return null;
+    try {
+      const stored = sessionStorage.getItem(key);
+      return stored ? validateId(ADAPTER_NAME, "stored session", stored) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private remember(sessionId: string): string {
+    const key = this.config.groupStorageKey;
+    if (key !== null) {
+      try {
+        sessionStorage.setItem(key, sessionId);
+      } catch {
+        // Without sessionStorage a reload joins whichever group is filling
+      }
+    }
+    return sessionId;
   }
 
   private throwIfCancelled() {
-    if (this.options.signal.aborted || this.closed) {
-      throw new Error("FirebaseAdapter: connect() was cancelled.");
-    }
+    if (this.options.signal.aborted || this.closed) throw cancelledError();
   }
 
-  getAll(): GroupSessionData {
+  // ---------------------------------------------------------------- the connection
+
+  getAll(): Record<string, unknown> {
     // The core copies what this returns, so the mirror can be handed over directly
     return this.mirror;
   }
@@ -536,7 +716,7 @@ class FirebaseConnection implements MultiplayerConnection {
   async push(data: Record<string, unknown>): Promise<void> {
     const backend = this.backend;
     if (this.closed || !backend) {
-      throw new Error("FirebaseAdapter: push() called on a closed connection.");
+      throw new Error(`${ADAPTER_NAME}: push() called on a closed connection.`);
     }
     // Store JSON-encoded so the payload survives RTDB's JSON coercion — raw, RTDB prunes empty
     // arrays/objects and coerces arrays to objects; the string round-trips those unchanged. The
@@ -558,12 +738,12 @@ class FirebaseConnection implements MultiplayerConnection {
     this.backend = null;
     if (!backend) return;
 
-    if (this.memberWritten && !readGroup(this.groupNode).sealed) {
+    if (this.seat !== null && !this.groupNode.roster) {
       // Free our place in a group that is still filling. A sealed roster keeps us on it.
-      const memberPath = `${this.groupPath()}/${this.participantId}`;
+      const seatPath = this.seatPath(this.seat);
       try {
-        await backend.remove(memberPath);
-        await backend.cancelOnDisconnect(memberPath);
+        await backend.remove(seatPath);
+        await backend.cancelOnDisconnect(seatPath);
       } catch {
         // Best-effort: the armed onDisconnect is the backstop
       }
@@ -587,10 +767,9 @@ class FirebaseConnection implements MultiplayerConnection {
 
   /**
    * `.info/connected` handler. The first `true` is the initial connection, which open() already
-   * handled. A later `false` means our channel dropped; the server then fires our armed onDisconnect
-   * and removes our presence node. The next `true` is the recovery: re-arm the one-shot removal
-   * FIRST (re-writing presence before re-arming leaves a window where another drop orphans it), then
-   * write presence again.
+   * handled. A later `false` means our channel dropped; the server then fires our armed
+   * onDisconnects. The next `true` is the recovery: restore what the server removed, then report
+   * `connected`.
    */
   private async handleConnectionChange(isConnected: boolean): Promise<void> {
     if (this.closed) return;
@@ -602,38 +781,67 @@ class FirebaseConnection implements MultiplayerConnection {
       this.hadFirstConnection = true;
       return;
     }
+    if (await this.restoreOnce()) this.reportStatus("connected");
+  }
+
+  /**
+   * Our presence node vanished while our channel looked fine, e.g. the server timed the channel out
+   * without the client noticing. The others saw us leave, so restore it and tell the core, which
+   * re-announces this participant.
+   */
+  private checkOwnPresence(): void {
+    if (!this.opened || this.closed || this.status !== "connected") return;
+    if (this.present.has(this.participantId)) return;
+    void this.restoreOnce().then((kept) => {
+      if (kept && !this.closed && this.status === "connected") this.options.onResumed();
+    });
+  }
+
+  private restoreOnce(): Promise<boolean> {
+    this.restoring ??= this.restore().finally(() => {
+      this.restoring = null;
+    });
+    return this.restoring;
+  }
+
+  /**
+   * Re-arm and re-write our presence (re-arming FIRST: writing before arming leaves a window where
+   * another drop orphans it), and with matchmaking take back our seat. Resolves false when the
+   * connection can't continue.
+   */
+  private async restore(): Promise<boolean> {
     const backend = this.backend;
-    if (!backend) return;
+    if (!backend || this.closed) return false;
     try {
       await backend.onDisconnectRemove(this.presencePath());
-      if (this.closed) return;
+      if (this.closed) return false;
       await backend.set(this.presencePath(), PRESENT);
-      if (this.closed) return;
+      if (this.closed) return false;
     } catch (err) {
-      console.error("FirebaseAdapter: failed to restore presence after reconnecting", err);
+      console.error(`${ADAPTER_NAME}: failed to restore presence after reconnecting`, err);
     }
     if (this.config.matchmaking) {
-      // While the group was filling, the server removed our place when we dropped: take it back.
+      // While the group was filling, the server removed our seat when we dropped: take one back.
       // If it was sealed meanwhile, we're in only if we made the roster.
-      const group = readGroup(this.groupNode);
-      let kept = group.sealed && group.members.includes(this.participantId);
-      if (!group.sealed) {
+      const { roster } = this.groupNode;
+      let kept = roster ? this.onRoster(roster) : false;
+      if (!roster) {
         try {
           kept = await this.claimIn(backend, this.sessionId);
         } catch (err) {
-          console.error("FirebaseAdapter: failed to take back our place after reconnecting", err);
+          console.error(`${ADAPTER_NAME}: failed to take back our place after reconnecting`, err);
         }
       }
-      if (this.closed) return;
+      if (this.closed) return false;
       if (!kept) {
         console.error(
-          "FirebaseAdapter: this participant's group filled up while they were disconnected.",
+          `${ADAPTER_NAME}: this participant's group filled up while they were disconnected.`,
         );
         this.reportStatus("closed");
-        return;
+        return false;
       }
     }
-    this.reportStatus("connected");
+    return true;
   }
 
   private reportStatus(status: OwnStatus): void {
@@ -642,8 +850,10 @@ class FirebaseConnection implements MultiplayerConnection {
     this.options.onStatus(status);
   }
 
+  // ---------------------------------------------------------------- paths
+
   private sessionPath(): string {
-    return `${this.config.pathPrefix}/${this.sessionId}`;
+    return `${this.config.namespace}/${this.sessionId}`;
   }
 
   private slotPath(): string {
@@ -656,45 +866,113 @@ class FirebaseConnection implements MultiplayerConnection {
    * the server when that participant's connection drops.
    */
   private presenceRootPath(): string {
-    return `${this.config.pathPrefix}-presence/${this.sessionId}`;
+    return `${this.config.namespace}-presence/${this.sessionId}`;
   }
 
   private presencePath(): string {
     return `${this.presenceRootPath()}/${this.participantId}`;
   }
 
-  /**
-   * The membership record's path. A SIBLING namespace of the sessions node (never inside it, where
-   * the per-session rules would govern it), derived from `pathPrefix` so a custom prefix keeps the
-   * pair collision-free. The stored value is the raw sessionId string — the rules compare it with
-   * `=== $session`, so it must not be JSON-quoted.
-   */
-  private membershipPath(uid: string): string {
-    return `${this.config.pathPrefix}-memberships/${uid}`;
+  /** The slot claim: which auth uid owns this participant id in this session. */
+  private ownerPath(): string {
+    return `${this.config.namespace}-owners/${this.sessionId}/${this.participantId}`;
   }
 
   /**
-   * The lobby's pointer to the group that is filling: a SIBLING namespace like the others, keyed
-   * by lobby name, holding that group's session id.
+   * The membership record's path, keyed by auth uid. The stored value is the raw sessionId string
+   * — the rules compare it with `=== $session`, so it must not be JSON-quoted.
    */
+  private membershipPath(): string {
+    return `${this.config.namespace}-memberships/${this.uid}`;
+  }
+
+  /** The lobby's pointer to the group that is filling, holding that group's session id. */
   private lobbyPath(): string {
-    return `${this.config.pathPrefix}-lobby/${this.config.matchmaking!.lobby}`;
+    return `${this.config.namespace}-lobby/${this.config.matchmaking!.lobby}`;
   }
 
-  /** A matchmaking group node: one child per member, plus the roster under SEALED_KEY. */
+  /** A matchmaking group node: `seats/<n>` per place, plus `sealed` once the roster is final. */
   private groupPath(sessionId = this.sessionId): string {
-    return `${this.config.pathPrefix}-groups/${sessionId}`;
+    return `${this.config.namespace}-groups/${sessionId}`;
+  }
+
+  private seatPath(seat: number): string {
+    return `${this.groupPath()}/seats/${seat}`;
   }
 }
 
-/** A transaction value as a group node. */
-function asNode(value: TransactionValue): Record<string, string> {
-  return value !== null && typeof value === "object" ? value : {};
+function cancelledError(): Error {
+  return new Error(`${ADAPTER_NAME}: connect() was cancelled.`);
 }
 
-/** The member ids in a group node, without the roster key. */
-function memberIds(node: Record<string, string>): string[] {
-  return Object.keys(node).filter((key) => key !== SEALED_KEY);
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/** Resolve after `ms`, or reject at once when `signal` aborts. */
+function sleep(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) return reject(cancelledError());
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(cancelledError());
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+/** The keys of a node's children. RTDB returns a node with numeric keys as an array. */
+function childKeys(value: TransactionValue): string[] {
+  if (value === null || typeof value !== "object") return [];
+  return Object.keys(value).filter((key) => (value as DbNode)[key] != null);
+}
+
+/** Parse a map of seats. Anything that isn't a seat is skipped. */
+function parseSeats(value: unknown): Map<number, Seat> {
+  const seats = new Map<number, Seat>();
+  if (value === null || typeof value !== "object") return seats;
+  for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+    const index = Number(key);
+    if (!Number.isInteger(index) || index < 0 || raw === null || typeof raw !== "object") continue;
+    const { uid, id } = raw as Record<string, unknown>;
+    if (typeof uid === "string" && typeof id === "string") seats.set(index, { uid, id });
+  }
+  return seats;
+}
+
+/** Parse a matchmaking group node. Any `sealed` child means sealed, even a malformed one. */
+function parseGroup(value: TransactionValue): GroupNode {
+  if (value === null || typeof value !== "object") return EMPTY_GROUP;
+  const sealed = value.sealed;
+  return {
+    seats: parseSeats(value.seats),
+    roster:
+      sealed === undefined || sealed === null
+        ? null
+        : parseSeats(typeof sealed === "object" ? sealed.seats : null),
+  };
+}
+
+/** How many of the group's seats are taken. */
+function occupied(seats: Map<number, Seat>, groupSize: number): number {
+  return [...seats.keys()].filter((index) => index < groupSize).length;
+}
+
+/** The seat held by this uid as this participant, or null. */
+function findSeat(
+  seats: Map<number, Seat>,
+  uid: string,
+  id: string,
+  groupSize: number,
+): number | null {
+  for (const [index, seat] of seats) {
+    if (index < groupSize && seat.uid === uid && seat.id === id) return index;
+  }
+  return null;
 }
 
 function sortedIds(ids: Iterable<string>): string[] {
@@ -702,96 +980,28 @@ function sortedIds(ids: Iterable<string>): string[] {
 }
 
 /** The members of a group node and whether it is sealed. A sealed group's members are its roster. */
-function readGroup(node: Record<string, string>): { members: string[]; sealed: boolean } {
-  const raw = node[SEALED_KEY];
-  if (raw !== undefined) {
-    try {
-      const roster: unknown = JSON.parse(raw);
-      if (Array.isArray(roster) && roster.every((id) => typeof id === "string")) {
-        return { members: sortedIds(roster), sealed: true };
-      }
-    } catch {
-      // Fall through: a malformed roster still means the group is sealed
-    }
-    return { members: sortedIds(memberIds(node)), sealed: true };
+function readGroup(node: GroupNode, groupSize: number): { members: string[]; sealed: boolean } {
+  if (node.roster) {
+    return { members: sortedIds([...node.roster.values()].map((seat) => seat.id)), sealed: true };
   }
-  return { members: sortedIds(memberIds(node)), sealed: false };
+  const members = [...node.seats].filter(([index]) => index < groupSize).map(([, s]) => s.id);
+  return { members: sortedIds(members), sealed: false };
 }
 
 /**
- * The transaction update that takes a place for `id`: add them if the group has room, and seal it
- * with its roster if that fills the last place. Aborts (undefined) when the group is sealed or
- * full; a member who already has a place changes nothing.
+ * Decode a session snapshot: each slot is the core's payload, stored as a JSON string, and is
+ * handed back exactly as it was pushed.
  */
-function takePlace(
-  current: TransactionValue,
-  id: string,
-  groupSize: number,
-): TransactionValue | undefined {
-  const node = asNode(current);
-  if (node[SEALED_KEY] !== undefined) return undefined;
-  const members = memberIds(node);
-  if (members.includes(id)) return node;
-  if (members.length >= groupSize) return undefined;
-  const next = { ...node, [id]: MEMBER };
-  if (members.length + 1 >= groupSize) {
-    next[SEALED_KEY] = JSON.stringify(sortedIds([...members, id]));
-  }
-  return next;
-}
-
-/** Decode a session snapshot: each slot is stored as a JSON string. */
-function decodeSession(snapshot: RawSessionSnapshot | null): GroupSessionData {
-  const out: GroupSessionData = {};
-  if (!snapshot) return out;
-  for (const [id, raw] of Object.entries(snapshot)) {
+function decodeSession(value: TransactionValue): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  if (value === null || typeof value !== "object") return out;
+  for (const [id, raw] of Object.entries(value)) {
     if (typeof raw !== "string") continue; // defensive: our writes are always encoded strings
     try {
-      out[id] = JSON.parse(raw) as Record<string, unknown>;
+      out[id] = JSON.parse(raw);
     } catch {
       // Skip a slot that isn't valid JSON rather than failing the whole snapshot.
     }
   }
   return out;
-}
-
-/** Read `?mp_session=` from the URL; if absent, mint one and reflect it back so it can be shared. */
-function resolveSessionId(): string {
-  if (typeof window === "undefined" || typeof window.location === "undefined") {
-    return generateId();
-  }
-  try {
-    const url = new URL(window.location.href);
-    const existing = url.searchParams.get(SESSION_PARAM);
-    if (existing) return existing;
-    const fresh = generateId();
-    url.searchParams.set(SESSION_PARAM, fresh);
-    window.history?.replaceState?.(window.history.state, "", url.toString());
-    return fresh;
-  } catch {
-    return generateId();
-  }
-}
-
-/** Reject an id/session/prefix that would break an RTDB key or cross-adapter portability. */
-function validateKey(label: string, value: string): void {
-  if (value.length === 0) {
-    throw new Error(`FirebaseAdapter: ${label} must not be empty.`);
-  }
-  const match = FORBIDDEN_KEY_CHARS.exec(value);
-  if (match) {
-    throw new Error(
-      `FirebaseAdapter: ${label} must not contain "${match[0]}" (got "${value}"). RTDB keys forbid ` +
-        '. # $ [ ] / and we also reserve ":" for cross-adapter id portability with the local adapter.',
-    );
-  }
-}
-
-/** A random, collision-free identifier (RFC 4122 UUID when available). Matches the local adapter. */
-function generateId(): string {
-  const cryptoObj = typeof globalThis !== "undefined" ? globalThis.crypto : undefined;
-  if (cryptoObj && typeof cryptoObj.randomUUID === "function") {
-    return cryptoObj.randomUUID();
-  }
-  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }

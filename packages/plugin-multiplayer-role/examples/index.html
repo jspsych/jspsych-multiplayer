@@ -3,14 +3,14 @@
   <head>
     <meta charset="utf-8" />
     <title>jsPsychMultiplayerRole Example</title>
-    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@5cb6b05bec8ca0e409145453220803b408cd7e50/packages/jspsych/dist/index.browser.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@4df7fbb672806086c7e118e53aba2262f27edf68/packages/jspsych/dist/index.browser.min.js"></script>
     <script src="https://unpkg.com/@jspsych/plugin-html-keyboard-response"></script>
     <!-- Once this plugin package is published, load it from a CDN instead:
          <script src="https://unpkg.com/@jspsych-multiplayer/plugin-multiplayer-role"></script> -->
     <script src="../dist/index.browser.min.js"></script>
     <link
       rel="stylesheet"
-      href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@5cb6b05bec8ca0e409145453220803b408cd7e50/packages/jspsych/css/jspsych.css"
+      href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@4df7fbb672806086c7e118e53aba2262f27edf68/packages/jspsych/css/jspsych.css"
     />
   </head>
 
@@ -42,9 +42,9 @@
       message: "<p>Assigning roles…</p>",
     };
 
-    // 3. Branch the timeline on the role this client was given. getMyRole() reads the assignment the
-    //    trial above stored, so downstream trials need not dig through the data record. You can also
-    //    look up who holds another role with participantsByRole().
+    // 3. Branch the timeline on the role this client was given. getMyRole() reads the role the trial
+    //    above recorded in the data, so downstream trials need not dig through the data record
+    //    themselves. You can also look up who holds another role with participantsByRole().
     const proposerTurn = {
       timeline: [
         {

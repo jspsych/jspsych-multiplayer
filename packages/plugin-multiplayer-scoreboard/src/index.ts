@@ -1,4 +1,14 @@
 import {
+  getMultiplayer,
+  isMultiplayerError,
+  Multiplayer,
+  MultiplayerOutcome,
+  outcomeOf,
+  pluginTimeout,
+  remainingParticipants,
+  sealedGroupSize,
+} from "@jspsych-multiplayer/utils";
+import {
   GroupSessionData,
   JsPsych,
   JsPsychPlugin,
@@ -8,14 +18,6 @@ import {
 } from "jspsych";
 
 import { version } from "../package.json";
-import {
-  Multiplayer,
-  getMultiplayer,
-  isMultiplayerError,
-  nextGateKey,
-  remainingParticipants,
-  sealedGroupSize,
-} from "./multiplayer";
 import { LeaderboardRow, buildLeaderboard, countReported } from "./scoreboard";
 import { getLeaderboard, getMyRank, getMyScore, setMyStanding } from "./store";
 
@@ -25,6 +27,9 @@ import { getLeaderboard, getMyRank, getMyScore, setMyStanding } from "./store";
 // accessors) are exposed as statics on the plugin class below, so everything is reachable through
 // that one default export without deviating from the convention.
 export type { LeaderboardRow, ScoreEntry, BuildOptions } from "./scoreboard";
+
+/** The key each participant's score entry is stored under in the trial's shared data. */
+const SCORE_KEY = "scoreboard";
 
 const info = <const>{
   name: "multiplayer-scoreboard",
@@ -38,19 +43,10 @@ const info = <const>{
      */
     score: { type: ParameterType.FLOAT, default: null },
     /**
-     * Display name this client pushes for its own row. Dynamic (may be a function). Defaults to the
+     * Display name this client writes for its own row. Dynamic (may be a function). Defaults to the
      * raw participantId. Peers see this name unless `display_label` overrides it at render time.
      */
     label: { type: ParameterType.STRING, default: null },
-    /**
-     * Session field each participant's score entry is stored under. Each scoreboard needs its own
-     * key, so that scores left over from an earlier board can't count toward a later one. Null (the
-     * default) generates `scoreboard-1`, `scoreboard-2`, … in the order this participant reaches
-     * scoreboards, which matches across participants as long as everyone passes the same
-     * scoreboards. A scoreboard that only some participants reach (e.g. inside a
-     * `conditional_function`) needs an explicit key. The count starts over if the page reloads.
-     */
-    data_key: { type: ParameterType.STRING, default: null },
     /**
      * Wait until AT LEAST this many participants have reported a score before revealing the board (a
      * barrier, so no one sees a partial ranking). Set it to the total expected count. Participants
@@ -62,22 +58,24 @@ const info = <const>{
     group_size: { type: ParameterType.INT, default: null },
     /**
      * Milliseconds to wait for `group_size` reporters before giving up. On expiry the board is still
-     * shown (from whoever reported), flagged `timed_out: true` — an end screen should degrade to a
-     * partial board rather than hang or blank. `null` waits forever (discouraged).
+     * shown (from whoever reported), with `multiplayer_outcome: "timeout"` — an end screen should
+     * degrade to a partial board rather than hang or blank. `null`, `0`, or a negative value waits
+     * forever (discouraged).
      */
     timeout: { type: ParameterType.INT, default: 30000 },
     /**
      * Hook run if `timeout` elapses before `group_size` reporters arrive, called with the jsPsych
      * instance just before the (partial) board is shown. Unlike the barrier siblings, the trial does
-     * NOT end here — the board still renders, flagged `timed_out: true`, and ends on the button as
-     * usual. A throwing hook is caught so it can't stop the board from rendering.
+     * NOT end here — the board still renders, with `multiplayer_outcome: "timeout"`, and ends on the
+     * button as usual. A throwing hook is caught so it can't stop the board from rendering.
      */
     on_timeout: { type: ParameterType.FUNCTION, default: null },
     /**
      * Participants the board depends on. If one of them leaves the session before `group_size`
-     * reporters arrive, the board is shown from whoever reported, flagged `partner_left: true`. Null
-     * (the default) means every other participant who is connected when this participant
-     * reports. Pass `[]` to ignore departures.
+     * reporters arrive, the board is shown from whoever reported, with `multiplayer_outcome:
+     * "participant_left"`. Null (the default) means the other members of a sealed group who haven't
+     * left, or else every other participant who is connected when this participant reports. Pass
+     * `[]` to ignore departures.
      */
     participants: { type: ParameterType.COMPLEX, default: null },
     /** `"desc"` ranks highest score first (points); `"asc"` ranks lowest first (e.g. reaction time). */
@@ -92,9 +90,11 @@ const info = <const>{
     highlight_self: { type: ParameterType.BOOL, default: true },
     /**
      * `(id, group) => string` mapping any participantId to the name shown on their row, overriding
-     * pushed labels. `group` is frozen; don't modify it. FUNCTION is deliberate — it stops jsPsych's dynamic-parameter machinery from
-     * CALLING the value and substituting its return. e.g. drive names from role output:
-     * `(id) => jsPsychMultiplayerRole.participantsByRole()[id] ?? id`.
+     * written labels. `group` is the session's shared data (what participants wrote with
+     * `{ scope: "session" }`, e.g. a display name chosen in an earlier trial), keyed by
+     * participantId; it is frozen, so don't modify it. FUNCTION is deliberate — it stops jsPsych's
+     * dynamic-parameter machinery from CALLING the value and substituting its return. e.g. drive
+     * names from role output: `(id) => jsPsychMultiplayerRole.participantsByRole()[id] ?? id`.
      */
     display_label: { type: ParameterType.FUNCTION, default: null },
     /**
@@ -119,17 +119,19 @@ const info = <const>{
     my_score: { type: ParameterType.FLOAT },
     /** Number of participants ranked on the board. */
     num_players: { type: ParameterType.INT },
-    /** The session field the scores were stored under (`data_key`, or the generated `scoreboard-N`). */
-    data_key: { type: ParameterType.STRING },
-    /** `true` **only** if `group_size` reporters were not reached before `timeout` (board may be partial). */
-    timed_out: { type: ParameterType.BOOL },
-    /** `true` if the board was shown early because a participant in `participants` left the session. */
-    partner_left: { type: ParameterType.BOOL },
-    /** The ID of the participant who left, when `partner_left` is true; otherwise null. */
+    /**
+     * How waiting for the group ended: `"completed"` when `group_size` reporters arrived,
+     * `"timeout"`, `"participant_left"` (a participant in `participants` left), or
+     * `"connection_lost"`; the board may be partial on any but `"completed"`. `null` when reporting
+     * to the group failed some other way (see `error`).
+     */
+    multiplayer_outcome: { type: ParameterType.STRING },
+    /** The ID of the participant who left, when `multiplayer_outcome` is `"participant_left"`. */
     left_participant: { type: ParameterType.STRING },
-    /** `true` if the board was shown early because this participant's connection was lost for good. */
-    connection_lost: { type: ParameterType.BOOL },
-    /** A non-timeout failure message (e.g. this client's score push failed); `null` otherwise. */
+    /**
+     * The message of any other failure while reporting to the group (e.g. an adapter error), which
+     * still shows the board; `null` otherwise.
+     */
     error: { type: ParameterType.STRING, default: null },
   },
   // When you run build on your plugin, citations will be generated here based on the CITATION.cff.
@@ -149,8 +151,8 @@ type Info = typeof info;
  * this client's rank/score and the full board are saved to the data record and published to the
  * accessor store for downstream trials.
  *
- * On timeout the board still renders (from whoever reported), flagged `timed_out: true`, so an end
- * screen degrades to a partial ranking rather than hanging or blanking.
+ * On timeout the board still renders (from whoever reported), with `multiplayer_outcome: "timeout"`,
+ * so an end screen degrades to a partial ranking rather than hanging or blanking.
  *
  * The pure ranking core and the standing accessors are also reachable as static members
  * (`MultiplayerScoreboardPlugin.buildLeaderboard`, `.getMyRank`, `.getMyScore`, `.getLeaderboard`) —
@@ -181,7 +183,7 @@ class MultiplayerScoreboardPlugin implements JsPsychPlugin<Info> {
   // wait for the `finishTrial()` we call on the continue button (or, with no button, never — hence
   // the warning). The barrier is awaited internally.
   trial(display_element: HTMLElement, trial: TrialType<Info>) {
-    const multiplayer = getMultiplayer(this.jsPsych);
+    const multiplayer = getMultiplayer(this.jsPsych, "plugin-multiplayer-scoreboard");
     const me = multiplayer.participantId;
     if (me == null) {
       throw new Error(
@@ -189,8 +191,6 @@ class MultiplayerScoreboardPlugin implements JsPsychPlugin<Info> {
           "(await jsPsych.multiplayer.connect(adapter)) before this trial runs.",
       );
     }
-
-    const dataKey = trial.data_key ?? nextGateKey(this.jsPsych);
 
     if (trial.button_label == null) {
       console.warn(
@@ -221,13 +221,12 @@ class MultiplayerScoreboardPlugin implements JsPsychPlugin<Info> {
     // Show the waiting message now; jsPsych fires on_load for this sync trial once trial() returns.
     display_element.innerHTML = trial.message;
 
-    // Contribute this client's row. `update` shallow-merges just the score key into our own slot, so
-    // anything we pushed earlier (a role, a chat log) survives — unlike `push`, which REPLACES the
-    // whole slot. A non-finite score is written as-is but crosses the wire as JSON, so NaN/Infinity
-    // read back as null; either way it simply isn't ranked (buildLeaderboard/countReported drop it)
-    // and never counts toward `group_size`.
+    // Contribute this client's row to the trial's shared data. `update` shallow-merges just the score
+    // key, so anything else this client wrote in the trial survives. A non-finite score is written
+    // as-is but crosses the wire as JSON, so NaN/Infinity read back as null; either way it simply
+    // isn't ranked (buildLeaderboard/countReported drop it) and never counts toward `group_size`.
     const payload: Record<string, unknown> = {
-      [dataKey]: {
+      [SCORE_KEY]: {
         score: trial.score,
         ...(trial.label != null ? { label: String(trial.label) } : {}),
       },
@@ -236,70 +235,65 @@ class MultiplayerScoreboardPlugin implements JsPsychPlugin<Info> {
     const isReady =
       typeof target === "number"
         ? (g: GroupSessionData, presence: PresenceData) =>
-            countReported(withoutLeft(g, presence), dataKey) >= target
+            countReported(inSession(g, presence), SCORE_KEY) >= target
         : () => true;
 
     // Fire-and-forget: the trial stays open (sync return) until the continue button calls finishTrial.
-    void this.gather(display_element, trial, me, dataKey, multiplayer, payload, isReady);
+    void this.gather(display_element, trial, me, multiplayer, payload, isReady);
   }
 
   /**
    * Write this client's score, then wait for the barrier, and reveal the board however that ends. A
-   * timeout, a departure, or a lost connection shows a partial board with the matching flag; any
-   * other failure (a rejected write, a backend error) shows the board with `error` set, so the
-   * participant is never left on the waiting message.
+   * timeout, a departure, or a lost connection shows a partial board with the matching outcome; any
+   * other failure (e.g. an adapter error) shows the board with `error` set, so the participant is
+   * never left on the waiting message.
    */
   private async gather(
     display_element: HTMLElement,
     trial: TrialType<Info>,
     me: string,
-    dataKey: string,
     multiplayer: Multiplayer,
     payload: Record<string, unknown>,
     isReady: (g: GroupSessionData, presence: PresenceData) => boolean,
   ) {
-    /**
-     * Read the latest snapshot without letting a failure mask the outcome. After a disconnect()
-     * there is no session, so `getAll()` throws. Since `gather()` runs detached (`void`), an escaping
-     * throw would leave the participant stuck on the waiting message, so fall back to an empty
-     * snapshot and still show a (possibly empty) board.
-     */
-    const safeGetAll = (): GroupSessionData => {
-      try {
-        return multiplayer.getAll();
-      } catch {
-        return {};
-      }
-    };
-    const reveal = (group: GroupSessionData, outcome: Outcome = {}) =>
-      this.reveal(display_element, trial, me, dataKey, group, outcome);
+    // Reads keep working after the connection is lost; they return the last state seen.
+    const reveal = (group: GroupSessionData, outcome: Outcome) =>
+      this.reveal(display_element, trial, me, multiplayer, group, outcome);
 
     let group: GroupSessionData;
     try {
-      await multiplayer.update(payload);
+      // The score shows up in this client's own reads at once, and the core keeps retrying the
+      // write until the backend has it, so don't hold the barrier (and its timeout) for the
+      // confirmation. It only fails if the session closes, which the wait reports too.
+      multiplayer.update(payload).catch(() => {});
       const participants =
         (trial.participants as string[] | null) ?? remainingParticipants(multiplayer);
-      group = await multiplayer.wait(isReady, { timeout: trial.timeout, participants });
+      group = await multiplayer.wait(isReady, {
+        timeout: pluginTimeout(trial.timeout),
+        participants,
+      });
     } catch (err) {
-      // The wait was cancelled (abortExperiment, disconnect, or the end of jsPsych.run), so the trial
-      // is being torn down: jsPsych has already cleared the display. Rendering here would paint a
-      // board over a finished experiment.
-      if (isMultiplayerError(err, "MultiplayerCancelledError")) return;
-      if (isMultiplayerError(err, "MultiplayerTimeoutError")) {
-        this.safeTimeoutHook(trial);
-        reveal(safeGetAll(), { timed_out: true });
-      } else if (isMultiplayerError(err, "MultiplayerParticipantLeftError")) {
-        reveal(safeGetAll(), { partner_left: true, left_participant: err.participantId ?? null });
-      } else if (isMultiplayerError(err, "MultiplayerConnectionClosedError")) {
-        reveal(safeGetAll(), { connection_lost: true });
-      } else {
-        // A failed write or a backend error: NOT a timeout, so no on_timeout.
+      const outcome = outcomeOf(err);
+      // The wait was cancelled (the trial or experiment ended or was aborted), so the trial is being
+      // torn down: jsPsych has already cleared the display. Rendering here would paint a board over
+      // a finished experiment.
+      if (outcome === "cancelled") return;
+      if (outcome === null) {
+        // An adapter error or a write to a closed session: NOT a timeout, so no on_timeout.
         console.error("plugin-multiplayer-scoreboard: reporting to the group failed", err);
-        reveal(safeGetAll(), { error: errorMessage(err) });
+        reveal(multiplayer.getAll(), { outcome: null, error: errorMessage(err) });
+        return;
       }
+      if (outcome === "timeout") this.safeTimeoutHook(trial);
+      reveal(multiplayer.getAll(), {
+        outcome,
+        left_participant: isMultiplayerError(err, "participant_left")
+          ? (err.participantId ?? null)
+          : null,
+      });
       return;
     }
-    reveal(group);
+    reveal(group, { outcome: "completed" });
   }
 
   /** Fire the `on_timeout` hook if provided. A throwing hook must not stop the board from rendering. */
@@ -316,13 +310,13 @@ class MultiplayerScoreboardPlugin implements JsPsychPlugin<Info> {
     display_element: HTMLElement,
     trial: TrialType<Info>,
     me: string,
-    dataKey: string,
+    multiplayer: Multiplayer,
     group: GroupSessionData,
     outcome: Outcome,
   ) {
-    const timedOut = outcome.timed_out ?? false;
-    const rows = buildLeaderboard(group, {
-      dataKey,
+    // Rank whoever the barrier counted: participants who left aren't on the board
+    const rows = buildLeaderboard(inSession(group, multiplayer.presence(), me), {
+      dataKey: SCORE_KEY,
       self: me,
       sort: trial.sort === "asc" ? "asc" : "desc",
       tieMethod: trial.tie_method === "dense" ? "dense" : "standard",
@@ -333,7 +327,9 @@ class MultiplayerScoreboardPlugin implements JsPsychPlugin<Info> {
     // a following trial's conditional_function reads it as soon as this trial finishes.
     setMyStanding(rows, mine?.rank, mine?.score);
 
-    display_element.innerHTML = this.renderBoard(trial, group, rows, outcome);
+    // Names chosen in earlier trials live in the session's shared data, not this trial's
+    const sessionData = multiplayer.getAll({ scope: "session" });
+    display_element.innerHTML = this.renderBoard(trial, sessionData, rows, outcome);
 
     const finish = () =>
       this.jsPsych.finishTrial({
@@ -341,11 +337,8 @@ class MultiplayerScoreboardPlugin implements JsPsychPlugin<Info> {
         my_rank: mine?.rank ?? null,
         my_score: mine?.score ?? null,
         num_players: rows.length,
-        data_key: dataKey,
-        timed_out: timedOut,
-        partner_left: outcome.partner_left ?? false,
+        multiplayer_outcome: outcome.outcome,
         left_participant: outcome.left_participant ?? null,
-        connection_lost: outcome.connection_lost ?? false,
         error: outcome.error ?? null,
       });
 
@@ -358,7 +351,7 @@ class MultiplayerScoreboardPlugin implements JsPsychPlugin<Info> {
 
   private renderBoard(
     trial: TrialType<Info>,
-    group: GroupSessionData,
+    sessionData: GroupSessionData,
     rows: LeaderboardRow[],
     outcome: Outcome,
   ): string {
@@ -368,10 +361,10 @@ class MultiplayerScoreboardPlugin implements JsPsychPlugin<Info> {
     const nameOf = (row: LeaderboardRow): string => {
       if (typeof trial.display_label === "function") {
         try {
-          return String(trial.display_label(row.participantId, group));
+          return String(trial.display_label(row.participantId, sessionData));
         } catch (err) {
           console.error(
-            "plugin-multiplayer-scoreboard: `display_label` threw; using the pushed label instead",
+            "plugin-multiplayer-scoreboard: `display_label` threw; using the written label instead",
             err,
           );
         }
@@ -446,32 +439,40 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-/** How waiting for the group ended, when it ended without everyone reporting. */
+/** How waiting for the group ended. */
 interface Outcome {
-  timed_out?: boolean;
-  partner_left?: boolean;
+  /** Null when reporting to the group failed with an error that isn't a wait outcome. */
+  outcome: Exclude<MultiplayerOutcome, "cancelled"> | null;
   left_participant?: string | null;
-  connection_lost?: boolean;
   error?: string | null;
 }
 
 /** The note shown above a board that was revealed before everyone reported, or "". */
-function notice(outcome: Outcome): string {
-  if (outcome.timed_out) {
+function notice({ outcome }: Outcome): string {
+  if (outcome === "timeout") {
     return `<p class="jspsych-multiplayer-scoreboard-timeout">Not everyone reported in time — showing who did.</p>`;
   }
-  if (outcome.partner_left) {
+  if (outcome === "participant_left") {
     return `<p class="jspsych-multiplayer-scoreboard-timeout">A player left before everyone reported — showing who did.</p>`;
   }
-  if (outcome.connection_lost) {
+  if (outcome === "connection_lost") {
     return `<p class="jspsych-multiplayer-scoreboard-timeout">The connection was lost — showing the scores received so far.</p>`;
   }
   return "";
 }
 
-/** The group without participants who have left the session. */
-function withoutLeft(group: GroupSessionData, presence: PresenceData): GroupSessionData {
-  return Object.fromEntries(Object.entries(group).filter(([id]) => presence[id] !== "left"));
+/**
+ * The data of participants who haven't left. `self` always stays, even after its own connection
+ * closes.
+ */
+function inSession(
+  group: GroupSessionData,
+  presence: PresenceData,
+  self?: string,
+): GroupSessionData {
+  return Object.fromEntries(
+    Object.entries(group).filter(([id]) => id === self || presence[id] !== "left"),
+  );
 }
 
 // The board is inherently visual, so — unlike the text-first chat/role trials — ship a minimal scoped

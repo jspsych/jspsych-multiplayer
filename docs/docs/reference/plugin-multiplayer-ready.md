@@ -43,12 +43,12 @@ timeline.push({
 | `prompt` | HTML string | `null` | A reminder shown below the button. `null` shows nothing. |
 | `button_label` | `string` | `"I'm ready"` | The button's label. |
 | `waiting_message` | HTML string | `"<p>Waiting for other players…</p>"` | Shown after this participant clicks, while the rest of the group finishes. |
-| `push_data` | `object \| null` | `null` | Extra fields to write to this participant's slot along with the ready flags, such as a display name. They are merged into the slot, so data from earlier trials is kept. Can be a function that returns the object. |
-| `data_key` | `string \| null` | `null` | The key that marks this participant as ready at this gate. `null` generates `ready-1`, `ready-2`, … (see [Gate keys](#gate-keys)). |
-| `timeout` | `number \| null` | `null` | The longest time to wait for the others **after** clicking, in ms. When it runs out, the trial ends with `timed_out: true` and `on_timeout` is called. `null`, `0`, or a negative number waits indefinitely. It does not limit how long this participant takes to click. |
+| `write_data` | `object \| null` | `null` | Extra fields to write to this participant's part of the trial's shared data along with `ready: true`, such as a display name. They are merged in with `jsPsych.multiplayer.update()`. Can be a function that returns the object. |
+| `timeout` | `number \| null` | `null` | The longest time to wait for the others **after** clicking, in ms. When it runs out, the trial ends with `multiplayer_outcome: "timeout"` and `on_timeout` is called. `null`, `0`, or a negative number waits indefinitely. It does not limit how long this participant takes to click. |
 | `on_timeout` | `function \| null` | `null` | Called with the timeout error if `timeout` runs out first. The trial ends either way. |
-| `participants` | `string[] \| null` | `null` | The participants this gate depends on. If one of them leaves before the group is ready, the trial ends with `partner_left: true`. `null` means every other participant who is connected when this participant clicks. In a [sealed group](../guides/forming-groups), `null` means the rest of the group's members who haven't left, including any who are only `away`. `[]` ignores departures. |
-| `minimum_wait` | `number` | `0` | The shortest time, in ms, to keep the waiting message on screen after the click, so it doesn't flash by for the last participant to click. It does not lengthen a wait that is already longer. |
+| `participants` | `string[] \| null` | `null` | The participants this gate depends on. If one of them leaves before the group is ready, the trial ends with `multiplayer_outcome: "participant_left"`. `null` means the other members of a [sealed group](../guides/forming-groups) who haven't left, or, without a sealed group, every other participant who is connected when this participant clicks. `[]` ignores departures. |
+| `minimum_wait` | `number` | `0` | The shortest time, in ms, to keep the waiting message on screen after the click, so it doesn't flash by for the last participant to click (or with `expected_players: 1`). It does not lengthen a wait that is already longer. |
+| `save_group` | `boolean` | `false` | Save the trial's shared data, as it was when the trial ended, in the `group` data field. |
 
 ## Data
 
@@ -56,39 +56,32 @@ timeline.push({
 | --- | --- | --- |
 | `rt` | `number` | Milliseconds from the button appearing to this participant clicking it. |
 | `wait_time` | `number` | Milliseconds from the click to the end of the trial. |
-| `n_ready` | `number` | How many group members were ready at this gate, and still in the session, when the trial ended. |
-| `data_key` | `string` | The key used for this gate (your `data_key`, or the generated `ready-N`). |
-| `group` | `object` | The shared data when the trial ended, keyed by participant ID. Frozen; copy it before changing it. |
-| `timed_out` | `boolean` | `true` if the trial ended because `timeout` ran out. |
-| `partner_left` | `boolean` | `true` if the trial ended because a participant in `participants` left. |
-| `left_participant` | `string \| null` | The ID of the participant who left, when `partner_left` is `true`. |
-| `connection_lost` | `boolean` | `true` if the trial ended because this participant's own connection was lost for good. |
-| `wait_error` | `string \| null` | The message of whatever ended the wait early (timeout, departure, or lost connection). `null` when everyone was ready. |
+| `n_ready` | `number` | How many group members were ready in this trial, and still in the session, when the trial ended. |
+| `multiplayer_outcome` | `string` | How the trial ended: `"completed"` (everyone was ready), `"timeout"`, `"participant_left"` (a participant in `participants` left), or `"connection_lost"` (this participant's own connection was lost for good). |
+| `left_participant` | `string \| null` | The ID of the participant who left, when `multiplayer_outcome` is `"participant_left"`. |
+| `group` | `object` | Only with `save_group: true`. The trial's shared data when the trial ended, keyed by participant ID. Frozen; copy it before changing it. |
 
-[Handling dropouts](../guides/handling-dropouts) explains `partner_left`, `left_participant`,
-`connection_lost`, and how to branch on them. If the experiment ends or is aborted while the
-trial is waiting, the trial stops without calling `on_timeout` and records no data.
+[Handling dropouts](../guides/handling-dropouts) explains `multiplayer_outcome`,
+`left_participant`, and how to branch on them. If the backend fails, the trial fails rather than
+recording an outcome. If the experiment ends or is aborted while the trial is waiting, the trial
+stops quietly: `on_timeout` isn't called and no data is recorded.
 
-## Gate keys
+## Each gate has its own shared data
 
-When a participant clicks, the plugin merges `push_data` into their slot, along with `ready: true`
-and a flag named by `data_key` (for example, `"ready-1": true`). The gate counts participants who
-have that flag set to `true` and have not left.
+Each trial has its own part of the shared data, so readiness at one gate never carries over to
+the next. When this participant clicks, the plugin merges `write_data` and `ready: true` into
+their part of this trial's data. The gate counts the participants who have written `ready` in this
+trial and haven't left the session. Participants running the same timeline share each trial's data
+because it is named by the trial's position in the timeline (or by the trial's `multiplayer_scope`
+parameter; see [How it works](../guides/how-it-works)).
 
-Each gate needs its own key, or a flag from an earlier gate would let a later one pass at once. By
-default the first ready trial a participant reaches uses `ready-1`, the second `ready-2`, and so
-on. Because everyone passes the same gates in the same order, the Nth gate gets the same key for
-everyone. Earlier keys are never removed, so a fast participant moving on can't undo a flag a
-slow participant is still counting.
+Values written with `write_data` stay in this trial's data. To use one in a later trial, such as a
+display name, save it in the trial's data in `on_finish`, or write it to the session's shared
+data, which lasts the whole session:
 
-Set `data_key` yourself when:
-
-- only some participants reach the gate, for example inside a `conditional_function`. Otherwise
-  those participants number their later gates differently from everyone else.
-- a participant might reload the page. The count starts over after a reload.
-
-An explicit `data_key` does not advance the default count. The plugin also sets `ready: true`, if
-you only need to know that someone has checked in at least once.
+```js
+await jsPsych.multiplayer.update({ name: myName }, { scope: "session" });
+```
 
 ## Example
 
@@ -101,11 +94,10 @@ const waitingRoom = {
   stimulus: "<p>You'll be playing with one other person. Click when you're ready.</p>",
   prompt: "<p>Please don't close this tab.</p>",
   waiting_message: "<p>Waiting for the other player to check in…</p>",
-  push_data: () => ({ name: myName }),
   timeout: 120000,
   minimum_wait: 1000,
   on_finish: (data) => {
-    if (data.timed_out || data.partner_left || data.connection_lost) {
+    if (data.multiplayer_outcome !== "completed") {
       jsPsych.abortExperiment("We couldn't find a partner for you. Thank you for your time.");
     }
   },

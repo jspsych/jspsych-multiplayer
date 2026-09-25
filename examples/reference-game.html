@@ -7,7 +7,7 @@
          Until it merges, load the PR's preview build from jsDelivr instead of the published `jspsych`.
          SHA-pinned to #3694 commit f309a68 (preview SHA 49e6a93) — see examples/README.md "Running
          it" for how to re-pin if the demo misbehaves against a newer #3694. -->
-    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@5cb6b05bec8ca0e409145453220803b408cd7e50/packages/jspsych/dist/index.browser.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@4df7fbb672806086c7e118e53aba2262f27edf68/packages/jspsych/dist/index.browser.min.js"></script>
     <script src="https://unpkg.com/@jspsych/plugin-survey-text"></script>
     <script src="https://unpkg.com/@jspsych/plugin-html-button-response"></script>
     <script src="https://unpkg.com/@jspsych/plugin-html-keyboard-response"></script>
@@ -19,7 +19,7 @@
     <script src="../packages/plugin-multiplayer-reference-game/dist/index.browser.min.js?v=1"></script>
     <link
       rel="stylesheet"
-      href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@5cb6b05bec8ca0e409145453220803b408cd7e50/packages/jspsych/css/jspsych.css"
+      href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@4df7fbb672806086c7e118e53aba2262f27edf68/packages/jspsych/css/jspsych.css"
     />
   </head>
 
@@ -52,9 +52,14 @@
     const MIN_PLAYERS = 2;
 
     const jsPsych = initJsPsych();
-    // A refreshed tab gets a new participant id and joins as a new participant: a page that
-    // reloaded can't rejoin the game it left.
+    // A refreshed tab keeps its participant id, but its experiment starts over, so jsPsych reports it
+    // as restarted (see the connect() call at the bottom).
     const localAdapter = new jsPsychAdapterMultiplayerLocal();
+
+    // Shows a message in place of the experiment (connect failed, or this tab was reloaded).
+    function showMessage(html) {
+      document.body.innerHTML = `<div style="max-width: 40em; margin: 4em auto; text-align: center;">${html}</div>`;
+    }
 
     // ── Twelve self-contained "tangram-like" silhouettes (no external assets) ──────────────────────
     // Regular polygons (3–8 sides) and star polygons (3–8 points) — abstract and distinct, so naming
@@ -98,31 +103,33 @@
       { round: 5, targets: ["poly3"] }, // repeat of round 1's target
     ];
 
-    let myName = "";
     let myRole; // "director" | "matcher" | "spectator" (undefined if role assignment timed out)
     let partnerId;
     let partnerGone = false; // set when a round ends because the partner left or the connection was lost
 
-    // 1) Display name.
+    // 1) Display name, written to the SESSION scope of the shared data so any later trial could read
+    //    it. (Data written during a trial without { scope: "session" } belongs to that trial only.)
     const nameTrial = {
       type: jsPsychSurveyText,
       questions: [{ prompt: "Choose a display name:", required: true, name: "name" }],
       on_finish: (data) => {
-        myName = (data.response.name || "").trim() || "Anonymous";
+        const name = (data.response.name || "").trim() || "Anonymous";
+        jsPsych.multiplayer.update({ name }, { scope: "session" });
       },
     };
 
-    // 2) Lobby: publish name + join time, wait until two players are present.
+    // 2) Lobby: mark ourselves as here, wait until two players are here.
     const lobbyTrial = {
       type: jsPsychMultiplayerSync,
       // A lobby counts who is here, so someone leaving shouldn't end the wait
       participants: [],
-      push_data: () => ({ name: myName, joinedAt: Date.now() }),
+      // Written to this trial's own part of the shared data, which is what wait_for sees
+      write_data: { here: true },
       message: `<p>Waiting for ${MIN_PLAYERS} players to join…</p>
                 <p>Open this page in another tab (keep the <code>?mp_session=</code> in the URL) to add a player.</p>`,
-      // Count connected players who published a name; slots stay after a player leaves.
+      // Count connected players who reached the lobby; data stays after a player leaves.
       wait_for: (group, presence) =>
-        Object.keys(group).filter((id) => group[id]?.name && presence[id] === "connected").length >=
+        Object.keys(group).filter((id) => group[id].here && presence[id] === "connected").length >=
         MIN_PLAYERS,
     };
 
@@ -135,14 +142,8 @@
       roles: ["director", "matcher"],
       strategy: "random",
       overflow_role: "spectator",
-      // The plugin has already dropped participants who left. Requiring everyone remaining to be
-      // connected keeps leftover slots from earlier members (which start out `away`) out of the
-      // pairing until they turn `left` and drop out.
-      ready: (group, presence) =>
-        Object.keys(group).length >= MIN_PLAYERS &&
-        Object.keys(group).every(
-          (id) => presence[id] === "connected" && group[id]?.joinedAt != null,
-        ),
+      // The snapshot holds the participants who have reached this trial and haven't left.
+      ready: (group) => Object.keys(group).length >= MIN_PLAYERS,
       save_group: true,
       message: "<p>Pairing you with your partner…</p>",
       on_finish: () => {
@@ -179,7 +180,12 @@
       round_timeout: 60000, // bounds a round whose partner stays connected but idle
       // A partner who leaves ends the round at once (end_on_participant_left); skip the rest.
       on_finish: (data) => {
-        if (data.partner_left || data.connection_lost) partnerGone = true;
+        if (
+          data.multiplayer_outcome === "participant_left" ||
+          data.multiplayer_outcome === "connection_lost"
+        ) {
+          partnerGone = true;
+        }
       },
       prompt: (role) =>
         role === "director"
@@ -201,10 +207,11 @@
       stimulus: () => {
         // Both roles record the round outcome (the director computes `correct` from the matcher's
         // submission), so this summary reads the same on both screens. Count only rounds that were
-        // actually completed (ended_by "submit"), so an aborted/timed-out round isn't scored as wrong.
+        // actually completed (multiplayer_outcome "completed"), so an aborted/timed-out round isn't
+        // scored as wrong.
         const completed = jsPsych.data
           .get()
-          .filter({ trial_type: "multiplayer-reference-game", ended_by: "submit" });
+          .filter({ trial_type: "multiplayer-reference-game", multiplayer_outcome: "completed" });
         const played = completed.count();
         const correct = completed.filter({ correct: true }).count();
         const ending = partnerGone
@@ -226,8 +233,19 @@
       },
     };
 
-    jsPsych.multiplayer.connect(localAdapter).then(() => {
-      jsPsych.run([nameTrial, lobbyTrial, roleTrial, spectatorScreen, gameLoop, doneTrial]);
-    });
+    jsPsych.multiplayer
+      .connect(localAdapter)
+      .then(() => {
+        // A reloaded tab keeps its participant id, but the game has moved on without it
+        if (jsPsych.multiplayer.restarted) {
+          showMessage("<p>You reloaded this page, so you can't rejoin the game. Please close this tab.</p>");
+          return;
+        }
+        jsPsych.run([nameTrial, lobbyTrial, roleTrial, spectatorScreen, gameLoop, doneTrial]);
+      })
+      .catch((error) => {
+        console.error(error);
+        showMessage("<p>Couldn't connect to the game. Please reload the page to try again.</p>");
+      });
   </script>
 </html>

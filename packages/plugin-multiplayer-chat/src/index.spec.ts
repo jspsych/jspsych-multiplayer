@@ -1,13 +1,14 @@
 import { startTimeline } from "@jspsych/test-utils";
 import { ConnectOptions, GroupSessionData, initJsPsych, PresenceData } from "jspsych";
 
-import { MemoryHub, flushPromises } from "../../../test-utils/memory-backend";
+import { MemoryHub, flushPromises, scopeData } from "../../../test-utils/memory-backend";
 import MultiplayerChatPlugin from ".";
 
 // Every test runs the real jsPsych multiplayer session over the in-memory backend in test-utils,
 // so reads are frozen snapshots, own writes show up at once, and presence is real. trial() is
 // called directly with a thin jsPsych double that forwards to the real session and records
-// finishTrial data.
+// finishTrial data. No trial is running in the core then, so the plugin's reads and writes use the
+// session scope; the startTimeline tests at the end cover the trial scope.
 
 async function setup(connect?: ConnectOptions) {
   const hub = new MemoryHub();
@@ -56,7 +57,6 @@ const peerMessage = (text: string, seq = 0, ts = 100) => ({
 const base = {
   prompt: "",
   placeholder: "Type…",
-  data_key: "chat_messages",
   duration: null,
   end_button_label: null,
   end_when: null,
@@ -80,7 +80,7 @@ describe("multiplayer-chat plugin", () => {
   it("shows existing history on load", async () => {
     const { hub, jsPsych } = await setup();
     const peer = await hub.join("peer");
-    await peer.jsPsych.multiplayer.push(peerMessage("hi there"));
+    await peer.jsPsych.multiplayer.update(peerMessage("hi there"));
 
     const { el } = run(jsPsych);
     expect(messages(el)).toEqual([["peer", "hi there"]]);
@@ -111,13 +111,13 @@ describe("multiplayer-chat plugin", () => {
     const peer = await hub.join("peer");
     const { el } = run(jsPsych);
 
-    await peer.jsPsych.multiplayer.push(peerMessage("hello"));
+    await peer.jsPsych.multiplayer.update(peerMessage("hello"));
     expect(messages(el)).toEqual([["peer", "hello"]]);
   });
 
   it("keeps unrelated keys in my slot and every message across quick sends", async () => {
     const { api, jsPsych, connection } = await setup();
-    await api.push({ role: "director" });
+    await api.update({ role: "director" });
     const { el } = run(jsPsych);
 
     send(el, "one");
@@ -128,11 +128,11 @@ describe("multiplayer-chat plugin", () => {
     expect(api.get("me")!.role).toBe("director");
     expect(messages(el).map(([, text]) => text)).toEqual(["one", "two", "three"]);
     // The last push the backend received carries all three
-    const last = connection.pushes[connection.pushes.length - 1];
+    const last = scopeData(connection.pushes[connection.pushes.length - 1])!;
     expect((last.chat_messages as any[]).map((m) => m.text)).toEqual(["one", "two", "three"]);
   });
 
-  it("ends on duration timeout with ended_by 'duration'", async () => {
+  it("ends on duration timeout as completed, ended_by 'duration'", async () => {
     jest.useFakeTimers();
     const { jsPsych, finished } = await setup();
     run(jsPsych, { duration: 50 });
@@ -141,12 +141,15 @@ describe("multiplayer-chat plugin", () => {
     expect(finished).toHaveLength(0);
     jest.advanceTimersByTime(1);
     expect(finished).toHaveLength(1);
-    expect(finished[0]).toMatchObject({
-      ended_by: "duration",
-      partner_left: false,
-      left_participant: null,
-      connection_lost: false,
-    });
+    expect(finished[0]).toEqual(
+      expect.objectContaining({
+        multiplayer_outcome: "completed",
+        ended_by: "duration",
+        left_participant: null,
+      }),
+    );
+    expect(finished[0]).not.toHaveProperty("partner_left");
+    expect(finished[0]).not.toHaveProperty("connection_lost");
   });
 
   it("ends on the end button with ended_by 'button'", async () => {
@@ -168,7 +171,7 @@ describe("multiplayer-chat plugin", () => {
       },
     });
 
-    await peer.jsPsych.multiplayer.push({ done: true });
+    await peer.jsPsych.multiplayer.update({ done: true });
     expect(finished).toHaveLength(1);
     expect(finished[0].ended_by).toBe("condition");
     const [group, presence] = calls[calls.length - 1];
@@ -190,7 +193,7 @@ describe("multiplayer-chat plugin", () => {
     const { el } = run(jsPsych, { end_button_label: "Done", duration: 30 });
 
     (el.querySelector(".jspsych-multiplayer-chat-end") as HTMLButtonElement).click();
-    await peer.jsPsych.multiplayer.push(peerMessage("late"));
+    await peer.jsPsych.multiplayer.update(peerMessage("late"));
     jest.advanceTimersByTime(60); // well past the duration — the cleared timer must not fire
 
     expect(finished).toHaveLength(1);
@@ -210,7 +213,7 @@ describe("multiplayer-chat plugin", () => {
   it("uses sender_label(senderId, group, presence) for display names", async () => {
     const { hub, jsPsych } = await setup();
     const peer = await hub.join("peer");
-    await peer.jsPsych.multiplayer.push(peerMessage("yo"));
+    await peer.jsPsych.multiplayer.update(peerMessage("yo"));
     const labels: Array<[string, PresenceData]> = [];
 
     const { el } = run(jsPsych, {
@@ -224,7 +227,8 @@ describe("multiplayer-chat plugin", () => {
     expect(labels[0][1].peer).toBe("connected");
   });
 
-  it("shows an error when a send fails, keeps the message, and sends it with the next one", async () => {
+  it("keeps a message whose send failed and sends it with the next one", async () => {
+    jest.spyOn(console, "warn").mockImplementation(() => {}); // the core logs the failed write
     const { api, jsPsych, connection } = await setup();
     const { el } = run(jsPsych);
 
@@ -234,17 +238,16 @@ describe("multiplayer-chat plugin", () => {
     };
     send(el, "first");
     await flushPromises();
-    expect(el.querySelector(".jspsych-multiplayer-chat-error")?.textContent).toBe(
-      "Couldn't send — please try again.",
-    );
+    // The core retries failed writes itself, so this isn't an error the participant needs to see
+    expect(el.querySelector(".jspsych-multiplayer-chat-error")).toBeNull();
 
     connection.pushImpl = send0;
     send(el, "second");
     await flushPromises();
 
-    const sent = (connection.pushes[connection.pushes.length - 1].chat_messages as any[]).map(
-      (m) => [m.seq, m.text],
-    );
+    const sent = (
+      scopeData(connection.pushes[connection.pushes.length - 1])!.chat_messages as any[]
+    ).map((m) => [m.seq, m.text]);
     // The failed message went out with the next one, and its seq was not reused
     expect(sent).toEqual([
       [0, "first"],
@@ -255,7 +258,7 @@ describe("multiplayer-chat plugin", () => {
 
   it("seeds the seq counter past a gap in the existing own-message array (no id collision)", async () => {
     const { api, jsPsych } = await setup();
-    await api.push({
+    await api.update({
       chat_messages: [
         { senderId: "me", seq: 0, text: "a", ts: 1 },
         { senderId: "me", seq: 2, text: "c", ts: 3 },
@@ -280,16 +283,16 @@ describe("multiplayer-chat plugin", () => {
       },
     });
 
-    await peer.jsPsych.multiplayer.push(peerMessage("still works"));
+    await peer.jsPsych.multiplayer.update(peerMessage("still works"));
     expect(finished).toHaveLength(0);
     expect(messages(el)).toEqual([["peer", "still works"]]);
   });
 
   describe("participants leaving", () => {
-    it("ends with ended_by 'participant_left' when a participant who was there leaves", async () => {
-      const { hub, jsPsych, finished } = await setup({ dropoutTimeout: 0 });
+    it("ends with outcome 'participant_left' when a participant who was there leaves", async () => {
+      const { hub, jsPsych, finished } = await setup({ dropoutTimeout: 1 });
       const peer = await hub.join("peer");
-      await peer.jsPsych.multiplayer.push(peerMessage("bye"));
+      await peer.jsPsych.multiplayer.update(peerMessage("bye"));
       run(jsPsych);
 
       await peer.jsPsych.multiplayer.disconnect();
@@ -297,16 +300,32 @@ describe("multiplayer-chat plugin", () => {
 
       expect(finished).toHaveLength(1);
       expect(finished[0]).toMatchObject({
-        ended_by: "participant_left",
-        partner_left: true,
+        multiplayer_outcome: "participant_left",
         left_participant: "peer",
-        connection_lost: false,
+        ended_by: null,
       });
+      // The peer's data drops out of the unsealed group when they leave; their message stays
       expect(finished[0].transcript.map((m: any) => m.text)).toEqual(["bye"]);
     });
 
+    it("waits on the sealed group's members, including one who is only away", async () => {
+      const { hub, jsPsych, finished } = await setup({ dropoutTimeout: 1 });
+      const peer = await hub.join("peer");
+      hub.seal(["me", "peer"]);
+      peer.connection.setOnline(false);
+      run(jsPsych);
+
+      await sleep(5);
+
+      expect(finished).toHaveLength(1);
+      expect(finished[0]).toMatchObject({
+        multiplayer_outcome: "participant_left",
+        left_participant: "peer",
+      });
+    });
+
     it("keeps going when end_on_participant_left is false, marking them in the roster", async () => {
-      const { hub, jsPsych, finished } = await setup({ dropoutTimeout: 0 });
+      const { hub, jsPsych, finished } = await setup({ dropoutTimeout: 1 });
       const peer = await hub.join("peer");
       const { el } = run(jsPsych, { end_on_participant_left: false, show_roster: true });
       const roster = () => el.querySelector(".jspsych-multiplayer-chat-roster")!.textContent;
@@ -321,7 +340,7 @@ describe("multiplayer-chat plugin", () => {
     });
 
     it("ignores a participant who wasn't connected when the trial started", async () => {
-      const { hub, jsPsych, finished } = await setup({ dropoutTimeout: 0 });
+      const { hub, jsPsych, finished } = await setup({ dropoutTimeout: 1 });
       hub.seed("ghost", peerMessage("old"));
       run(jsPsych);
       await sleep(5);
@@ -330,23 +349,30 @@ describe("multiplayer-chat plugin", () => {
   });
 
   describe("losing the connection", () => {
-    it("ends with ended_by 'connection_lost' and keeps the transcript", async () => {
+    it("ends with outcome 'connection_lost' and keeps the transcript", async () => {
       const { jsPsych, finished, connection } = await setup();
       const { el } = run(jsPsych);
       send(el, "before the drop");
 
       connection.options.onStatus("closed");
+      await flushPromises();
 
       expect(finished).toHaveLength(1);
-      expect(finished[0]).toMatchObject({ ended_by: "connection_lost", connection_lost: true });
+      expect(finished[0]).toMatchObject({
+        multiplayer_outcome: "connection_lost",
+        ended_by: null,
+        left_participant: null,
+      });
       expect(finished[0].transcript.map((m: any) => m.text)).toEqual(["before the drop"]);
     });
 
-    it("also ends cleanly when the experiment calls disconnect() mid-trial", async () => {
+    it("ends as cancelled when the experiment calls disconnect() mid-trial", async () => {
       const { api, jsPsych, finished } = await setup();
       run(jsPsych);
       await api.disconnect();
-      expect(finished[0].ended_by).toBe("connection_lost");
+      await flushPromises();
+      expect(finished).toHaveLength(1);
+      expect(finished[0].multiplayer_outcome).toBe("cancelled");
     });
   });
 
@@ -360,7 +386,7 @@ describe("multiplayer-chat plugin", () => {
   it("throws a clear error on a jsPsych without the multiplayer module", () => {
     expect(() =>
       new MultiplayerChatPlugin({} as never).trial(document.createElement("div"), base as never),
-    ).toThrow("no multiplayer module");
+    ).toThrow("needs a version of jsPsych with the multiplayer API");
   });
 
   it("runs through the real jsPsych parameter pipeline (startTimeline smoke test)", async () => {
@@ -377,7 +403,84 @@ describe("multiplayer-chat plugin", () => {
 
     const data = getData().values()[0];
     expect(data.ended_by).toBe("button");
+    expect(data.multiplayer_outcome).toBe("completed");
     expect(data.messages_sent).toBe(1);
-    expect(data.partner_left).toBe(false);
+  });
+
+  describe("trial scope", () => {
+    const click = (el: HTMLElement) =>
+      (el.querySelector(".jspsych-multiplayer-chat-end") as HTMLButtonElement).click();
+
+    it("keeps messages in the trial's own scope, so the next chat trial starts empty", async () => {
+      const hub = new MemoryHub();
+      const { jsPsych, connection } = await hub.join("me");
+
+      const { displayElement, getData, expectFinished } = await startTimeline(
+        [
+          { type: MultiplayerChatPlugin, end_button_label: "Done" },
+          { type: MultiplayerChatPlugin, end_button_label: "Done" },
+        ],
+        jsPsych,
+      );
+      send(displayElement, "first trial");
+      click(displayElement);
+      await flushPromises();
+      expect(messages(displayElement)).toEqual([]);
+      click(displayElement);
+      await expectFinished();
+
+      expect(
+        getData()
+          .values()
+          .map((d: any) => d.message_count),
+      ).toEqual([1, 0]);
+      // Nothing went into the session scope
+      const last = connection.pushes[connection.pushes.length - 1];
+      expect(scopeData(last)?.chat_messages).toBeUndefined();
+    });
+
+    it("continues one conversation across trials that share a multiplayer_scope", async () => {
+      const hub = new MemoryHub();
+      const { jsPsych } = await hub.join("me");
+      const chat = {
+        type: MultiplayerChatPlugin,
+        end_button_label: "Done",
+        multiplayer_scope: "discussion",
+      };
+
+      const { displayElement, getData, expectFinished } = await startTimeline(
+        [chat, chat],
+        jsPsych,
+      );
+      send(displayElement, "still here");
+      click(displayElement);
+      await flushPromises();
+      expect(messages(displayElement)).toEqual([["You", "still here"]]);
+      send(displayElement, "and again");
+      click(displayElement);
+      await expectFinished();
+
+      expect(
+        getData()
+          .values()
+          .map((d: any) => d.message_count),
+      ).toEqual([1, 2]);
+    });
+
+    it("sees a peer's messages only in the trial they were sent in", async () => {
+      const hub = new MemoryHub();
+      const { jsPsych } = await hub.join("me");
+      await hub.join("peer");
+      hub.seed("peer", peerMessage("session-wide"));
+      hub.seed("peer", peerMessage("in trial 0"), { scope: "#0" });
+
+      const { displayElement, expectFinished } = await startTimeline(
+        [{ type: MultiplayerChatPlugin, end_button_label: "Done" }],
+        jsPsych,
+      );
+      expect(messages(displayElement)).toEqual([["peer", "in trial 0"]]);
+      click(displayElement);
+      await expectFinished();
+    });
   });
 });
