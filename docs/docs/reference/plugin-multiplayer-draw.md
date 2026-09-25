@@ -43,7 +43,6 @@ timeline.push({
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `prompt` | HTML string | `""` | Shown above the toolbar. |
-| `data_key` | `string` | `"draw_strokes"` | The field in this participant's slot where their strokes are kept. Give two draw trials in one experiment different keys if each should start with a blank canvas; trials that share a key share a canvas. |
 | `aspect_ratio` | `number` | `4/3` | The canvas's width divided by its height. The canvas is as large as the page allows at this shape, so it has the same shape on every participant's screen. |
 | `colors` | `string[]` | 5 colors (see below) | The color swatches, as CSS colors. The first is selected at the start. |
 | `brush_sizes` | `number[]` | `[0.004, 0.01, 0.02]` | The brush widths to offer, as a fraction of the canvas width. The middle one is selected at the start. |
@@ -51,14 +50,19 @@ timeline.push({
 | `push_interval_ms` | `number` | `60` | How often, in ms, a stroke in progress is sent to the others while it is being drawn. Lower values look smoother to the others; higher values send less. |
 | `duration` | `number \| null` | `null` | End the trial after this many ms. `null`, `0`, or a negative number means no time limit. Each participant's timer starts when they reach the trial. |
 | `end_button_label` | `string \| null` | `null` | Show a button with this label that ends the trial for the participant who clicks it. `null` or `""` shows no button. |
-| `end_when` | `(group, presence) => boolean` | `null` | A condition checked at the start and after every change to the shared data or presence. The trial ends as soon as it returns `true`. Both arguments are frozen, so don't modify them. |
+| `end_when` | `(group, presence) => boolean` | `null` | A condition checked at the start and after every change to the trial's shared data or presence. The trial ends as soon as it returns `true`. |
 | `show_roster` | `boolean` | `false` | Show a "Participants:" line listing everyone in the group, with "(away)" after anyone whose connection has dropped and "(left)" after anyone who has left. |
 | `roster_label` | `(participantId, group, presence) => string` | `null` | The name shown for each participant in the roster. By default, their participant ID. Only used when `show_roster` is `true`. |
 | `store_full_strokes` | `boolean` | `true` | Save every stroke, with its points, in `strokes`. Set `false` to save only the counts. |
-| `end_on_participant_left` | `boolean` | `true` | End the trial when a participant who was connected at the start of the trial leaves. Set `false` to keep drawing with whoever remains. |
+| `end_on_participant_left` | `boolean` | `true` | End the trial when another participant it depends on leaves (see [When someone leaves](#when-someone-leaves)). Set `false` to keep drawing with whoever remains. |
 
 The default colors are near-black `#1a1a1a`, red `#e03131`, green `#2f9e44`, blue `#1971c2`, and
 orange `#f08c00`.
+
+`group` is the **trial's** shared data (see [Drawing across trials](#drawing-across-trials)) and
+`presence` is everyone's connection status. Both are frozen, so read them but don't modify them.
+To show names written in an earlier trial, read them from the session scope, for example
+`roster_label: (id) => jsPsych.multiplayer.get(id, { scope: "session" })?.name ?? id`.
 
 ## Data
 
@@ -68,15 +72,53 @@ orange `#f08c00`.
 | `stroke_count` | `number` | How many strokes were on the canvas, from all participants. |
 | `strokes_drawn` | `number` | How many of them this participant drew, not counting strokes they undid. |
 | `draw_time` | `number` | Milliseconds from the start of the trial to its end. |
-| `ended_by` | `string` | What ended the trial: `"duration"`, `"button"`, `"condition"` (`end_when`), `"participant_left"`, or `"connection_lost"`. |
-| `partner_left` | `boolean` | `true` if the trial ended because another participant left. |
-| `left_participant` | `string \| null` | The ID of the participant who left, when `partner_left` is `true`. |
-| `connection_lost` | `boolean` | `true` if the trial ended because this participant's own connection was lost for good. |
+| `multiplayer_outcome` | `string` | How the trial ended: `"completed"` (by `duration`, the end button, or `end_when`), `"participant_left"`, `"connection_lost"`, or `"cancelled"` (the experiment called `jsPsych.multiplayer.disconnect()` during the trial). |
+| `left_participant` | `string \| null` | The ID of the participant whose departure ended the trial, when `multiplayer_outcome` is `"participant_left"`. |
+| `ended_by` | `string \| null` | Which end condition completed the trial: `"duration"`, `"button"`, or `"condition"` (`end_when`). `null` when `multiplayer_outcome` isn't `"completed"`. |
 
-[Handling dropouts](../guides/handling-dropouts) explains `partner_left`, `left_participant`,
-`connection_lost`, and how to branch on them. As with the chat, the saved strokes are what this
+[Handling dropouts](../guides/handling-dropouts) explains `multiplayer_outcome` and
+`left_participant`, and how to branch on them. As with the chat, the saved strokes are what this
 participant's canvas showed when their trial ended, so a stroke finished in the last moment may
 be in one participant's data and not another's.
+
+## When someone leaves
+
+By default the trial ends as soon as a participant it depends on reaches `left`, with
+`multiplayer_outcome: "participant_left"` and their ID in `left_participant`. In a [sealed
+group](../guides/forming-groups), it depends on every other member who hasn't left; otherwise, on
+the participants who were connected when the trial started. A participant who is only `away` does
+not end it, and a departed participant's strokes stay on the canvas and in the data.
+
+If this participant's own connection is lost for good, the trial ends with
+`multiplayer_outcome: "connection_lost"`, keeping the strokes drawn up to that point. A write that
+fails is retried automatically, and every write carries the participant's complete list of
+strokes, so nothing is lost.
+
+## Drawing across trials
+
+Strokes are kept in the trial's own part of the shared data (its [trial
+scope](../guides/how-it-works)), so every draw trial starts with a blank canvas, even when the same
+trial runs again in a loop. To keep drawing on one canvas across several trials, give those trials
+the same `multiplayer_scope`:
+
+```js
+const sketch = {
+  type: jsPsychMultiplayerDraw,
+  multiplayer_scope: "shared-sketch",
+  duration: 60000,
+};
+
+// The second sketch continues the first
+timeline.push(sketch, discussion, sketch);
+```
+
+Everything else in those trials that uses the trial scope shares it too, so give each canvas you
+want kept apart its own name.
+
+Every write sends the participant's whole list of strokes, so the data grows with the total ink
+drawn. For long, detailed drawings, raise `min_point_distance`, and keep in mind that each backend
+limits how much data a participant can share (see [Choosing a
+backend](../guides/choosing-a-backend)).
 
 ## Stroke format
 

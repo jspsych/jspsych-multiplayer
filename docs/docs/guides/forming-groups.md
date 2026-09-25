@@ -36,7 +36,8 @@ join, which happens when its last place is taken. The difference matters when so
 - **While the group is forming**, a participant who closes the tab gives up their place, and the
   next person to arrive takes it. Nobody in the group has started yet, so nothing is lost.
 - **Once the group is sealed**, its members are final. A member who leaves counts as a
-  [dropout](handling-dropouts), and nobody replaces them.
+  [dropout](handling-dropouts), and nobody replaces them. Every member of the group sees the
+  seal and the same final roster; the adapter takes care of that.
 
 `jsPsych.multiplayer.group()` reports where the group stands:
 
@@ -85,7 +86,7 @@ func: async (done) => {
     const group = await jsPsych.multiplayer.waitForGroup({ timeout: 5 * 60000 });
     done({ group_members: group.members });
   } catch (error) {
-    if (error.name !== "MultiplayerTimeoutError") throw error;
+    if (error.name !== "MultiplayerError" || error.code !== "timeout") throw error;
     const presence = jsPsych.multiplayer.presence();
     const here = Object.values(presence).filter((status) => status === "connected").length;
     if (here < 3) {
@@ -98,7 +99,8 @@ func: async (done) => {
 },
 ```
 
-Each participant's timeout starts when they arrive, so the first to arrive is the first to time
+The wait belongs to the waiting-room trial, so it is cancelled automatically if the trial ends
+some other way. Each participant's timeout starts when they arrive, so the first to arrive is the first to time
 out. When that participant seals the group, everyone else's `waitForGroup()` ends at once.
 
 ## After the group is sealed
@@ -111,7 +113,9 @@ yourself:
   who haven't left.
 - **Dropouts are caught.** With `participants: null`, a trial waits on the group's other
   members, including one who is only briefly `away`. If one of them leaves, the trial ends with
-  `partner_left: true`, as described in [Handling dropouts](handling-dropouts).
+  `multiplayer_outcome: "participant_left"`, as described in [Handling dropouts](handling-dropouts).
+- **Reads include only the group.** `getAll()` and the plugins see only the members' data, even
+  if other participants are connected to the same backend.
 
 For example, after the waiting room, a ready gate needs no count:
 

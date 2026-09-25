@@ -30,9 +30,7 @@ const firebaseConfig = {
 };
 
 const jsPsych = initJsPsych();
-await jsPsych.multiplayer.connect(
-  new FirebaseAdapter({ firebaseConfig, useUidAsParticipantId: true }),
-);
+await jsPsych.multiplayer.connect(new FirebaseAdapter({ firebaseConfig }));
 await jsPsych.run(timeline);
 ```
 
@@ -45,8 +43,7 @@ await jsPsych.run(timeline);
 
 ## Options
 
-Pass these to the constructor. Give either `firebaseConfig` or `database`; if you give both,
-`database` is used.
+Pass these to the constructor. Give either `firebaseConfig` or `database`.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
@@ -54,16 +51,21 @@ Pass these to the constructor. Give either `firebaseConfig` or `database`; if yo
 | `database` | `Database` | — | A Realtime Database you have already set up with the Firebase SDK. Use this instead of `firebaseConfig` when your page already uses Firebase, or to connect to the emulator. You are then responsible for its sign-in settings. |
 | `sessionId` | `string` | the `?mp_session=` URL parameter, or a new random ID | Which session (group) to join. If the URL has no `mp_session` parameter, the adapter makes a new ID and adds it to the URL. It is also the session ID that seeds [shared randomness](multiplayer-api#shared-randomness). Cannot be combined with `matchmaking`. |
 | `matchmaking` | `{ lobby, groupSize }` | — | Put participants who open the same link into groups of `groupSize` as they arrive. `lobby` names the queue they wait in. See [Forming groups](#forming-groups). |
-| `participantId` | `string` | a new random ID | This participant's ID. Cannot be combined with `useUidAsParticipantId`. |
-| `useUidAsParticipantId` | `boolean` | `false` | Use the participant's anonymous Firebase sign-in ID as their participant ID. The recommended security rules require this. |
-| `sessionBinding` | `boolean` | same as `useUidAsParticipantId` | Record which session this participant joined, so the recommended rules can keep them out of every other session. Set it to `false` with the prototyping rules, which do not allow that record. |
-| `pathPrefix` | `string` | `"mp-sessions"` | Where in the database the adapter stores its data. If you change it, rename the top-level entries in your security rules to match. |
-| `connectTimeoutMs` | `number` | `20000` | How long, in ms, `connect()` waits for the first data from the database before it fails. |
-| `backend` | `FirebaseBackend` | the real Firebase SDK | A stand-in database for automated tests. |
+| `participantId` | `string` | a random ID, kept for the tab | This participant's ID, for example a recruitment-platform ID. Cannot be combined with `useUidAsParticipantId`. |
+| `persistParticipant` | `boolean` | `true` | Keep the default participant ID (and, with matchmaking, the group) in the tab's `sessionStorage`, so a reload comes back as the same participant and the others can tell they restarted. Set `false` for a new participant on every page load. |
+| `useUidAsParticipantId` | `boolean` | `false` | Use the participant's anonymous Firebase sign-in ID as their participant ID. |
+| `sessionBinding` | `boolean` | `true` | Record which session this participant joined, so the rules can keep them out of every other session. See [Choosing `sessionBinding`](#choosing-sessionbinding). |
+| `namespace` | `string` | `"mp-sessions"` | Names the adapter's entries in the database. If you change it, rename the top-level entries in your security rules to match. |
 
-`sessionId`, `participantId`, `pathPrefix`, and `matchmaking.lobby` cannot be empty or contain
-`.`, `#`, `$`, `[`, `]`, `/`, or `:`. Once `connect()` resolves, this participant's ID is in
-`jsPsych.multiplayer.participantId`.
+`participantId`, `sessionId`, `namespace`, and `matchmaking.lobby` must be non-empty and must
+not contain any of `: / . # $ [ ]`. The default IDs follow these rules. Once `connect()`
+resolves, this participant's ID is in `jsPsych.multiplayer.participantId`.
+
+How long connecting may take is an option of `jsPsych.multiplayer.connect()`: pass
+`connectTimeout` (default 20 seconds), and `reconnectTimeout` to give up on a connection that
+stays down. Options that changed in 1.0 are listed in
+[Upgrading from 0.x](../guides/upgrading); passing a removed option throws an error that names
+its replacement.
 
 ## Forming groups
 
@@ -91,7 +93,6 @@ participant to arrive starts a new group:
 await jsPsych.multiplayer.connect(
   new FirebaseAdapter({
     firebaseConfig,
-    useUidAsParticipantId: true,
     matchmaking: { lobby: "ultimatum-pilot", groupSize: 2 },
   }),
 );
@@ -119,10 +120,11 @@ What happens along the way:
 
 - **While a group is filling**, a participant who closes the tab or loses their network gives
   up their place, and the next arrival takes it. A participant whose network comes back before
-  then takes their place again. If someone else took it while they were gone, their session
-  closes, and waiting trials end with `connection_lost: true`.
-- **Once a group is sealed**, its members are final. `jsPsych.multiplayer.group().members` lists
-  them, and a member who leaves counts as a dropout: nobody replaces them. See
+  then takes their place again. If the group filled up without them while they were gone, their
+  session closes, and waiting trials end with `multiplayer_outcome: "connection_lost"`.
+- **Once a group is sealed**, its members are final. Every member sees `sealed: true` and the
+  same roster in `jsPsych.multiplayer.group().members`, including members who drop out later. A
+  member who leaves counts as a dropout: nobody replaces them. See
   [Handling dropouts](../guides/handling-dropouts).
 - **To start before a group is full**, for example when the waiting room times out with enough
   people present, call `jsPsych.multiplayer.sealGroup()`. It seals the group with the members it
@@ -132,14 +134,18 @@ What happens along the way:
   give each condition its own lobby.
 - **Each group gets its own session ID**, so each group gets its own
   [shared random values](multiplayer-api#shared-randomness).
-- **A participant who reloads the tab** with `useUidAsParticipantId: true` goes back to the
-  group they joined first. The reload restarted their experiment, so the others keep them `left`
-  (see [Rejoining](../guides/handling-dropouts#rejoining)). Without `useUidAsParticipantId`, a
+- **A participant who reloads the tab** goes back to the group they joined first (with the
+  default `persistParticipant: true`). The reload restarted their experiment, so the others count
+  them as `left` and their own page sees `jsPsych.multiplayer.restarted === true` (see
+  [Rejoining](../guides/handling-dropouts#rejoining)). With `persistParticipant: false`, a
   reload arrives as a new participant and takes a place in whichever group is filling.
 
-The database settles who gets each place: every step of joining is a
+The database settles who gets each place: each place is taken with a
 [transaction](https://firebase.google.com/docs/database/web/read-and-write#save_data_as_transactions),
 so two participants who arrive at the same moment can't both take the last place.
+
+Groups formed by a version of the adapter before 1.0 aren't read. Start a new lobby name after
+upgrading.
 
 ## Setup
 
@@ -157,11 +163,24 @@ The rules decide who can read and write what. Without them, the database either 
 adapter or lets anyone change anything. The package ships the recommended rules in
 `database.rules.json`, next to a `firebase.json` that points to them. After
 `npm install @jspsych-multiplayer/adapter-multiplayer-firebase` they are in
-`node_modules/@jspsych-multiplayer/adapter-multiplayer-firebase/`.
+`node_modules/@jspsych-multiplayer/adapter-multiplayer-firebase/`. The package README also shows
+them in full.
 
-These rules let each participant write only their own data, read only the session they first
-joined, and store at most 128 KB each. They also cover matchmaking, and keep a sealed group's
-members from being changed. They need `useUidAsParticipantId: true`.
+The recommended rules work with the default options, in every way of choosing participant IDs,
+with or without matchmaking. Firebase checks them on its own servers, so a participant who
+modifies the experiment's code is still held to them:
+
+- **Each participant writes only their own data.** When a participant connects, the adapter
+  claims their participant ID for their anonymous sign-in. The first claim wins, and only that
+  sign-in can then write that participant's data or presence.
+- **Each participant reads only the session they first joined.** The adapter records which
+  session a sign-in joined (`sessionBinding`). The record can't be changed afterward, and every
+  read and write of a session requires it.
+- **Matchmaking can't be tampered with.** A participant can take an empty place only for
+  themselves and free only their own. Only a member can seal a group, only once, and only with a
+  roster that matches the places on the server. Once a group is sealed, its members can't change.
+- **Writes are limited in size.** Each participant's data can be at most 128 KB. See
+  [How much data fits](#how-much-data-fits).
 
 Deploy them in either of two ways:
 
@@ -178,38 +197,55 @@ Deploy them in either of two ways:
   `deploy --only database` uploads the rules and nothing else. Your project ID is shown in
   **Project settings**.
 
-Deploy again if you change `pathPrefix`, or if a new version of the package changes the rules.
+Deploy again if you change `namespace`, or if a new version of the package changes the rules.
+**Version 1.0 changed the rules**: it adds the `mp-sessions-owners` and `mp-sessions-memberships`
+entries and stores matchmaking groups differently. If you deployed the rules from an earlier
+version, deploy the new ones before running a study with 1.0.
 
-The rules can't stop everyone. With one link per group, anyone who has a session's link can
-join that session, so use session IDs that cannot be guessed (the default random IDs are fine)
-and share each link only with its group. With matchmaking, anyone who has the study link can
-join a group, and the rules can't check a group's size, so a participant who modifies the
-experiment's code could crowd a group that is still filling. Once a group is sealed, the rules
-refuse any change to its members.
+The rules can't stop everyone:
 
-**For a first test only**, these rules let any signed-in participant read and write any session.
-Use them with the default options (no `useUidAsParticipantId`), never for data collection:
+- **Joining.** Anyone who has a session's link (or, with matchmaking, the study link) can join as
+  a new participant and read that session. Use session IDs that cannot be guessed (the default
+  random IDs are fine) and share each link only with its group.
+- **Reading.** Every member of a session can read every participant's data in it.
+- **A supplied `participantId`.** If you pass your own IDs, whoever connects first with an ID
+  owns it. Someone who knows another participant's ID and connects first can lock them out,
+  though not write as them. The same ID can't be used from a second device or browser.
+- **A complete roster.** A participant who modifies the experiment's code could seal a group
+  with a roster that leaves someone out; that participant's connection then closes. Nobody can be
+  added who doesn't hold a place.
+
+Claims and session records are a few bytes each and are never deleted by the adapter. Clear them
+with your project's usual data-retention tools if you wish.
+
+**For a first test only**, these rules let any signed-in participant read and write anything.
+They work with the default options but enforce nothing, so never use them for data collection:
 
 ```json
 {
   "rules": {
-    "mp-sessions": {
-      "$session": { ".read": "auth != null", ".write": "auth != null" }
-    },
-    "mp-sessions-presence": {
-      "$session": { ".read": "auth != null", ".write": "auth != null" }
-    },
-    "mp-sessions-lobby": {
-      "$lobby": { ".read": "auth != null", ".write": "auth != null" }
-    },
-    "mp-sessions-groups": {
-      "$session": { ".read": "auth != null", ".write": "auth != null" }
-    }
+    "mp-sessions": { "$session": { ".read": "auth != null", ".write": "auth != null" } },
+    "mp-sessions-presence": { "$session": { ".read": "auth != null", ".write": "auth != null" } },
+    "mp-sessions-owners": { "$session": { ".read": "auth != null", ".write": "auth != null" } },
+    "mp-sessions-memberships": { "$uid": { ".read": "auth != null", ".write": "auth != null" } },
+    "mp-sessions-lobby": { "$lobby": { ".read": "auth != null", ".write": "auth != null" } },
+    "mp-sessions-groups": { "$session": { ".read": "auth != null", ".write": "auth != null" } }
   }
 }
 ```
 
-The last two entries are needed only with `matchmaking`.
+If you rename the entries with `namespace`, rename them in your rules too.
+
+### Choosing `sessionBinding`
+
+`sessionBinding` is on by default, and both sets of rules above allow it, so you rarely need to
+change it. Its cost is that one anonymous sign-in can join only one session. With the default
+`firebaseConfig`, a sign-in lasts for one tab, so a participant who opens a *different* session
+link in the same tab (or, with matchmaking, whose group filled up while they were away) is
+refused and has to use a new tab. With your own `database`, the sign-in lasts as long as that
+app's sign-in settings say, often the whole browser profile. Set `sessionBinding: false` if you
+write your own rules without the `mp-sessions-memberships` entry, or for pilot testing where one
+tab visits many sessions.
 
 ### Loading the adapter
 
@@ -272,10 +308,19 @@ await setPersistence(getAuth(app), browserSessionPersistence);
 const database = getDatabase(app);
 connectDatabaseEmulator(database, "127.0.0.1", 9000);
 
-await jsPsych.multiplayer.connect(new FirebaseAdapter({ database, useUidAsParticipantId: true }));
+await jsPsych.multiplayer.connect(new FirebaseAdapter({ database }));
 ```
 
 The emulator's web page, at the address it prints, shows each rule allowing or denying requests.
+
+## How much data fits
+
+The recommended rules allow each participant's data to be up to 128 KB. Every write sends all of
+a participant's data, including what they wrote in earlier trials, so a long experiment that
+shares a lot can reach this limit. A write over the limit is refused. To allow more, raise the
+number in the `.validate` rule for `mp-sessions/$session/$pid` (`131072` characters); Firebase
+itself accepts values of several megabytes. See
+[How much data you can share](multiplayer-api#how-much-data-you-can-share).
 
 ## Presence and dropouts
 
@@ -289,22 +334,24 @@ participants.
   out, which can take a minute or more. They then become `away`, and `left` after the dropout
   timeout.
 - **This participant loses their network.** The connection status is `reconnecting` until the
-  Firebase SDK reconnects, with no time limit. The others see this participant as `away`, and
-  then `left`. When the SDK reconnects, this participant is back on the same page, so the others
-  see them as `connected` again: they rejoin. The adapter reports a lost connection
-  only when the database stops allowing it to read the session, for example after the rules
-  change.
+  Firebase SDK reconnects, with no time limit unless you pass `reconnectTimeout` to `connect()`.
+  The others see this participant as `away`. If the SDK reconnects before the others' dropout
+  timeout, this participant is back on the same page, so the others see them as `connected`
+  again: they rejoin. After that, they stay `left`, because `left` is final. If Firebase dropped
+  this participant's presence without the page noticing, the adapter restores it when it finds
+  out. The adapter itself reports a lost connection only when the database stops allowing it to
+  read the session, for example after the rules change.
 - **`jsPsych.multiplayer.disconnect()`** removes this participant from the connected list at
   once. Their data stays in the session. With matchmaking, it also gives up their place in a
   group that is still filling.
 
 See [Handling dropouts](../guides/handling-dropouts) for what each plugin records.
 
-Each tab signs in separately, so two tabs on one computer are two participants. With
-`useUidAsParticipantId: true`, a participant who reloads the tab keeps their ID, but the reload
-restarted their experiment, so the others keep them `left` and their own page sees
-`previousInstance` (see [Rejoining](../guides/handling-dropouts#rejoining)). Without it, a reload
-joins as a new participant.
+Each tab signs in separately, so two tabs on one computer are two participants. A participant
+who reloads the tab keeps their ID (with the default `persistParticipant: true`), but the reload
+restarted their experiment, so the others count them as `left` and their own page sees
+`jsPsych.multiplayer.restarted === true` (see [Rejoining](../guides/handling-dropouts#rejoining)).
+With `persistParticipant: false`, a reload joins as a new participant.
 
 ## Example
 
@@ -347,7 +394,6 @@ trial with the waiting room from [Forming groups](#forming-groups).
     const lobby = {
       type: jsPsychMultiplayerSync,
       participants: [],
-      push_data: { status: "ready" },
       wait_for: (group, presence) => {
         // Count the participants who are currently connected
         let connected = 0;
@@ -367,15 +413,17 @@ trial with the waiting room from [Forming groups](#forming-groups).
     };
 
     try {
-      await jsPsych.multiplayer.connect(
-        new FirebaseAdapter({ firebaseConfig, useUidAsParticipantId: true }),
-      );
+      await jsPsych.multiplayer.connect(new FirebaseAdapter({ firebaseConfig }));
     } catch (error) {
       // A wrong config, missing rules, or no network ends up here.
       document.body.textContent = `Could not connect: ${error.message}`;
       throw error;
     }
-    await jsPsych.run([lobby, start]);
+    if (jsPsych.multiplayer.restarted) {
+      document.body.innerHTML = "<p>You reloaded the page, so you can't rejoin your group.</p>";
+    } else {
+      await jsPsych.run([lobby, start]);
+    }
   </script>
 </html>
 ```

@@ -9,16 +9,19 @@ interested in using, this is the place to share it!
 
 jsPsych supports opt-in, real-time multiplayer experiments through a two-layer architecture:
 
-- A high-level **`MultiplayerAPI`** on `jsPsych.multiplayer` for pushing data, subscribing to group
-  session changes, and waiting on conditions. It is backend-agnostic — all network logic lives in a
-  swappable adapter.
-- A swappable **`MultiplayerAdapter`** that implements the network I/O for a specific backend
-  (`connect`, `push`, `getAll`, `get`, `subscribe`, `disconnect`).
+- A high-level **`MultiplayerAPI`** on `jsPsych.multiplayer` for writing shared data (`update`,
+  `replace`), reading it (`getAll`, `get`, `presence`, `group`), subscribing to changes, and waiting
+  on conditions. Each trial reads and writes its own part of the shared data (its trial scope), and
+  a session scope holds data that lasts the whole session. It is backend-agnostic — all network
+  logic lives in a swappable adapter.
+- A swappable **`MultiplayerAdapter`** that implements the network I/O for a specific backend. Its
+  `connect()` opens a connection with `participantId`, `sessionId`, `getAll`,
+  `connectedParticipants`, `push`, `disconnect`, and optionally `group` and `sealGroup`.
 
 Two kinds of community contributions build on this:
 
 - **Plugins** — trial plugins built on top of the multiplayer API (for example, a synchronization
-  barrier that pushes participant data and waits until a group condition is satisfied).
+  barrier that writes participant data and waits until a group condition is satisfied).
 - **Adapters** — implementations of the `MultiplayerAdapter` interface for a particular backend
   (JATOS group sessions, Firebase, a custom WebSocket server, etc.).
 

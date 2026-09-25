@@ -38,8 +38,8 @@ responder. Play a round, then use the button on the last screen to download that
 ```js
 const lobby = {
   type: jsPsychMultiplayerSync,
-  push_data: { status: "ready" },
-  wait_for: (group, presence) => {
+  participants: [], // someone leaving the lobby shouldn't end it
+  wait_for: (data, presence) => {
     // Count the participants who are currently connected
     let connected = 0;
     for (const id in presence) {
@@ -54,7 +54,8 @@ const lobby = {
 ```
 
 The lobby holds each player until at least two are connected. It has no `timeout`, because
-waiting for a partner to arrive is the point of a lobby.
+waiting for a partner to arrive is the point of a lobby, and `participants: []` keeps it waiting
+when someone leaves instead of ending it.
 
 </Step>
 <Step>
@@ -62,31 +63,23 @@ waiting for a partner to arrive is the point of a lobby.
 ### Assign roles
 
 ```js
-let myRole, proposerId, responderId, myJoinedAt;
+let myRole, proposerId, responderId;
 
 const assignRoles = {
   type: jsPsychMultiplayerRole,
   roles: ["proposer", "responder"],
   strategy: "join_order",
   overflow_role: "spectator",
-  ready: (group, presence) => {
-    let players = 0;
-    for (const id in group) {
-      players++;
-      if (presence[id] !== "connected") {
-        return false;
-      }
-      // Each player needs a joinedAt time, or, if they joined mid-game, an offer or decision
-      const slot = group[id];
-      if (slot.joinedAt === undefined && slot.offer === undefined && slot.decision === undefined) {
-        return false;
-      }
-    }
-    return players >= 2;
+  ready: (snapshot, presence) => {
+    const ids = Object.keys(snapshot);
+    // Wait for at least two players, all connected, each with a joinedAt time
+    return (
+      ids.length >= 2 &&
+      ids.every((id) => presence[id] === "connected" && snapshot[id].joinedAt !== undefined)
+    );
   },
-  save_group: true,
   message: "<p>Assigning roles…</p>",
-  on_finish: (data) => {
+  on_finish: () => {
     myRole = jsPsychMultiplayerRole.getMyRole();
     // If the trial ended before roles were assigned (for example, a player left), there are
     // no roles to read
@@ -97,44 +90,48 @@ const assignRoles = {
     const byRole = jsPsychMultiplayerRole.participantsByRole();
     proposerId = byRole.proposer[0];
     responderId = byRole.responder[0];
-    myJoinedAt = data.group[jsPsych.multiplayer.participantId].joinedAt;
   },
 };
 ```
 
-[`multiplayer-role`](../reference/plugin-multiplayer-role) writes a `joinedAt` time into each
-participant's slot, and with `strategy: "join_order"` the earliest becomes the proposer. Both
+[`multiplayer-role`](../reference/plugin-multiplayer-role) writes a `joinedAt` time for each
+participant, and with `strategy: "join_order"` the earliest becomes the proposer. Both
 browsers sort the same shared data the same way, so they agree on the roles without asking
 each other. A third player who arrives late gets the `overflow_role`, `"spectator"`, and is
 shown a "game full" screen.
 
 The `ready` function says when the group is complete enough to assign roles over: at least two
-participants, all connected, and each with a `joinedAt` (or, for someone who joined
-mid-game, an offer or decision). Without it, a browser could sort before the partner's
-`joinedAt` arrived and pick the wrong proposer.
+participants, all connected, and each with a `joinedAt`. Without it, a browser could sort
+before the partner's `joinedAt` arrived and pick the wrong proposer.
 
-`on_finish` keeps what the rest of the game needs: this player's role, both players' IDs, and
-this player's own `joinedAt`, which the next step needs.
+`joinedAt` is stored in the **session scope**, the part of the shared data that lasts the whole
+session (see [How it works](how-it-works#each-trial-has-its-own-shared-data)). So a spectator
+who arrives later still sorts the players the same way, however much the players have written
+since.
+
+`on_finish` keeps what the rest of the game needs: this player's role and both players' IDs.
 
 </Step>
 <Step>
 
-### Carry forward what others read
+### Share one scope between the two roles
 
-A sync trial's `push_data` **replaces** the participant's whole slot (see [How it
-works](how-it-works#writing-replace-or-merge)). So if the proposer pushed only
-`{ offer: 9 }`, their `joinedAt` would disappear from the shared data. The two players would
-not notice, because they already stored their roles. But a spectator arriving later would sort
-the players without it, compute different roles, and could act on the wrong ones.
+Each trial has its own part of the shared data, named after the trial's position in the
+timeline. Normally that is exactly right: both players run the same trial at the same
+position, so they share its data. But here the proposer and the responder run **different**
+trials, in different conditional timelines, so their positions differ and they would never
+see each other's writes.
 
-So every later `push_data` includes `joinedAt`:
+The fix is to name the scope. Every sync trial of the round gets the same `multiplayer_scope`:
 
 ```js
-push_data: () => ({ offer: proposerOffer, joinedAt: myJoinedAt }),
+multiplayer_scope: "round",
 ```
 
-The general rule: **every push must include every field that other participants still read.**
-Fields nobody reads any more, like the lobby's `status`, can be dropped.
+The proposer's offer and the responder's decision then land in one shared scope. With more than
+one round, build the name from the round number, such as
+`` () => `round-${jsPsych.evaluateTimelineVariable("round")}` ``, so each round starts fresh
+(see [Scopes](../reference/multiplayer-api#naming-a-scope-with-multiplayer_scope)).
 
 </Step>
 <Step>
@@ -151,16 +148,15 @@ let partnerLeft = false;
 
 const proposerWait = {
   type: jsPsychMultiplayerSync,
-  push_data: () => ({ offer: proposerOffer, joinedAt: myJoinedAt }),
-  wait_for: (group) => {
-    const responder = group[responderId];
-    return responder !== undefined && responder.decision !== undefined;
-  },
+  multiplayer_scope: "round",
+  write_data: () => ({ offer: proposerOffer }),
+  wait_for: (data) => data[responderId]?.decision !== undefined,
   participants: () => [responderId],
   timeout: PARTNER_TIMEOUT_MS,
+  save_group: true,
   message: "<p>Waiting for the responder…</p>",
   on_finish: (data) => {
-    if (data.partner_left || data.timed_out || data.connection_lost) {
+    if (data.multiplayer_outcome !== "completed") {
       partnerLeft = true;
       return;
     }
@@ -169,9 +165,13 @@ const proposerWait = {
 };
 ```
 
-The responder mirrors it: a sync trial that waits for the proposer's `offer`, a button trial
-to accept or reject, and a sync trial that pushes
-`{ decision: responderDecision, joinedAt: myJoinedAt }`.
+`write_data` adds the offer to the proposer's data in the round's scope, and `wait_for` holds
+the trial until the responder's decision appears there. `save_group: true` saves the round's
+shared data in the trial's `group` field, where `on_finish` reads the decision.
+
+The responder mirrors it, with the same `multiplayer_scope: "round"`: a sync trial that waits
+for the proposer's `offer`, a button trial to accept or reject, and a sync trial that writes
+`{ decision: responderDecision }`.
 
 Each role's trials sit in a timeline with a `conditional_function`, such as
 `() => myRole === "proposer"`. Both players load the same file; the role decides which trials
@@ -183,12 +183,12 @@ each one sees.
 ### Handle a partner who leaves
 
 `participants: () => [responderId]` tells the trial which participant it depends on. If that
-participant leaves (disconnected for more than 10 seconds), the trial ends with
-`partner_left: true` instead of waiting forever. `connection_lost: true` means this player's own
-connection is gone. `timeout` covers a partner who stays connected but never acts, and ends
-the trial with `timed_out: true`.
+participant leaves (disconnected for more than 10 seconds, or reloaded the page), the trial ends
+with `multiplayer_outcome: "participant_left"` instead of waiting forever.
+`"connection_lost"` means this player's own connection is gone. `timeout` covers a partner who
+stays connected but never acts, and ends the trial with `"timeout"`.
 
-All three set `partnerLeft`, and the timeline shows a "your partner left" screen instead of the
+Any outcome other than `"completed"` sets `partnerLeft`, and the timeline shows a "your partner left" screen instead of the
 outcome:
 
 ```js
@@ -208,9 +208,9 @@ an outcome. Make the timeout much longer than your slowest participant needs, or
 decision screen with `trial_duration`. [Handling dropouts](handling-dropouts) has more.
 
 A player who reloads can't rejoin: the reload restarted their experiment, so the other player
-already sees them as `left`. The example files keep the participant ID across a reload
-(`persistParticipant: true`), which lets the reloaded page notice and show a message instead of
-starting the game over:
+already sees them as `left`. The adapters keep the participant ID across a reload by default,
+which lets the reloaded page notice (`jsPsych.multiplayer.restarted` is `true`) and show a
+message instead of starting the game over:
 
 ```js
 const reloadedScreen = {
@@ -219,9 +219,12 @@ const reloadedScreen = {
   choices: ["Finish"],
 };
 
-jsPsych.multiplayer.connect(adapter).then(() => {
-  jsPsych.run(jsPsych.multiplayer.previousInstance ? [reloadedScreen] : timeline);
-});
+async function runExperiment() {
+  await jsPsych.multiplayer.connect(adapter);
+  await jsPsych.run(jsPsych.multiplayer.restarted ? [reloadedScreen] : timeline);
+}
+
+runExperiment();
 ```
 
 </Step>
@@ -236,18 +239,19 @@ code, and load that adapter's script instead. For JATOS
 ```js
 // Before: two tabs in one browser
 const jsPsych = initJsPsych();
-jsPsych.multiplayer
-  .connect(new jsPsychAdapterMultiplayerLocal({ persistParticipant: true }))
-  .then(() => jsPsych.run(timeline));
+async function runExperiment() {
+  await jsPsych.multiplayer.connect(new jsPsychAdapterMultiplayerLocal());
+  await jsPsych.run(timeline);
+}
+runExperiment();
 
 // After: a JATOS group study
-jatos.onLoad(() => {
+jatos.onLoad(async () => {
   const jsPsych = initJsPsych({
     on_finish: () => jatos.endStudy(jsPsych.data.get().json()),
   });
-  jsPsych.multiplayer
-    .connect(new jsPsychAdapterMultiplayerJatos())
-    .then(() => jsPsych.run(timeline));
+  await jsPsych.multiplayer.connect(new jsPsychAdapterMultiplayerJatos());
+  await jsPsych.run(timeline);
 });
 ```
 
@@ -265,20 +269,25 @@ shortened):
 
 ```jsonc
 { "trial_type": "multiplayer-role", "role": "proposer",
-  "role_map": { "031c…": { "role": "proposer" }, "dbad…": { "role": "responder" } } }
+  "role_map": { "031c…": { "role": "proposer" }, "dbad…": { "role": "responder" } },
+  "multiplayer_outcome": "completed", "left_participant": null,
+  "multiplayer_participant_id": "031c…", "multiplayer_session_id": "7f2e…" }
 
-{ "trial_type": "multiplayer-sync", "wait_time": 2359, "partner_left": false, "timed_out": false,
-  "group": { "031c…": { "offer": 9, "joinedAt": 1783619087856 },
-             "dbad…": { "decision": "accept", "joinedAt": 1783619087857 } } }
+{ "trial_type": "multiplayer-sync", "wait_time": 2359,
+  "multiplayer_outcome": "completed", "left_participant": null,
+  "group": { "031c…": { "offer": 9 }, "dbad…": { "decision": "accept" } },
+  "multiplayer_participant_id": "031c…", "multiplayer_session_id": "7f2e…" }
 ```
 
-The last sync trial's `group` holds both the offer and the decision, so either player's file is
-enough to score the round. `role_map` lets you check that both browsers agreed on the roles.
+The proposer's sync trial's `group` holds both the offer and the decision, so either player's
+file is enough to score the round. `role_map` lets you check that both browsers agreed on the
+roles. Every row carries `multiplayer_participant_id` and `multiplayer_session_id`, so you can
+match up the files from the two players of each game.
 
 ## Where to go next
 
 - **More rounds or more players.** The rounds are ordinary jsPsych, so loop them with a
-  timeline variable. For more than two players, add roles to `roles`;
+  timeline variable, and put the round number in `multiplayer_scope`. For more than two players, add roles to `roles`;
   `participantsByRole()` returns a list of IDs for each.
 - **Talking before deciding.** Add a [`multiplayer-chat`](../reference/plugin-multiplayer-chat)
   trial before the offer.

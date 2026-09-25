@@ -35,13 +35,24 @@ jatos.onLoad(async () => {
 ## Options
 
 Pass these to the constructor, for example
-`new jsPsychAdapterMultiplayerJatos({ closeAfterReconnectingMs: 60000 })`. All are optional.
+`new jsPsychAdapterMultiplayerJatos({ sealWhenFull: false })`. All are optional.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `connectTimeoutMs` | `number` | `20000` | How long, in ms, `connect()` waits for JATOS to open the group connection before it fails. |
-| `closeAfterReconnectingMs` | `number \| null` | `null` | How long, in ms, this participant's connection can stay down before it counts as lost for good. `null` (the default) or `Infinity` means keep retrying. |
-| `sealWhenFull` | `boolean` | `true` | Fix the JATOS group once it has **Max active members**, so nobody new can join it. Set `false` to decide when yourself, with `jsPsych.multiplayer.sealGroup()`. See [Forming groups](#forming-groups). |
+| `sealWhenFull` | `boolean` | `true` | Fix the JATOS group (`jatos.setGroupFixed()`) once it has the batch's **Max active members**, so nobody new can join it. Set `false` to decide when yourself, with `jsPsych.multiplayer.sealGroup()`. See [Forming groups](#forming-groups). |
+
+How long to wait for the group connection to open, and when to give up on a connection that stays
+down, are options of `jsPsych.multiplayer.connect()` itself:
+
+```js
+await jsPsych.multiplayer.connect(new jsPsychAdapterMultiplayerJatos(), {
+  connectTimeout: 10000, // default 20000
+  reconnectTimeout: 5 * 60000, // default: never give up
+});
+```
+
+Options that changed in 1.0 are listed in [Upgrading from 0.x](../guides/upgrading). The adapter
+warns about, and ignores, the timeout options it used to have.
 
 Each participant's ID is their JATOS study result ID, as a string. Once `connect()` resolves, it
 is in `jsPsych.multiplayer.participantId`.
@@ -89,6 +100,12 @@ import. From a copy of the repository, run `npm install`, `npm run build`, then
 **Import Study** button. It is already marked as a group study, and its batch has no group-size
 limits.
 
+## How much data fits
+
+The whole group's data is stored together in one JATOS group session, and every write sends it.
+Its size limit is set in the JATOS server's configuration, so ask your JATOS administrator. See
+[How much data you can share](multiplayer-api#how-much-data-you-can-share).
+
 ## Session ID
 
 The adapter reports the JATOS group result ID as the session ID. Every member of a JATOS group
@@ -130,10 +147,18 @@ reports the final roster, and a member who leaves counts as a dropout.
   no limit the group is never fixed automatically.
 - **Starting early.** To start with fewer players, for example when the waiting room times out
   with enough people present, call `jsPsych.multiplayer.sealGroup()`. It fixes the group with
-  the members it has.
-- **Every member learns of the seal.** JATOS tells only the member who fixed the group. The
-  multiplayer session passes it on to the others, and to a member who reloads, through each
-  member's slot.
+  the members it has. If the page's `jatos.js` is too old to fix groups, `sealGroup()` fails with
+  an `unsupported` error.
+- **Every member learns of the seal.** JATOS confirms a fix only to the member who asked for it.
+  So that member writes the final roster into the group session, and every other member reads it
+  from there and reports the group as sealed. Members who drop out after the seal stay on the
+  roster. The roster is stored under the key `$sealed`, which `getAll()` leaves out.
+- **Checking the roster.** Before believing a roster, each member checks that it is consistent
+  with what JATOS reports: the writer and the reader are on it, and so is everyone JATOS lists as
+  a member right now. A roster that fails these checks is ignored with a warning in the console.
+  The checks catch mistakes, not deliberate forgery: JATOS lets any member write anywhere in the
+  group session, so a participant who modifies the experiment's code could also overwrite
+  others' data.
 
 ## Presence and dropouts
 
@@ -145,13 +170,18 @@ The adapter counts a participant as connected while their JATOS group connection
 - **Another participant loses their network.** They become `away` once the JATOS server notices
   their connection is gone, then `left` after the dropout timeout.
 - **This participant loses their network.** jatos.js keeps trying to reconnect, and the
-  connection status is `reconnecting`. Data this participant writes in the meantime waits and is
-  sent when the connection returns. The adapter keeps waiting for as long as it takes, so a
-  participant who comes back after several minutes rejoins: the others see them as `connected`
-  again. To give up instead, set `closeAfterReconnectingMs`: once the connection has been down
-  that long, it counts as lost, and waiting trials end with `connection_lost: true`. Set it also
-  if your JATOS server may close a participant's group channel for good, because jatos.js does
-  not reopen a channel the server closed.
+  connection status is `reconnecting`. This participant's reads keep returning the last data
+  they saw, and their latest data is sent when the connection returns. The adapter keeps waiting
+  for as long as it takes, so a participant who comes back before the others' dropout timeout
+  rejoins: the others see them as `connected` again. One who comes back later stays `left` for
+  the others, because `left` is final. To give up instead, pass `reconnectTimeout` to
+  `connect()`: once the connection has been down that long, it counts as lost, and waiting trials
+  end with `multiplayer_outcome: "connection_lost"`. Set it also if your JATOS server may close a
+  participant's group channel for good, because jatos.js does not reopen a channel the server
+  closed.
+- **A participant reloads the study page.** Their experiment started over, so they can't rejoin.
+  The others count them as `left`, and on the reloaded page `jsPsych.multiplayer.restarted` is
+  `true` (see [Rejoining](../guides/handling-dropouts#rejoining)).
 - **`jsPsych.multiplayer.disconnect()`** leaves the JATOS group. The others see this participant
   become `away`, then `left`. Calling `connect()` again on the same page joins a group again, but
   JATOS chooses which one, so it may not be the same group.
@@ -193,7 +223,6 @@ responder. The [ultimatum game guide](../guides/ultimatum-game) builds the rest.
       const lobby = {
         type: jsPsychMultiplayerSync,
         participants: [],
-        push_data: { status: "ready" },
         wait_for: (group, presence) => {
           // Count the participants who are currently connected
           let connected = 0;

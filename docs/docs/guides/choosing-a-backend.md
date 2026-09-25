@@ -12,9 +12,12 @@ participants. You choose one per experiment and connect it in one line, before t
 runs:
 
 ```js
-jsPsych.multiplayer.connect(new jsPsychAdapterMultiplayerLocal()).then(() => {
-  jsPsych.run(timeline);
-});
+async function runExperiment() {
+  await jsPsych.multiplayer.connect(new jsPsychAdapterMultiplayerLocal());
+  await jsPsych.run(timeline);
+}
+
+runExperiment();
 ```
 
 Nothing else in the experiment depends on which adapter you chose. So the usual path is to
@@ -29,10 +32,29 @@ to collect data.
 | For real data collection | **no** | yes | yes |
 | Server you run | none | a JATOS server | none (Google hosts it) |
 | Setup | none | a JATOS group study | a Firebase project and its security rules |
-| Who forms groups | you, by sharing a link | JATOS | you, by sharing a link |
+| Who forms groups | you, by sharing a link | JATOS | you, by sharing a link, or the adapter with `matchmaking` |
+| Shared data capacity | about 5 MB for the whole group (browser `localStorage`) | the JATOS group session's limit, set by your JATOS server | 128 KB per participant with the recommended rules (can be raised) |
 | Cost | free | your server | free tier, then pay per use |
 | Recruitment and data storage | — | built into JATOS | yours to arrange |
 | Use it for | building, testing, demos | labs that already run JATOS | cross-device studies without a server |
+
+## How much data each backend holds
+
+Every write sends all of a participant's shared data, including what they wrote in earlier
+trials, and it stays there until the session ends. So a long study that shares a lot, such as
+many rounds of chat or drawing, can run into a backend's limit. When a write is too large, the
+backend rejects it, and none of that participant's later writes reach the group either.
+
+- **Local** keeps the whole group's data in the browser's `localStorage`, which holds about
+  5 MB per site. That is plenty for testing.
+- **JATOS** keeps the whole group's data in one JATOS group session. The size limit is part of
+  the JATOS server's configuration; ask your JATOS administrator before running a long study.
+- **Firebase** allows each participant up to 128 KB with the adapter's recommended security
+  rules. You can raise the limit in your rules; Firebase itself allows several megabytes.
+
+Most studies share only choices, scores, and short messages and stay far below these limits.
+Keep response times and full trial records in jsPsych's own data, which is not shared. See
+[How much data you can share](../reference/multiplayer-api#how-much-data-you-can-share).
 
 ## Local: for building and testing
 
@@ -54,15 +76,20 @@ The cost is the server: someone has to install JATOS, keep it secure and keep it
 nobody in your lab can do that, use Firebase.
 
 ```js
-jatos.onLoad(() => {
+jatos.onLoad(async () => {
   const jsPsych = initJsPsych({
     on_finish: () => jatos.endStudy(jsPsych.data.get().json()),
   });
-  jsPsych.multiplayer.connect(new jsPsychAdapterMultiplayerJatos()).then(() => {
-    jsPsych.run(timeline);
-  });
+  await jsPsych.multiplayer.connect(new jsPsychAdapterMultiplayerJatos());
+  await jsPsych.run(timeline);
 });
 ```
+
+JATOS forms the groups. When a group is full, the adapter seals it and makes sure every member
+sees the seal and the same final roster, so `jsPsych.multiplayer.waitForGroup()` works as a
+waiting room (see [Forming groups](forming-groups)). How long to wait for the connection, or
+for a dropped connection to come back, is set with jsPsych's own `connectTimeout` and
+`reconnectTimeout` options to `connect()`.
 
 ## Firebase: cross-device without a server
 
@@ -80,7 +107,11 @@ Three things to plan for:
   `jsPsych.multiplayer.waitForGroup()` holds matched participants in a waiting room until their
   group is full (see [Forming groups](../reference/adapter-multiplayer-firebase#forming-groups)).
 - **The configuration is public.** Anyone can read it from your experiment's page. The
-  security rules are what protect the data, so always deploy them.
+  security rules are what protect the data, so always deploy them. The rules let each
+  participant write only their own data: every connection claims its participant ID, and only
+  that sign-in can write it. If you used an earlier version of the adapter, deploy the new
+  rules from the [adapter's page](../reference/adapter-multiplayer-firebase#deploy-the-security-rules);
+  the old ones don't work with it (see [Upgrading from 0.x](upgrading)).
 - **Recruitment and saving the jsPsych data are up to you.** Firebase only carries the shared
   data between participants. Save each participant's jsPsych data the way you would in a
   single-player study, for example with [DataPipe](https://pipe.jspsych.org/).
@@ -93,6 +124,6 @@ and missed dropouts show up.
 
 ## Other backends
 
-An adapter is a small object with four methods, so connecting to another backend, such as your
+An adapter is a small object with a handful of methods, so connecting to another backend, such as your
 lab's own WebSocket server, does not require changing any experiment code. See [The adapter
 interface](../reference/multiplayer-api#the-adapter-interface).

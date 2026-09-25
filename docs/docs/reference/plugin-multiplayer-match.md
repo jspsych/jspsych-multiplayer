@@ -45,12 +45,12 @@ timeline.push({
 | `seed` | `string \| null` | `null` | Picks a different random grouping within the session. Randomness is seeded by the session ID (or the `randomSeed` connect option), so each group of participants gets its own grouping. |
 | `round` | `number` | `0` | The round number. With `"random"`, a new `round` gives new partners. |
 | `leftover` | `string` | `"error"` | What to do when the number of participants isn't a multiple of `group_size`: `"error"` stops the experiment with an error, `"spectator"` leaves the extra participants unmatched, and `"smaller_group"` puts them together in one smaller group. |
-| `ready` | `(group, presence) => boolean` | `null` | Your own condition for when the group is ready to split. `group` leaves out participants who have left. Both arguments are frozen. A throw counts as "not ready yet"; if the group never becomes ready, the last error is logged. |
-| `push_data` | `object` | `{}` | Extra fields to write to this participant's slot, merged alongside `joinedAt`. Must be plain JSON. |
+| `ready` | `(group, presence) => boolean` | `null` | Your own condition for when the group is ready to split. `group` holds the participants who have reached this trial and haven't left (see [How the group is split](#how-the-group-is-split)). Both arguments are frozen. A throw counts as "not ready yet"; if the group never becomes ready, the last error is logged. |
+| `write_data` | `object` | `{}` | Data this participant contributes to the split, for example for a custom `ready`. It is merged into this participant's part of the trial's shared data, so it never reaches another trial. Must be plain JSON: a `Date` arrives as a string, `undefined` values are dropped, and `BigInt` or circular data makes the write fail. |
 | `save_group` | `boolean` | `false` | Save the shared data the split was computed from, as `group`. |
-| `timeout` | `number \| null` | `30000` | The longest time to wait for the group to be ready, in ms. `null` or a negative number waits indefinitely; `0` gives up at once. |
-| `on_timeout` | `function \| null` | `null` | Called with the `jsPsych` instance if `timeout` runs out. The trial ends unmatched either way. |
-| `participants` | `string[] \| null` | `null` | The participants the match depends on. If one of them leaves before the group is ready, the trial ends unmatched with `partner_left: true`. `null` means every other participant who is connected when this trial starts. In a [sealed group](../guides/forming-groups), `null` means the rest of the group's members who haven't left, including any who are only `away`. `[]` ignores departures. |
+| `timeout` | `number \| null` | `30000` | The longest time to wait for the group to be ready, in ms. `null`, `0`, or a negative number waits indefinitely (not recommended). |
+| `on_timeout` | `function \| null` | `null` | Called with the `jsPsych` instance if `timeout` runs out. The trial ends unmatched, with `multiplayer_outcome: "timeout"`, either way. |
+| `participants` | `string[] \| null` | `null` | The participants the match depends on. If one of them leaves before the group is ready, the trial ends unmatched with `multiplayer_outcome: "participant_left"`. `null` means the other members of a [sealed group](../guides/forming-groups) who haven't left, or, without a sealed group, every other participant who is connected when this participant arrives. `[]` ignores departures. |
 | `message` | HTML string | `"<p>Finding your match…</p>"` | Shown while waiting. |
 
 ## Data
@@ -63,21 +63,27 @@ timeline.push({
 | `position` | `number \| null` | This participant's seat in `members`, from 0. `null` for a spectator or if the trial ended unmatched. |
 | `match_map` | `object \| null` | The whole split, `{ participantId: { group, members, partners, position } }`. Spectators are not in it. `null` if the trial ended unmatched. |
 | `matched_self` | `boolean` | Whether this participant was placed in a sub-group. Tells a spectator (`false`, but `match_map` is set) from a trial that ended unmatched (`match_map` is `null`). |
-| `timed_out` | `boolean` | `true` if the group was not ready before `timeout` ran out. |
-| `partner_left` | `boolean` | `true` if the trial ended because a participant in `participants` left. |
-| `left_participant` | `string \| null` | The ID of the participant who left, when `partner_left` is `true`. |
-| `connection_lost` | `boolean` | `true` if the trial ended because this participant's own connection was lost for good. |
-| `group` | `object` | The shared data the split was computed from. Only saved when `save_group` is `true`. |
+| `multiplayer_outcome` | `string` | How the trial ended: `"completed"`, `"timeout"` (the group was not ready before `timeout` ran out), `"participant_left"` (a participant in `participants` left), or `"connection_lost"` (this participant's own connection was lost for good). |
+| `left_participant` | `string \| null` | The ID of the participant who left, when `multiplayer_outcome` is `"participant_left"`. |
+| `group` | `object` | The snapshot the split was computed from. Only saved when `save_group` is `true`. |
 
-[Handling dropouts](../guides/handling-dropouts) explains `partner_left`, `left_participant`,
-`connection_lost`, and how to branch on them. If the experiment ends or is aborted while the
-trial is waiting, it stops without calling `on_timeout` and records no data.
+[Handling dropouts](../guides/handling-dropouts) explains `multiplayer_outcome`,
+`left_participant`, and how to branch on them. If the experiment ends or is aborted while the
+trial is waiting, it stops quietly: `on_timeout` isn't called and no data is recorded.
 
 ## How the group is split
 
-The trial merges `joinedAt` (the time this participant first reached a match trial; an existing
-`joinedAt` is kept) and `push_data` into this participant's slot, then waits until the group is
-ready:
+The trial writes `joinedAt` to this participant's session data, the time they first reached a match
+(or role) trial; it is written once and never changed, so `"join_order"` gives the same order in
+every later round. It also writes `write_data` to this participant's part of the trial's shared
+data.
+
+The split is computed from a snapshot that holds every participant who has reached **this** trial
+and hasn't left. Each entry is that participant's session data with their `write_data` merged over
+it, so `joinedAt`, or anything the page wrote with `{ scope: "session" }`, is visible, but data
+another trial wrote in its own part of the shared data is not.
+
+The trial waits until the group is ready:
 
 - participants who have left are dropped,
 - every remaining participant is `connected`,
@@ -117,14 +123,18 @@ The plugin keeps the latest match for later trials, through functions on the bro
 | `jsPsychMultiplayerMatch.getMyPosition()` | This participant's seat in the sub-group, from 0. |
 | `jsPsychMultiplayerMatch.getMatchMap()` | The whole split. |
 
-Apart from `getMyPartners()`, they return `undefined` before a match, for a spectator, and after a
-trial that ended unmatched.
+They read the data of the most recent match trial. Apart from `getMyPartners()`, they return
+`undefined` before a match, for a spectator, and after a trial that ended unmatched. On a page
+that runs more than one jsPsych instance, pass the instance, e.g.
+`jsPsychMultiplayerMatch.getMyPartners(jsPsych)`.
 
 ## Example
 
 Eight participants in random pairs, each pair playing one round of a prisoner's dilemma with
-[`multiplayer-choice`](plugin-multiplayer-choice). Each pair gets its own `data_key`, so pairs
-don't count each other's choices:
+[`multiplayer-choice`](plugin-multiplayer-choice). Everyone runs the same choice trial, so by
+default all eight would share one part of the shared data and count each other's choices.
+`multiplayer_scope` gives each pair its own part, `expected_players` counts only the pair's
+members, and `participants` makes the trial go on if this participant's partner leaves:
 
 ```js
 const match = {
@@ -141,13 +151,8 @@ const pairedRound = {
       type: jsPsychMultiplayerChoice,
       prompt: "<p>Cooperate or defect?</p>",
       choices: ["Cooperate", "Defect"],
-      data_key: () => {
-        // Build a key that is the same for everyone in this pair: sort their IDs and join them.
-        // slice() makes a copy, so sorting doesn't change the plugin's own list.
-        const members = jsPsychMultiplayerMatch.getMyMatch().members.slice();
-        members.sort();
-        return "pd_" + members.join("_");
-      },
+      // Give each pair its own part of the shared data, so pairs don't count each other's choices
+      multiplayer_scope: () => "pd-" + jsPsychMultiplayerMatch.getMyGroup(),
       expected_players: () => jsPsychMultiplayerMatch.getMyMatch().members.length,
       participants: () => jsPsychMultiplayerMatch.getMyPartners(),
     },
@@ -157,3 +162,6 @@ const pairedRound = {
 
 timeline.push(lobby, match, pairedRound);
 ```
+
+`multiplayer_scope` is used exactly as written, so if you repeat the round, put the round number
+in the name too, e.g. `` () => `pd-${round}-${jsPsychMultiplayerMatch.getMyGroup()}` ``.
