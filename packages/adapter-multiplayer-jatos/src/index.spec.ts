@@ -8,7 +8,8 @@ import {
 } from "jspsych";
 
 import { scopeData } from "../../../test-utils/memory-backend";
-import JatosAdapter, { SEALED_KEY } from ".";
+import JatosAdapter from ".";
+import { SEALED_KEY } from "./sealed-key";
 
 /**
  * These tests drive the adapter against a mock of the `jatos` global injected by jatos.js.
