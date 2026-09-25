@@ -8,9 +8,10 @@
  * partners locally with no coordinator and no extra round-trip — exactly the property
  * `plugin-multiplayer-role` relies on for role assignment.
  *
- * The ordering/hash/PRNG helpers are copied from the role plugin's `roles.ts` so this package is
- * self-contained (the repo's per-package mirror convention); they must stay behaviourally identical
- * for the consensus guarantee.
+ * When the plugin runs, the `"random"` shuffle comes from the session (`jsPsych.multiplayer.shuffle`,
+ * injected as `opts.shuffle`), which is seeded by the session ID so each group gets its own grouping.
+ * Without an injected shuffle (pure use, no session), `"random"` falls back to the private hash/PRNG
+ * helpers below, seeded by `opts.seed` or the sorted ids + `round`.
  */
 
 /** A group-session snapshot: participantId -> that participant's pushed data. */
@@ -38,15 +39,24 @@ export interface MatchOptions {
    * How participants are ordered before being chunked into groups:
    *   - `"ordered"` (default): by participantId (stable, arbitrary-but-consistent pairings).
    *   - `"join_order"`: by pushed `joinedAt`, then id.
-   *   - `"random"`: a seeded Fisher–Yates shuffle. The seed defaults to a hash of the sorted ids +
-   *     `round`, so pairings are unpredictable-by-id yet identical on every client, and change each
-   *     round (increment `round` to re-pair).
+   *   - `"random"`: a shared shuffle, keyed by `seed` + `round`, so pairings are unpredictable-by-id
+   *     yet identical on every client, and change each round (increment `round` to re-pair). Uses
+   *     `shuffle` when given; otherwise a seeded Fisher–Yates over `${sortedIds}#${round}` (or `seed`).
    */
   strategy?: "ordered" | "join_order" | "random";
-  /** Shared seed for `"random"`; defaults to `${sortedIds}#${round}`. */
+  /**
+   * Picks a different `"random"` grouping. With `shuffle`, it becomes part of the shuffle key; without
+   * it, it replaces the default `${sortedIds}#${round}` PRNG seed.
+   */
   seed?: string;
   /** Round index, for per-round `"random"` re-pairing. */
   round?: number;
+  /**
+   * Shared shuffle for `"random"`, e.g. `(key, ids) => jsPsych.multiplayer.shuffle(key, ids)`. Must
+   * return the same order for the same `key` and `ids` on every client. Called with the sorted ids and
+   * `key = JSON.stringify(["plugin-multiplayer-match", seed ?? null, round])`.
+   */
+  shuffle?: (key: string, ids: string[]) => string[];
   /**
    * What to do when the participant count is not a multiple of `groupSize`:
    *   - `"error"` (default): throw (fail loud) — the caller must supply a divisible group.
@@ -101,6 +111,12 @@ function orderParticipants(snapshot: Snapshot, opts: MatchOptions): string[] {
         (a, b) => (snapshot[a]?.joinedAt ?? 0) - (snapshot[b]?.joinedAt ?? 0) || byId(a, b),
       );
     case "random": {
+      if (opts.shuffle) {
+        return opts.shuffle(
+          JSON.stringify(["plugin-multiplayer-match", opts.seed ?? null, round]),
+          [...ids],
+        );
+      }
       const seed = opts.seed ?? `${ids.join("|")}#${round}`; // shared seed, per round, no coordinator
       const rnd = mulberry32(hashSeed(seed));
       const arr = [...ids]; // Fisher–Yates with the shared PRNG

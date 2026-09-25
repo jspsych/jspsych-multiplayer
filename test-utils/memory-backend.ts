@@ -20,6 +20,9 @@ import {
 } from "jspsych";
 
 export class MemoryHub {
+  /** Every connection to this hub reports this session ID. */
+  sessionId = "memory-session";
+
   data: GroupSessionData = {};
   connections = new Set<MemoryConnection>();
 
@@ -93,11 +96,15 @@ export class MemoryConnection implements MultiplayerConnection {
   /** Replace to control when and how pushes settle. Call `write(data)` to store the data. */
   pushImpl: (data: Record<string, unknown>) => Promise<void> = async (data) => this.write(data);
 
+  readonly sessionId: string;
+
   constructor(
     readonly hub: MemoryHub,
     readonly participantId: string,
     readonly options: AdapterConnectOptions,
-  ) {}
+  ) {
+    this.sessionId = hub.sessionId;
+  }
 
   /** Store data on the hub and broadcast it, as a confirmed push does. */
   write(data: Record<string, unknown>) {

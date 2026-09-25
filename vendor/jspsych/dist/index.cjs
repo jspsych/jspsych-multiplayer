@@ -576,6 +576,114 @@ class MultiplayerConnectionClosedError extends Error {
   }
 }
 
+function cyrb128(str) {
+  let h1 = 1779033703;
+  let h2 = 3144134277;
+  let h3 = 1013904242;
+  let h4 = 2773480762;
+  for (let i = 0; i < str.length; i++) {
+    const k = str.charCodeAt(i);
+    h1 = h2 ^ Math.imul(h1 ^ k, 597399067);
+    h2 = h3 ^ Math.imul(h2 ^ k, 2869860233);
+    h3 = h4 ^ Math.imul(h3 ^ k, 951274213);
+    h4 = h1 ^ Math.imul(h4 ^ k, 2716044179);
+  }
+  h1 = Math.imul(h3 ^ h1 >>> 18, 597399067);
+  h2 = Math.imul(h4 ^ h2 >>> 22, 2869860233);
+  h3 = Math.imul(h1 ^ h3 >>> 17, 951274213);
+  h4 = Math.imul(h2 ^ h4 >>> 19, 2716044179);
+  h1 ^= h2 ^ h3 ^ h4;
+  h2 ^= h1;
+  h3 ^= h1;
+  h4 ^= h1;
+  return [h1 >>> 0, h2 >>> 0, h3 >>> 0, h4 >>> 0];
+}
+function sfc32(a, b, c, d) {
+  return () => {
+    const t = (a + b | 0) + d | 0;
+    d = d + 1 | 0;
+    a = b ^ b >>> 9;
+    b = c + (c << 3) | 0;
+    c = c << 21 | c >>> 11;
+    c = c + t | 0;
+    return (t >>> 0) / 4294967296;
+  };
+}
+const WARM_UP = 15;
+function assertKey(key) {
+  if (typeof key !== "string" || key === "") {
+    throw new TypeError(
+      "MultiplayerAPI: random values need a non-empty string key that names what they are for."
+    );
+  }
+}
+function assertArray(array) {
+  if (!Array.isArray(array)) {
+    throw new TypeError("MultiplayerAPI: expected an array.");
+  }
+}
+class SharedRandom {
+  constructor(seed) {
+    this.seed = seed;
+  }
+  /**
+   * A fresh generator for one call. The method name is part of the hash so
+   * that, for example, random("x") and shuffle("x", ...) aren't correlated.
+   */
+  generator(method, key) {
+    const next = sfc32(...cyrb128(JSON.stringify([this.seed, method, key])));
+    for (let i = 0; i < WARM_UP; i++) {
+      next();
+    }
+    return next;
+  }
+  /** A float in [0, 1). */
+  random(key) {
+    assertKey(key);
+    return this.generator("random", key)();
+  }
+  /** An integer from `lower` to `upper`, inclusive. */
+  randomInt(key, lower, upper) {
+    assertKey(key);
+    if (!Number.isSafeInteger(lower) || !Number.isSafeInteger(upper)) {
+      throw new TypeError("MultiplayerAPI: randomInt() bounds must be integers.");
+    }
+    if (upper < lower) {
+      throw new RangeError("MultiplayerAPI: randomInt() upper bound must be at least the lower.");
+    }
+    return lower + Math.floor(this.generator("randomInt", key)() * (upper - lower + 1));
+  }
+  /** A shuffled copy of `array`. The array itself is left unchanged. */
+  shuffle(key, array) {
+    assertKey(key);
+    assertArray(array);
+    const next = this.generator("shuffle", key);
+    const result = [...array];
+    for (let i = result.length - 1; i > 0; i--) {
+      const j = Math.floor(next() * (i + 1));
+      [result[i], result[j]] = [result[j], result[i]];
+    }
+    return result;
+  }
+  /** `size` items drawn from `array` without replacement, in random order. */
+  sample(key, array, size) {
+    assertKey(key);
+    assertArray(array);
+    if (!Number.isSafeInteger(size) || size < 0 || size > array.length) {
+      throw new RangeError(
+        "MultiplayerAPI: sample() size must be an integer from 0 to the array's length."
+      );
+    }
+    const next = this.generator("sample", key);
+    const result = [...array];
+    for (let i = 0; i < size; i++) {
+      const j = i + Math.floor(next() * (result.length - i));
+      [result[i], result[j]] = [result[j], result[i]];
+    }
+    return result.slice(0, size);
+  }
+}
+
 const MAX_TIMEOUT = 2 ** 31 - 1;
 const MAX_NOTIFY_ROUNDS = 100;
 const DEFAULT_DROPOUT_TIMEOUT = 1e4;
@@ -685,6 +793,17 @@ class MultiplayerSession {
     this.inFlightBatch = null;
     autoBind(this);
     this.participantId = connection.participantId;
+    if (typeof connection.sessionId !== "string" || connection.sessionId === "") {
+      throw new TypeError(
+        "MultiplayerAPI: the adapter's connection must have a non-empty sessionId."
+      );
+    }
+    this.sessionId = connection.sessionId;
+    const { randomSeed } = options;
+    if (randomSeed !== void 0 && typeof randomSeed !== "string") {
+      throw new TypeError("MultiplayerAPI: randomSeed must be a string.");
+    }
+    this.rng = new SharedRandom(randomSeed ?? this.sessionId);
     this.dropoutTimeout = options.dropoutTimeout === void 0 ? DEFAULT_DROPOUT_TIMEOUT : toTimeout(options.dropoutTimeout);
     this.remoteJson = JSON.stringify(connection.getAll() ?? {});
     const { data, metas } = splitMeta(fromJson(this.remoteJson));
@@ -757,6 +876,26 @@ class MultiplayerSession {
   /** The presence status of every participant seen in the session, including this one. Frozen. */
   presence() {
     return this.presenceData;
+  }
+  // ---------------------------------------------------------- randomness
+  /**
+   * A float in [0, 1) that is the same for every participant who asks with the
+   * same `key`. Asking again with the same key returns the same value.
+   */
+  random(key) {
+    return this.rng.random(key);
+  }
+  /** An integer from `lower` to `upper`, inclusive, shared like random(). */
+  randomInt(key, lower, upper) {
+    return this.rng.randomInt(key, lower, upper);
+  }
+  /** A shuffled copy of `array`, in the same order for every participant who uses `key`. */
+  shuffle(key, array) {
+    return this.rng.shuffle(key, array);
+  }
+  /** `size` items drawn from `array` without replacement, shared like shuffle(). */
+  sample(key, array, size) {
+    return this.rng.sample(key, array, size);
   }
   // ---------------------------------------------------------------- writing
   /**
@@ -1287,6 +1426,13 @@ class MultiplayerAPI {
     return this.current?.participantId ?? null;
   }
   /**
+   * The group session's ID, the same for every participant in the group. Null
+   * until connect() resolves and after disconnect().
+   */
+  get sessionId() {
+    return this.current?.sessionId ?? null;
+  }
+  /**
    * Set when this participant's slot came from an earlier page load: they
    * reloaded or reopened the study, so the group is ahead of them. Null
    * otherwise, and when there is no session.
@@ -1394,6 +1540,25 @@ class MultiplayerAPI {
   /** Resolve with the group session once `condition` returns true. */
   async wait(condition, options) {
     return this.requireSession().wait(condition, options);
+  }
+  /**
+   * A float in [0, 1) that is the same for every participant who asks with the
+   * same `key`. Asking again with the same key returns the same value.
+   */
+  random(key) {
+    return this.requireSession().random(key);
+  }
+  /** An integer from `lower` to `upper`, inclusive, shared like random(). */
+  randomInt(key, lower, upper) {
+    return this.requireSession().randomInt(key, lower, upper);
+  }
+  /** A shuffled copy of `array`, in the same order for every participant who uses `key`. */
+  shuffle(key, array) {
+    return this.requireSession().shuffle(key, array);
+  }
+  /** `size` items drawn from `array` without replacement, shared like shuffle(). */
+  sample(key, array, size) {
+    return this.requireSession().sample(key, array, size);
   }
   /**
    * Remove every subscription on the current session and reject its pending

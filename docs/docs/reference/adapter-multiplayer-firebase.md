@@ -50,7 +50,7 @@ Pass these to the constructor. Give either `firebaseConfig` or `database`; if yo
 | --- | --- | --- | --- |
 | `firebaseConfig` | `object` | — | Your web app's Firebase config object, from the Firebase console. The adapter starts its own Firebase app from it. |
 | `database` | `Database` | — | A Realtime Database you have already set up with the Firebase SDK. Use this instead of `firebaseConfig` when your page already uses Firebase, or to connect to the emulator. You are then responsible for its sign-in settings. |
-| `sessionId` | `string` | the `?mp_session=` URL parameter, or a new random ID | Which session (group) to join. If the URL has no `mp_session` parameter, the adapter makes a new ID and adds it to the URL. |
+| `sessionId` | `string` | the `?mp_session=` URL parameter, or a new random ID | Which session (group) to join. If the URL has no `mp_session` parameter, the adapter makes a new ID and adds it to the URL. It is also the session ID that seeds [shared randomness](multiplayer-api#shared-randomness). |
 | `participantId` | `string` | a new random ID | This participant's ID. Cannot be combined with `useUidAsParticipantId`. |
 | `useUidAsParticipantId` | `boolean` | `false` | Use the participant's anonymous Firebase sign-in ID as their participant ID. The recommended security rules require this. |
 | `sessionBinding` | `boolean` | same as `useUidAsParticipantId` | Record which session this participant joined, so the recommended rules can keep them out of every other session. Set it to `false` with the prototyping rules, which do not allow that record. |

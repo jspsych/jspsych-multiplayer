@@ -8,8 +8,8 @@
  *
  * It owns:
  *  - the deterministic per-participant scramble (seeded hash + Fisher–Yates, same helpers as the
- *    role plugin's `random` strategy) that gives the director and matcher different-but-stable
- *    layouts;
+ *    role plugin's `random` strategy, or an injected session `shuffle`) that gives the director and
+ *    matcher different-but-stable layouts;
  *  - the slot-assignment model (the matcher's `slot -> objectId` map, 1-based slots);
  *  - scoring (`per_slot`, `all_or_nothing`, or a custom function; ordered vs unordered comparison);
  *  - per-round group-session data read/merge helpers (namespaced under `data_key[round]`, mirroring
@@ -91,8 +91,21 @@ export function mulberry32(a: number): () => number {
   };
 }
 
-/** Seeded Fisher–Yates shuffle. Pure: returns a NEW array, same seed -> same order, every time. */
-export function scramble(ids: string[], seed: string): string[] {
+/**
+ * A keyed shuffle supplied by the caller — in the trial, `jsPsych.multiplayer.shuffle`, which is
+ * seeded by the session so every participant in the group gets the same order for the same key.
+ */
+export type ShuffleFn = (key: string, ids: string[]) => string[];
+
+/**
+ * Seeded Fisher–Yates shuffle. Pure: returns a NEW array, same seed -> same order, every time.
+ *
+ * With `shuffle`, the order comes from it instead, keyed by the plugin name plus `seed`, so the
+ * result also depends on whatever seeds `shuffle` (the session).
+ */
+export function scramble(ids: string[], seed: string, shuffle?: ShuffleFn): string[] {
+  if (shuffle)
+    return shuffle(JSON.stringify(["plugin-multiplayer-reference-game", seed]), [...ids]);
   const rnd = mulberry32(hashSeed(seed));
   const arr = [...ids];
   for (let i = arr.length - 1; i > 0; i--) {
@@ -146,6 +159,8 @@ function rotated(order: string[]): string[] {
  * normally succeeds within a few salts; the loop is nevertheless bounded and falls back to rotating
  * the lo order, which cannot have a fixed point. Disjointness is impossible for a single object, so
  * it is skipped there.
+ *
+ * `shuffle` (optional) is passed through to every `scramble`; each re-salt uses a distinct key.
  */
 export function independentOrders(
   ids: string[],
@@ -154,11 +169,12 @@ export function independentOrders(
   idB: string,
   seed?: string | null,
   disjoint = false,
+  shuffle?: ShuffleFn,
 ): Record<string, string[]> {
   const base = seed ?? "";
   const [lo, hi] = idA < idB ? [idA, idB] : [idB, idA];
-  const loOrder = scramble(ids, `${base}#${round}#${lo}`);
-  let hiOrder = scramble(ids, `${base}#${round}#${hi}`);
+  const loOrder = scramble(ids, `${base}#${round}#${lo}`, shuffle);
+  let hiOrder = scramble(ids, `${base}#${round}#${hi}`, shuffle);
 
   const unacceptable = (candidate: string[]) =>
     ids.length > 1 &&
@@ -169,7 +185,7 @@ export function independentOrders(
   const MAX_RESALTS = 100;
   let salt = 1;
   while (unacceptable(hiOrder) && salt <= MAX_RESALTS) {
-    hiOrder = scramble(ids, `${base}#${round}#${hi}#${salt++}`);
+    hiOrder = scramble(ids, `${base}#${round}#${hi}#${salt++}`, shuffle);
   }
   if (unacceptable(hiOrder)) hiOrder = rotated(loOrder);
 
@@ -195,6 +211,9 @@ export function independentOrders(
  *  - `"shared"`:      seeded by (seed, round) only — identical on both clients.
  *  - `"matcher_only"`: the matcher scrambles as in independent; the director sees the canonical
  *    `stimuli` order.
+ *
+ * With `shuffle` (the session's shared shuffle), every scramble goes through it, so the layouts also
+ * depend on the session; both clients still compute identical orders for the same inputs.
  */
 export function displayOrder(
   ids: string[],
@@ -204,22 +223,31 @@ export function displayOrder(
   participantId: string,
   seed?: string | null,
   partnerId?: string | null,
+  shuffle?: ShuffleFn,
 ): string[] {
   const base = seed ?? "";
   switch (mode) {
     case "shared":
-      return scramble(ids, `${base}#${round}#shared`);
+      return scramble(ids, `${base}#${round}#shared`, shuffle);
     case "matcher_only":
-      return role === "matcher" ? scramble(ids, `${base}#${round}#${participantId}`) : [...ids];
+      return role === "matcher"
+        ? scramble(ids, `${base}#${round}#${participantId}`, shuffle)
+        : [...ids];
     case "independent":
     case "disjoint":
     default:
       if (partnerId != null && partnerId !== participantId) {
-        return independentOrders(ids, round, participantId, partnerId, seed, mode === "disjoint")[
-          participantId
-        ];
+        return independentOrders(
+          ids,
+          round,
+          participantId,
+          partnerId,
+          seed,
+          mode === "disjoint",
+          shuffle,
+        )[participantId];
       }
-      return scramble(ids, `${base}#${round}#${participantId}`);
+      return scramble(ids, `${base}#${round}#${participantId}`, shuffle);
   }
 }
 

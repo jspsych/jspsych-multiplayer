@@ -40,7 +40,7 @@ Pass these to the constructor, for example
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `sessionId` | `string` | the `?mp_session=` URL parameter, or a new random ID | Which session this tab joins. Tabs with the same session ID play together. If the URL has no `mp_session` parameter, the adapter makes a new ID and adds it to the URL. Must not contain `:`. |
+| `sessionId` | `string` | the `?mp_session=` URL parameter, or a new random ID | Which session this tab joins. Tabs with the same session ID play together. If the URL has no `mp_session` parameter, the adapter makes a new ID and adds it to the URL. Must not contain `:`. It is also the session ID that seeds [shared randomness](multiplayer-api#shared-randomness). |
 | `participantId` | `string` | a new random ID | This tab's participant ID. Must not contain `:`. |
 | `persistParticipant` | `boolean` | `false` | Keep the same participant ID when the tab is reloaded. The reload restarted the experiment, so the other tabs keep that participant `left`, and the reloaded page sees `previousInstance`. Without it, a reload joins as a new participant. Ignored if you set `participantId`. |
 | `keyPrefix` | `string` | `"mp"` | The prefix of the keys the adapter writes to `localStorage`. Change it only if another page on the same site already uses `mp:` keys. |

@@ -22,10 +22,10 @@ export interface Ctx {
   ids: string[];
   round: number;
   /**
-   * The explicit `seed` option, or `""` if none was given. NOTE: this is NOT the default seed the
-   * built-in `random` strategy derives (`${sortedIds}#${round}`) — that is computed internally and
-   * never surfaced here. A custom strategy that wants per-round randomness should derive its own seed
-   * (e.g. from `ids`/`round`) rather than relying on `ctx.seed` being populated.
+   * The explicit `seed` option, or `""` if none was given. NOTE: this is NOT what the built-in
+   * `random` strategy is seeded by (the session, or `${sortedIds}#${round}` without one) — that is
+   * never surfaced here. A custom strategy that wants per-round randomness should use
+   * `jsPsych.multiplayer.shuffle`/`random` with its own key rather than relying on `ctx.seed`.
    */
   seed: string;
 }
@@ -34,8 +34,17 @@ export interface AssignOptions {
   /** `["proposer","responder"]` or `{ leader: 1, follower: 3 }`. */
   roles: string[] | Record<string, number>;
   strategy?: "join_order" | "random" | "rotate" | ((s: Snapshot, ctx: Ctx) => RoleMap);
-  /** Shared seed for "random"; defaults to a hash of the sorted ids + round. */
+  /**
+   * For "random": picks a different shuffle within the session. With `shuffle` it is part of the
+   * shuffle key; without it, it replaces the fallback seed (a hash of the sorted ids + round).
+   */
   seed?: string;
+  /**
+   * Shared shuffle for "random", normally `jsPsych.multiplayer.shuffle`, which is seeded by the
+   * session ID (or the `randomSeed` connect option) so every client gets the same order and each
+   * group gets its own. Omit it to use the local seeded PRNG (calling assignRoles without a session).
+   */
+  shuffle?: (key: string, ids: string[]) => string[];
   /** Round index, for "rotate" / per-round "random". */
   round?: number;
   /** For "rotate": use a balanced (Latin-square) rotation instead of a simple shift. */
@@ -58,7 +67,7 @@ export function expandSlots(roles: AssignOptions["roles"]): string[] {
   return Object.entries(roles).flatMap(([role, n]) => Array(n).fill(role));
 }
 
-/** Deterministic string hash (cyrb53-style mix) so "random" is identical on every client. */
+/** Deterministic string hash (cyrb53-style mix) for the fallback "random" seed (no session). */
 export function hashSeed(str: string): number {
   let h = 1779033703 ^ str.length;
   for (let i = 0; i < str.length; i++) {
@@ -88,7 +97,10 @@ export function balancedRotationShift(n: number, round: number): number {
   return k % 2 === 0 ? k >> 1 : n - 1 - (k >> 1);
 }
 
-/** Seeded PRNG (mulberry32). Same seed -> same sequence on every client. */
+/**
+ * Seeded PRNG (mulberry32). Same seed -> same sequence on every client. Used by "random" only when
+ * assignRoles is called without a session `shuffle`.
+ */
 export function mulberry32(a: number): () => number {
   return () => {
     a |= 0;
@@ -137,6 +149,12 @@ function orderParticipants(snapshot: Snapshot, opts: AssignOptions, ctx: Ctx): s
       return base.slice(k).concat(base.slice(0, k));
     }
     case "random": {
+      if (opts.shuffle) {
+        // Session-shared randomness: the key fixes the shuffle per seed + round within the session.
+        const key = JSON.stringify(["plugin-multiplayer-role", opts.seed ?? null, ctx.round]);
+        return opts.shuffle(key, [...ids]);
+      }
+      // Fallback without a session: a local PRNG seeded from values every client shares.
       const seed = opts.seed ?? `${ids.join("|")}#${ctx.round}`; // shared seed, per round, no coordinator
       const rnd = mulberry32(hashSeed(seed));
       const arr = [...ids]; // Fisher–Yates with the shared PRNG

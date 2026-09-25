@@ -47,6 +47,7 @@ describe("FirebaseAdapter — connect", () => {
     const connection = await makeAdapter(new FakeBackend({ rtdb })).connect(makeOptions());
 
     expect(connection.participantId).toBe("me");
+    expect(connection.sessionId).toBe(SESSION);
     expect(connection.getAll()).toEqual({ peer: { hello: "world" } });
     expect(connection.connectedParticipants().sort()).toEqual(["me", "peer"]);
   });

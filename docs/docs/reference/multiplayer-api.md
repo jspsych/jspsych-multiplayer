@@ -63,6 +63,24 @@ counter it writes into each slot under `$mp`. A trial that already ended because
 participant left stays ended. See [Handling dropouts](/guides/handling-dropouts#rejoining)
 for a recipe that waits for a partner to come back.
 
+### Shared randomness
+
+`random()`, `randomInt()`, `shuffle()`, and `sample()` give every participant in the group
+the same values without sending anything, so the group can agree on a condition or a
+stimulus order. `Math.random()` and `jsPsych.randomization` give each participant different
+values. Each call takes a **key** that names what the value is for:
+
+```js
+const [condition] = jsPsych.multiplayer.sample("condition", ["gain", "loss"], 1);
+const order = jsPsych.multiplayer.shuffle(`round-${round}-stimuli`, stimuli);
+```
+
+A value depends only on the key, the method, and the session's seed, so call order and
+extra calls don't matter, and a participant who reloads gets the values they had before.
+Use a new key for each random event (put the round in it), and make sure every participant
+uses the same key. The seed is the adapter's session ID, so each group gets different values;
+pass the same `randomSeed` to `connect()` to get the same values in every session.
+
 ## Methods
 
 ### `connect(adapter, options?): Promise<MultiplayerSession>`
@@ -86,22 +104,25 @@ runExperiment();
 Top-level `await` only works in `<script type="module">`, so wrap the two calls in an
 `async` function for a classic `<script>` tag.
 
-| Option                   | Description                                                                                                                          |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `dropoutTimeout`         | How long, in ms, a participant can stay disconnected before they count as `left`. Default `10000`; `null` or `Infinity` means never. |
-| `onParticipantLeft`      | Called with a participant's ID when they become `left`.                                                                              |
-| `onParticipantRejoined`  | Called with a participant's ID when a participant who had `left` comes back from the same page.                                      |
-| `onParticipantRestarted` | Called with a participant's ID when they come back from a new page load. Their experiment restarted, so they stay `left`.            |
-| `onStatusChange`         | Called with this participant's new connection status.                                                                                |
-| `signal`                 | An `AbortSignal` that cancels a `connect()` still in progress.                                                                       |
+| Option                   | Description                                                                                                                           |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `randomSeed`             | Seed for [shared randomness](#shared-randomness) in place of the session ID. Every participant in the group must pass the same value. |
+| `dropoutTimeout`         | How long, in ms, a participant can stay disconnected before they count as `left`. Default `10000`; `null` or `Infinity` means never.  |
+| `onParticipantLeft`      | Called with a participant's ID when they become `left`.                                                                               |
+| `onParticipantRejoined`  | Called with a participant's ID when a participant who had `left` comes back from the same page.                                       |
+| `onParticipantRestarted` | Called with a participant's ID when they come back from a new page load. Their experiment restarted, so they stay `left`.             |
+| `onStatusChange`         | Called with this participant's new connection status.                                                                                 |
+| `signal`                 | An `AbortSignal` that cancels a `connect()` still in progress.                                                                        |
 
 `connect()` rejects if a session is already open or connecting; call `disconnect()` first. A
 session whose connection was lost can be replaced directly. A cancelled `connect()` rejects
 with a `MultiplayerCancelledError` once the adapter has closed anything it opened.
 
-### `participantId`, `status`, `previousInstance`, `session`
+### `participantId`, `sessionId`, `status`, `previousInstance`, `session`
 
 - `participantId: string | null` — this participant's ID; `null` without a session.
+- `sessionId: string | null` — the group session's ID, reported by the adapter. The same for
+  every participant in the group and across reloads; `null` without a session.
 - `status: "connected" | "reconnecting" | "closed" | null` — this participant's connection.
 - `previousInstance: string | null` — set when this participant's slot came from an earlier
   page load: they reloaded or reopened the study, so the group has moved on without them.
@@ -179,6 +200,15 @@ Compare `error.name`, not `instanceof`, which fails when a page loads two copies
 reduce to. `plugin-multiplayer-sync` packages that pair as one declarative trial, and is
 usually the better choice for experiment code.
 
+### `random(key)`, `randomInt(key, lower, upper)`, `shuffle(key, array)`, `sample(key, array, size)`
+
+Shared counterparts of `Math.random()`, `jsPsych.randomization.randomInt()`,
+`jsPsych.randomization.shuffle()`, and `jsPsych.randomization.sampleWithoutReplacement()`.
+Every participant who passes the same key (and the same array) gets the same result; see
+[Shared randomness](#shared-randomness). `random()` returns a number in [0, 1), `randomInt()`
+an integer from `lower` to `upper` inclusive, `shuffle()` a shuffled copy, and `sample()`
+`size` items drawn without replacement. `key` must be a non-empty string.
+
 ### `cancelAllSubscriptions(): void`
 
 Removes every subscription on the current session and rejects its pending `wait()` calls
@@ -206,6 +236,7 @@ interface MultiplayerAdapter {
 
 interface MultiplayerConnection {
   readonly participantId: string;
+  readonly sessionId: string; // the same for everyone in the group, and across reloads
   getAll(): GroupSessionData;
   connectedParticipants(): string[];
   push(data: Record<string, unknown>): Promise<void>;
@@ -220,6 +251,8 @@ have data. `update()`, `wait()`, subscriptions, copying, and presence are all bu
 API on top of these methods, so an adapter does not implement them. For rejoining to work,
 an adapter keeps the same `participantId` for every connection made from the same page, and
 reports `"reconnecting"` then `"connected"` whenever other participants may have seen it drop
-out. It stores and returns the reserved `$mp` key like any other data. jsPsych's
+out. Its `sessionId` names the group: the same non-empty string for every participant in it,
+for every connection and page load, and different for each group. Shared randomness is seeded
+with it. It stores and returns the reserved `$mp` key like any other data. jsPsych's
 "Multiplayer Adapter Development" page, part of
 [jsPsych#3694](https://github.com/jspsych/jsPsych/pull/3694), covers each method in detail.

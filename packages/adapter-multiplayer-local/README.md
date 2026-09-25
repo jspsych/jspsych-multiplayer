@@ -42,7 +42,7 @@ By default a **page refresh starts a new participant**. The old tab's data slot 
 
 ```js
 new jsPsychAdapterMultiplayerLocal({
-  sessionId,           // override the ?mp_session= namespace
+  sessionId,           // override the ?mp_session= namespace (also seeds shared randomness)
   participantId,       // override this tab's id (default: random per tab)
   persistParticipant,  // true → keep the same id across reloads (sessionStorage)
   keyPrefix,           // storage-key prefix (default "mp")

@@ -155,6 +155,7 @@ export default class LocalAdapter implements MultiplayerAdapter {
  */
 class LocalConnection implements MultiplayerConnection {
   readonly participantId: string;
+  readonly sessionId: string;
 
   private closed = false;
   private readonly signal: ChangeSignal;
@@ -189,6 +190,7 @@ class LocalConnection implements MultiplayerConnection {
     private readonly options: AdapterConnectOptions,
   ) {
     this.participantId = config.participantId;
+    this.sessionId = config.sessionId;
     this.ownsSignal = !config.signal;
     this.signal =
       config.signal ??

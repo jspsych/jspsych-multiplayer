@@ -88,6 +88,12 @@ import. From a copy of the repository, run `npm install`, `npm run build`, then
 **Import Study** button. It is already marked as a group study, and its batch has no group-size
 limits.
 
+## Session ID
+
+The adapter reports the JATOS group result ID as the session ID. Every member of a JATOS group
+shares it, so each group gets its own
+[shared random values](multiplayer-api#shared-randomness).
+
 ## Presence and dropouts
 
 The adapter counts a participant as connected while their JATOS group connection is open.

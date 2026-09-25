@@ -9,8 +9,9 @@ import MultiplayerMatchPlugin from ".";
  * against the actual core (frozen snapshots, presence, errors) while `finishTrial` is captured.
  * `api.seed(id, data)` writes another participant's slot, as if they had written it.
  */
-async function setup(participantId = "a", connect?: ConnectOptions) {
+async function setup(participantId = "a", connect?: ConnectOptions, sessionId?: string) {
   const hub = new MemoryHub();
+  if (sessionId) hub.sessionId = sessionId;
   const me = await hub.join(participantId, { connect });
   const multiplayer = me.jsPsych.multiplayer;
   const finished: Array<Record<string, any>> = [];
@@ -152,6 +153,64 @@ describe("plugin-multiplayer-match — trial wrapper", () => {
     // Same partners for each id regardless of who is "me" or key order (consensus).
     expect(m1.a.partners).toEqual(m2.a.partners);
     expect(m1.d.partners).toEqual(m2.d.partners);
+  });
+
+  it("random strategy gives every participant in the session the same grouping", async () => {
+    const hub = new MemoryHub();
+    const ids = ["a", "b", "c", "d", "e", "f"];
+    const players = await Promise.all(ids.map((id) => hub.join(id)));
+    const maps = await Promise.all(
+      players.map(async ({ jsPsych }) => {
+        const finished: Array<Record<string, any>> = [];
+        const stub = {
+          multiplayer: jsPsych.multiplayer,
+          finishTrial: (data: Record<string, any>) => finished.push(data),
+        };
+        await new MultiplayerMatchPlugin(stub as never).trial(display(), {
+          ...base,
+          expected_players: 6,
+          strategy: "random",
+          round: 3,
+        } as never);
+        return finished[0].match_map;
+      }),
+    );
+    maps.forEach((map) => expect(map).toEqual(maps[0]));
+  });
+
+  describe("random strategy is seeded by the session", () => {
+    const ids = ["a", "b", "c", "d", "e", "f"];
+    const run = async (round: number, sessionId: string, connect?: ConnectOptions) => {
+      const { api, jsPsych, finished } = await setup(ids[0], connect, sessionId);
+      ids.slice(1).forEach((id) => api.seed(id, {}));
+      await new MultiplayerMatchPlugin(jsPsych as never).trial(display(), {
+        ...base,
+        expected_players: ids.length,
+        strategy: "random",
+        round,
+      } as never);
+      return finished[0].match_map;
+    };
+    const rounds = [0, 1, 2, 3, 4, 5, 6, 7];
+
+    it("gives groups in different sessions different groupings", async () => {
+      const differs = await Promise.all(
+        rounds.map(
+          async (round) =>
+            JSON.stringify(await run(round, "session-1")) !==
+            JSON.stringify(await run(round, "session-2")),
+        ),
+      );
+      expect(differs).toContain(true);
+    });
+
+    it("gives the same grouping in every session with the randomSeed connect option", async () => {
+      for (const round of rounds) {
+        expect(await run(round, "session-1", { randomSeed: "x" })).toEqual(
+          await run(round, "session-2", { randomSeed: "x" }),
+        );
+      }
+    });
   });
 
   it("leftover 'spectator' leaves the odd participant unmatched (matched_self false, not a timeout)", async () => {

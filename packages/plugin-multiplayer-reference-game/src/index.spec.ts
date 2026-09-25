@@ -1142,3 +1142,94 @@ describe("multiplayer-reference-game: typing indicator", () => {
     expect(api.connection.pushes).toHaveLength(after);
   });
 });
+
+describe("multiplayer-reference-game: arrangements come from the session", () => {
+  const STIMULI8 = Array.from({ length: 8 }, (_, i) => ({ id: `s${i}` }));
+
+  /** Both players in one hub; returns each one's rendered order and trial data. */
+  async function playRound(opts: {
+    sessionId?: string;
+    connect?: ConnectOptions;
+    mode?: string;
+    round?: number;
+  }) {
+    const hub = new MemoryHub();
+    if (opts.sessionId) hub.sessionId = opts.sessionId;
+    const players = {} as Record<
+      "director" | "matcher",
+      { el: HTMLElement; finished: Array<Record<string, any>> }
+    >;
+    for (const role of ["director", "matcher"] as const) {
+      const joined = await hub.join(role, { connect: opts.connect });
+      const finished: Array<Record<string, any>> = [];
+      const jsPsych = {
+        multiplayer: joined.jsPsych.multiplayer,
+        finishTrial: (data: Record<string, any>) => finished.push(data),
+        pluginAPI: { setTimeout: (cb: () => void, ms: number) => setTimeout(cb, ms) },
+      };
+      players[role] = { el: display(), finished };
+      run(jsPsych, players[role].el, {
+        ...base,
+        stimuli: STIMULI8,
+        targets: ["s0"],
+        role,
+        partner_id: role === "director" ? "matcher" : "director",
+        scramble_mode: opts.mode ?? "independent",
+        round: opts.round ?? 0,
+        round_timeout: 60_000,
+      });
+    }
+    const order = (el: HTMLElement) =>
+      [...el.querySelectorAll(`.${P}-cell[data-object-id]`)].map((c) =>
+        c.getAttribute("data-object-id"),
+      );
+    const rendered = { director: order(players.director.el), matcher: order(players.matcher.el) };
+    expect([...rendered.director].sort()).toEqual(STIMULI8.map((s) => s.id).sort());
+    clickCell(players.matcher.el, "s0");
+    await flush();
+    return {
+      rendered,
+      director: players.director.finished[0],
+      matcher: players.matcher.finished[0],
+    };
+  }
+
+  it("both players see the same 'shared' arrangement and agree on each other's partner_order", async () => {
+    const shared = await playRound({ mode: "shared" });
+    expect(shared.rendered.director).toEqual(shared.rendered.matcher);
+
+    for (const mode of ["independent", "disjoint", "matcher_only"]) {
+      const r = await playRound({ mode });
+      expect(r.director.my_order).toEqual(r.rendered.director);
+      expect(r.matcher.my_order).toEqual(r.rendered.matcher);
+      expect(r.director.partner_order).toEqual(r.matcher.my_order);
+      expect(r.matcher.partner_order).toEqual(r.director.my_order);
+    }
+  });
+
+  it("different sessions get different arrangements", async () => {
+    let differing = 0;
+    for (let round = 0; round < 5; round++) {
+      const a = await playRound({ sessionId: "group-a", mode: "shared", round });
+      const b = await playRound({ sessionId: "group-b", mode: "shared", round });
+      if (JSON.stringify(a.rendered.director) !== JSON.stringify(b.rendered.director)) differing++;
+    }
+    // 8 objects: two sessions coincide by chance with probability 1/8! per round.
+    expect(differing).toBeGreaterThanOrEqual(4);
+  });
+
+  it("the randomSeed connect option makes different sessions agree", async () => {
+    for (const mode of ["shared", "independent", "disjoint"]) {
+      const a = await playRound({ sessionId: "group-a", connect: { randomSeed: "x" }, mode });
+      const b = await playRound({ sessionId: "group-b", connect: { randomSeed: "x" }, mode });
+      expect(a.rendered).toEqual(b.rendered);
+    }
+  });
+
+  it("'disjoint' still puts no object in the same place for both players", async () => {
+    for (let round = 0; round < 5; round++) {
+      const { rendered } = await playRound({ sessionId: `g${round}`, mode: "disjoint", round });
+      expect(rendered.director.some((id, i) => rendered.matcher[i] === id)).toBe(false);
+    }
+  });
+});
