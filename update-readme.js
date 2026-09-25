@@ -61,7 +61,7 @@ Adapter | Contributor | Description
           info.description ? info.description : `_Description for ${adapterName}._`
         } \n`,
       );
-    } else {
+    } else if (info.name.match(/^\@jspsych-multiplayer\/plugin-/g)) {
       const pluginName = packageName.replace(/^plugin-/g, "");
       pluginList = pluginList.concat(
         `[${pluginName}](${packageReadmeLink}) | ${authorRender} | ${
