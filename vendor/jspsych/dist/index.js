@@ -772,7 +772,9 @@ class MultiplayerSession {
     /** Frozen snapshot of the group's membership. */
     this.groupData = Object.freeze({ size: null, members: [], sealed: false });
     /**
-     * When the adapter forms groups, its members; only their data is shown. Null when it doesn't.
+     * When the adapter forms groups, everyone it has ever reported as a member; only their data is
+     * shown. It only grows, so a member who leaves before the group is sealed keeps the data they
+     * shared. Null when the adapter doesn't form groups.
      */
     this.memberFilter = null;
     /**
@@ -810,6 +812,8 @@ class MultiplayerSession {
     /** Callers whose writes are in the push currently in flight. */
     this.inFlight = null;
     this.retryDelay = 0;
+    /** Set once a run of failures has been reported as an error, so it's reported once. */
+    this.reportedStuck = false;
     autoBind(this);
     this.participantId = connection.participantId;
     if (typeof connection.sessionId !== "string" || connection.sessionId === "") {
@@ -823,6 +827,7 @@ class MultiplayerSession {
       throw new TypeError("MultiplayerAPI: randomSeed must be a string.");
     }
     this.rng = new SharedRandom(randomSeed ?? this.sessionId);
+    this.hasBeenAway = identity.epoch > 0;
     this.dropoutTimeout = options.dropoutTimeout === void 0 ? DEFAULT_DROPOUT_TIMEOUT : parseTimeout(options.dropoutTimeout, "dropoutTimeout");
     this.reconnectTimeout = parseTimeout(options.reconnectTimeout, "reconnectTimeout");
     const previous = parseSlot(this.readRemote()[this.participantId]);
@@ -1061,6 +1066,7 @@ class MultiplayerSession {
             this.slotConfirmed = true;
           }
           this.retryDelay = 0;
+          this.reportedStuck = false;
           for (const caller of callers) caller.resolve();
         } catch (e) {
           if (this.isClosed) {
@@ -1071,6 +1077,13 @@ class MultiplayerSession {
           }
           this.queued = [...callers, ...this.queued];
           this.scheduleRetry();
+          if (this.retryDelay === RETRY_DELAY_MAX && !this.reportedStuck) {
+            this.reportedStuck = true;
+            console.error(
+              "MultiplayerAPI: writes have been failing for a while, so the group isn't seeing this participant's data. The last error was:",
+              e
+            );
+          }
           return;
         } finally {
           if (this.inFlight === callers) {
@@ -1616,7 +1629,12 @@ class MultiplayerSession {
         sealed: false
       };
     }
-    this.memberFilter = reported ? new Set(next.members) : null;
+    if (reported) {
+      this.memberFilter ??= /* @__PURE__ */ new Set();
+      for (const id of next.members) this.memberFilter.add(id);
+    } else {
+      this.memberFilter = null;
+    }
     if (JSON.stringify(next) === JSON.stringify(this.groupData)) {
       return false;
     }
@@ -3370,10 +3388,10 @@ class Trial extends TimelineNode {
   getMultiplayerScope() {
     const named = this.getParameterValue("multiplayer_scope");
     if (named !== void 0 && named !== null) {
-      if (typeof named !== "string" || named === "") {
-        throw new TypeError("multiplayer_scope must be a non-empty string.");
+      if (typeof named !== "string" && typeof named !== "number" || named === "") {
+        throw new TypeError("multiplayer_scope must be a non-empty string or a number.");
       }
-      return named;
+      return String(named);
     }
     const path = [];
     let node = this;
