@@ -40,7 +40,7 @@ timeline.push({
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `group_size` | `number` | `2` | Members per sub-group: 2 for pairs, 3 for triads. Must be a whole number of at least 2. |
-| `expected_players` | `number \| null` | `null` | Wait until **exactly** this many participants are present before splitting. Participants who have left don't count and aren't matched. `null` relies on an earlier lobby to have gathered the group; see [Set `expected_players`](#set-expected_players). |
+| `expected_players` | `number \| null` | `null` | Wait until **exactly** this many participants are present before splitting. Participants who have left don't count and aren't matched. In a [sealed group](../guides/forming-groups), `null` means the group's members who haven't left. Otherwise `null` relies on an earlier lobby to have gathered the group; see [Set `expected_players`](#set-expected_players). |
 | `strategy` | `string` | `"ordered"` | How participants are ordered before being split: `"ordered"` (by participant ID), `"join_order"` (by `joinedAt`, earliest first), or `"random"` (a shuffle that is the same on every computer). Use `"random"` in real studies, so that pairings don't follow ID order. |
 | `seed` | `string \| null` | `null` | Picks a different random grouping within the session. Randomness is seeded by the session ID (or the `randomSeed` connect option), so each group of participants gets its own grouping. |
 | `round` | `number` | `0` | The round number. With `"random"`, a new `round` gives new partners. |
@@ -50,7 +50,7 @@ timeline.push({
 | `save_group` | `boolean` | `false` | Save the shared data the split was computed from, as `group`. |
 | `timeout` | `number \| null` | `30000` | The longest time to wait for the group to be ready, in ms. `null` or a negative number waits indefinitely; `0` gives up at once. |
 | `on_timeout` | `function \| null` | `null` | Called with the `jsPsych` instance if `timeout` runs out. The trial ends unmatched either way. |
-| `participants` | `string[] \| null` | `null` | The participants the match depends on. If one of them leaves before the group is ready, the trial ends unmatched with `partner_left: true`. `null` means every other participant who is connected when this trial starts. `[]` ignores departures. |
+| `participants` | `string[] \| null` | `null` | The participants the match depends on. If one of them leaves before the group is ready, the trial ends unmatched with `partner_left: true`. `null` means every other participant who is connected when this trial starts. In a [sealed group](../guides/forming-groups), `null` means the rest of the group's members who haven't left, including any who are only `away`. `[]` ignores departures. |
 | `message` | HTML string | `"<p>Finding your match…</p>"` | Shown while waiting. |
 
 ## Data
@@ -99,6 +99,11 @@ else's has arrived. The plugin warns in the console when both are missing.
 Put a lobby before the match trial so the group is gathered, and set `expected_players` to the
 exact number you expect. If more participants turn up than expected, the trial waits and then
 times out instead of splitting a subset.
+
+With an adapter that forms groups (JATOS, or Firebase with `matchmaking`), you can skip both:
+wait for the group to be sealed first, with `jsPsych.multiplayer.waitForGroup()`, and leave
+`expected_players` as `null`. It then counts the sealed group's members. See
+[Forming groups](../guides/forming-groups).
 
 ## Reading the match in later trials
 

@@ -124,6 +124,35 @@ describe("plugin-multiplayer-choice — guards", () => {
     ).rejects.toThrow(/expected_players/i);
   });
 
+  it("without a sealed group, a missing `expected_players` says how to fix it", async () => {
+    const { jsPsych } = await setup("p1");
+    await expect(
+      new MultiplayerChoicePlugin(jsPsych as never).trial(display(), {
+        ...base,
+        expected_players: null,
+      } as never),
+    ).rejects.toThrow(/sealed/);
+  });
+
+  it("in a sealed group, `expected_players` defaults to the roster", async () => {
+    const { hub, jsPsych, finished } = await setup("p1");
+    hub.seal(["p1", "p2"]);
+    const el = display();
+    const done = new MultiplayerChoicePlugin(jsPsych as never).trial(el, {
+      ...base,
+      expected_players: null,
+      reveal: false,
+    } as never);
+    clickOption(el, 0);
+    await flush();
+    expect(finished).toHaveLength(0);
+
+    const p2 = await hub.join("p2");
+    await p2.jsPsych.multiplayer.update({ choice: { choice: "Defect", index: 1 } });
+    await done;
+    expect(finished).toHaveLength(1);
+  });
+
   it("throws on an invalid `reveal_mode` rather than silently coercing it", async () => {
     // A typo'd mode would silently flip the reveal's anonymity semantics — fail loud instead.
     const { api, jsPsych } = await setup("p1");

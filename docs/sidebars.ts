@@ -9,6 +9,7 @@ const sidebars: SidebarsConfig = {
   guides: [
     "guides/how-it-works",
     "guides/choosing-a-backend",
+    "guides/forming-groups",
     "guides/ultimatum-game",
     "guides/handling-dropouts",
   ],

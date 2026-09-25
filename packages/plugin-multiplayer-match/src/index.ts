@@ -9,7 +9,12 @@ import {
 
 import { version } from "../package.json";
 import { MatchOptions, Snapshot, buildMatches } from "./match-core";
-import { getMultiplayer, isMultiplayerError, remainingParticipants } from "./multiplayer";
+import {
+  getMultiplayer,
+  isMultiplayerError,
+  remainingParticipants,
+  sealedGroupSize,
+} from "./multiplayer";
 import {
   getMatchMap,
   getMyGroup,
@@ -33,8 +38,10 @@ const info = <const>{
     /**
      * Wait for EXACTLY this many participants to be present before partitioning (fail-loud: an
      * overshoot stalls to a timeout rather than partitioning a subset). Participants who have left
-     * the session don't count and aren't partitioned. `null` trusts an upstream barrier and
-     * partitions whoever is present as soon as this client has pushed (a warning fires).
+     * the session don't count and aren't partitioned. `null` (the default) means the members of a
+     * sealed group (see `jsPsych.multiplayer.group()`) who haven't left; with a group that isn't
+     * sealed, `null` trusts an upstream barrier and partitions whoever is present as soon as this
+     * client has pushed (a warning fires).
      */
     expected_players: { type: ParameterType.INT, default: null },
     /**
@@ -184,12 +191,14 @@ class MultiplayerMatchPlugin implements JsPsychPlugin<Info> {
     // over participants PRESENT in the snapshot, so it can resolve the instant THIS client has pushed —
     // partitioning a partial group. Warn unless an upstream barrier is trusted to have admitted every
     // peer first.
-    if (trial.expected_players == null && trial.ready == null) {
+    const expectedPlayers = trial.expected_players ?? sealedGroupSize(multiplayer);
+    if (expectedPlayers == null && trial.ready == null) {
       console.warn(
         "plugin-multiplayer-match: no `expected_players` and no custom `ready` — the group can be " +
           "partitioned as soon as this client has pushed, over a partial group. Set `expected_players` " +
-          "(the exact count) or supply a `ready` predicate unless an upstream barrier guarantees all " +
-          "peers have already pushed into this session.",
+          "(the exact count), seal the group first (jsPsych.multiplayer.waitForGroup()), or supply a " +
+          "`ready` predicate unless an upstream barrier guarantees all peers have already pushed into " +
+          "this session.",
       );
     }
 
@@ -208,7 +217,7 @@ class MultiplayerMatchPlugin implements JsPsychPlugin<Info> {
     on_load?.();
 
     let lastReadyError: unknown;
-    const isReady = this.makeReadiness(trial, (e) => (lastReadyError = e));
+    const isReady = this.makeReadiness(trial, expectedPlayers, (e) => (lastReadyError = e));
     // The presence the group was ready under, so the partition covers exactly who was counted
     let readyPresence: PresenceData = {};
     const ready = (group: GroupSessionData, presence: PresenceData) => {
@@ -300,12 +309,13 @@ class MultiplayerMatchPlugin implements JsPsychPlugin<Info> {
    */
   private makeReadiness(
     trial: TrialType<Info>,
+    expectedPlayers: number | null,
     onError: (e: unknown) => void,
   ): (s: GroupSessionData, presence: PresenceData) => boolean {
     // Exact count converts a contract violation (overshoot) into a loud stall->timeout rather than a
     // silent subset partition. `null` resolves as soon as anyone is present (an upstream barrier trust).
     const enough = (s: GroupSessionData) =>
-      trial.expected_players == null || Object.keys(s).length === trial.expected_players;
+      expectedPlayers == null || Object.keys(s).length === expectedPlayers;
 
     if (typeof trial.ready === "function") {
       const ready = trial.ready as (s: Snapshot, presence: PresenceData) => boolean;

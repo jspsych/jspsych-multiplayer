@@ -234,6 +234,30 @@ describe("plugin-multiplayer-scoreboard — trial wrapper", () => {
     errSpy.mockRestore();
   });
 
+  it("in a sealed group, group_size defaults to the roster, without a warning", async () => {
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+    const { hub, jsPsych, finished } = await setup("p1");
+    hub.seal(["p1", "p2"]);
+    const el = display();
+
+    new MultiplayerScoreboardPlugin(jsPsych as never).trial(el, {
+      ...base,
+      score: 15,
+      group_size: null,
+    } as never);
+    await flush();
+    expect(warn).not.toHaveBeenCalledWith(expect.stringMatching(/group_size/));
+    expect(el.querySelector(".jspsych-multiplayer-scoreboard-table")).toBeNull(); // still waiting
+
+    const p2 = await hub.join("p2");
+    await p2.jsPsych.multiplayer.update({ score: { score: 5 } });
+    await flush();
+    expect(el.querySelector(".jspsych-multiplayer-scoreboard-table")).not.toBeNull();
+    clickContinue(el);
+    expect(finished[0].num_players).toBe(2);
+    warn.mockRestore();
+  });
+
   it("warns when group_size is omitted (board may be partial)", async () => {
     const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
     const { api, jsPsych } = await setup("p1");

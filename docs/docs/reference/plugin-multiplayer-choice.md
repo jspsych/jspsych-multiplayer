@@ -43,11 +43,11 @@ timeline.push({
 | `prompt` | HTML string | `null` | Shown above the buttons. |
 | `button_html` | `(choice, index) => string` | `null` | Returns the HTML for each option, as in `html-button-response`. `null` uses a plain `jspsych-btn` button. |
 | `data_key` | `string \| null` | `null` | The field in each participant's slot that holds their choice. `null` generates `choice-1`, `choice-2`, … (see [Choice keys](#choice-keys)). |
-| `expected_players` | `number` | required | How many participants, including this one, must choose before the outcome is shown. Can be a function that returns the number. |
+| `expected_players` | `number \| null` | `null` | How many participants, including this one, must choose before the outcome is shown. Can be a function that returns the number. `null` means everyone in a [sealed group](../guides/forming-groups) who hasn't left; if the group isn't sealed when the trial starts, you must set it. |
 | `waiting_message` | HTML string | `"<p>Waiting for the other players to choose…</p>"` | Shown after this participant chooses, while the rest of the group finishes. |
 | `timeout` | `number \| null` | `null` | The longest time to wait for the others **after** choosing, in ms. When it runs out, the trial goes on with whoever has chosen, flagged `timed_out: true`, and `on_timeout` is called. `null`, `0`, or a negative number waits indefinitely. It does not limit how long this participant takes to choose. |
 | `on_timeout` | `function \| null` | `null` | Called with the timeout error if `timeout` runs out first. |
-| `participants` | `string[] \| null` | `null` | The participants this choice depends on. If one of them leaves before the group has chosen, the trial goes on with whoever has chosen, flagged `partner_left: true`. `null` means every other participant who is connected when this participant chooses. `[]` ignores departures. |
+| `participants` | `string[] \| null` | `null` | The participants this choice depends on. If one of them leaves before the group has chosen, the trial goes on with whoever has chosen, flagged `partner_left: true`. `null` means every other participant who is connected when this participant chooses. In a [sealed group](../guides/forming-groups), `null` means the rest of the group's members who haven't left, including any who are only `away`. `[]` ignores departures. |
 | `reveal` | `boolean` | `true` | Show the outcome screen. `false` ends the trial as soon as the group has chosen. |
 | `reveal_mode` | `"players" \| "tally"` | `"players"` | `"players"` lists each participant's choice by name. `"tally"` shows only the count for each option and the winner (or a tie), never who chose what. |
 | `reveal_prompt` | HTML string | `null` | A heading above the outcome. |

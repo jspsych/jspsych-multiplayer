@@ -35,12 +35,13 @@ jatos.onLoad(async () => {
 ## Options
 
 Pass these to the constructor, for example
-`new jsPsychAdapterMultiplayerJatos({ closeAfterReconnectingMs: 60000 })`. Both are optional.
+`new jsPsychAdapterMultiplayerJatos({ closeAfterReconnectingMs: 60000 })`. All are optional.
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `connectTimeoutMs` | `number` | `20000` | How long, in ms, `connect()` waits for JATOS to open the group connection before it fails. |
 | `closeAfterReconnectingMs` | `number \| null` | `null` | How long, in ms, this participant's connection can stay down before it counts as lost for good. `null` (the default) or `Infinity` means keep retrying. |
+| `sealWhenFull` | `boolean` | `true` | Fix the JATOS group once it has **Max active members**, so nobody new can join it. Set `false` to decide when yourself, with `jsPsych.multiplayer.sealGroup()`. See [Forming groups](#forming-groups). |
 
 Each participant's ID is their JATOS study result ID, as a string. Once `connect()` resolves, it
 is in `jsPsych.multiplayer.participantId`.
@@ -70,8 +71,8 @@ is in `jsPsych.multiplayer.participantId`.
    - **Max active members** is how many participants a group can hold at once. Set it to your
      group size, for example `2` for a two-player game, to get separate groups of that size.
    - **Max total members** is how many participants can ever join a group, counting those who
-     left. Set it to your group size too if nobody should take over a departed player's place.
-     Leave it empty if a newcomer may fill the gap.
+     left. You can usually leave it empty: once a group is full, the adapter fixes it, so
+     nobody takes over a departed player's place (see [Forming groups](#forming-groups)).
 
    With no limits, everyone in the batch joins one group. That is useful when the experiment
    itself decides who plays, for example with the overflow role of
@@ -93,6 +94,46 @@ limits.
 The adapter reports the JATOS group result ID as the session ID. Every member of a JATOS group
 shares it, so each group gets its own
 [shared random values](multiplayer-api#shared-randomness).
+
+## Forming groups
+
+Everyone opens the same study link, and JATOS puts each arriving participant into a group that
+still has room. The [Forming groups](../guides/forming-groups) guide explains the idea; this
+section covers what is specific to JATOS. `connect()` resolves as soon as the participant has a group, which is usually
+before the group is full, so start the experiment with a waiting room:
+
+```js
+await jsPsych.multiplayer.connect(new jsPsychAdapterMultiplayerJatos());
+
+const waitingRoom = {
+  type: jsPsychCallFunction,
+  async: true,
+  func: (done) => {
+    jsPsych.getDisplayElement().innerHTML = "<p>Waiting for the other players to arrive...</p>";
+    jsPsych.multiplayer
+      .waitForGroup({ timeout: 5 * 60000 })
+      .then((group) => done({ group_members: group.members }))
+      .catch(() => {
+        // The group didn't fill in time
+        jatos.endStudy(jsPsych.data.get().json(), false, "group did not fill");
+      });
+  },
+};
+```
+
+While the group is forming, a participant who leaves frees their place, and JATOS can give it to
+the next arrival. Once the group has **Max active members**, the adapter asks JATOS to fix it
+(`jatos.setGroupFixed()`). From then on nobody new can join, `jsPsych.multiplayer.group()`
+reports the final roster, and a member who leaves counts as a dropout.
+
+- **Size.** `group().size` is the batch's **Max active members**, or `null` if it has none. With
+  no limit the group is never fixed automatically.
+- **Starting early.** To start with fewer players, for example when the waiting room times out
+  with enough people present, call `jsPsych.multiplayer.sealGroup()`. It fixes the group with
+  the members it has.
+- **Every member learns of the seal.** JATOS tells only the member who fixed the group. The
+  multiplayer session passes it on to the others, and to a member who reloads, through each
+  member's slot.
 
 ## Presence and dropouts
 

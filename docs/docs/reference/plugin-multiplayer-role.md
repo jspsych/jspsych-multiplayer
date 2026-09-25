@@ -40,7 +40,7 @@ timeline.push({
 | --------------- | ------------------------------ | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `roles`         | `string[] \| object`           | required                    | The roles to hand out. An array has one slot per entry: `["proposer", "responder"]`. An object gives counts: `{ leader: 1, follower: 3 }`.                                                                                                                |
 | `strategy`      | `string \| function`           | `"join_order"`              | How participants are ordered into the slots: `"join_order"`, `"random"`, `"rotate"`, or your own function (see [How roles are assigned](#how-roles-are-assigned)).                                                                                        |
-| `group_size`    | `number \| null`               | `null`                      | Wait until **exactly** this many participants are present before assigning. Participants who have left don't count. `null` relies on an earlier lobby to have gathered the group; see [Set `group_size`](#set-group_size).                                |
+| `group_size`    | `number \| null`               | `null`                      | Wait until **exactly** this many participants are present before assigning. Participants who have left don't count. In a [sealed group](../guides/forming-groups), `null` means the group's members who haven't left. Otherwise `null` relies on an earlier lobby to have gathered the group; see [Set `group_size`](#set-group_size). |
 | `round`         | `number`                       | `0`                         | The round number, used by `"rotate"` and to reshuffle `"random"`. Increase it each time you run the trial again.                                                                                                                                          |
 | `balanced`      | `boolean`                      | `false`                     | For `"rotate"`: use a balanced (Williams) rotation, so each role follows every other role equally often across the group. Exact for an even number of participants.                                                                                       |
 | `seed`          | `string \| null`               | `null`                      | Picks a different random assignment within the session. Randomness is seeded by the session ID (or the `randomSeed` connect option), so each group gets its own assignment. The shuffle is the same for everyone and changes each `round`.                |
@@ -52,7 +52,7 @@ timeline.push({
 | `save_group`    | `boolean`                      | `false`                     | Save the shared data the assignment was computed from, as `group`.                                                                                                                                                                                        |
 | `timeout`       | `number \| null`               | `30000`                     | The longest time to wait for the group to be ready, in ms. `null` or a negative number waits indefinitely; `0` gives up at once.                                                                                                                          |
 | `on_timeout`    | `function \| null`             | `null`                      | Called with the `jsPsych` instance if `timeout` runs out. The trial ends with `role: null` either way.                                                                                                                                                    |
-| `participants`  | `string[] \| null`             | `null`                      | The participants the assignment depends on. If one of them leaves before the group is ready, the trial ends with `role: null, partner_left: true`. `null` means every other participant who is connected when this trial starts. `[]` ignores departures. |
+| `participants`  | `string[] \| null`             | `null`                      | The participants the assignment depends on. If one of them leaves before the group is ready, the trial ends with `role: null, partner_left: true`. `null` means every other participant who is connected when this trial starts. In a [sealed group](../guides/forming-groups), `null` means the rest of the group's members who haven't left, including any who are only `away`. `[]` ignores departures. |
 | `message`       | HTML string                    | `"<p>Assigning roles…</p>"` | Shown while waiting.                                                                                                                                                                                                                                      |
 
 `ctx`, passed to `rank_by`, `role_from`, and a custom `strategy`, is
@@ -120,6 +120,11 @@ The plugin warns in the console when both are missing.
 
 Put a lobby before the role trial so the group is gathered, and set `group_size` to the exact
 number you expect.
+
+With an adapter that forms groups (JATOS, or Firebase with `matchmaking`), you can skip both:
+wait for the group to be sealed first, with `jsPsych.multiplayer.waitForGroup()`, and leave
+`group_size` as `null`. It then counts the sealed group's members. See
+[Forming groups](../guides/forming-groups).
 
 ## Reading roles in later trials
 

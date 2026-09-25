@@ -52,6 +52,17 @@ presence, not by slot. While your own connection is down, the session pauses eve
 else's dropout timers. See [Handling dropouts](../guides/handling-dropouts) for how the
 plugins use presence.
 
+### Groups
+
+With a backend that puts arriving participants into groups, such as JATOS, `group()` reports
+the group's `size` (the most it can hold, or `null`), its `members`, and whether it is
+`sealed`: nobody new can join, and `members` is the final roster. Before the group is sealed,
+a participant who leaves frees their place; after it, they count as a dropout. Adapters seal a
+group when it is full. `waitForGroup()` holds participants in a waiting room until then, and
+`sealGroup()` seals it early. With a backend where you form the groups (the local and Firebase
+adapters' `?mp_session=` links), `members` is everyone who has shown up, the group is never
+sealed, and `sealGroup()` and `waitForGroup()` reject. See [Forming groups](../guides/forming-groups).
+
 ### Rejoining
 
 A participant who drops out can come back from the **same page**: after a network outage,
@@ -147,10 +158,28 @@ and other keys are kept. A nested object replaces the whole nested object.
 data. `presence()` returns each participant's presence status, including your own (`away`
 while reconnecting, `left` once closed). All three are frozen.
 
+### `group()`, `sealGroup()`, `waitForGroup(options?)`
+
+`group()` returns the frozen `{ size, members, sealed }`; see [Groups](#groups). `members` is
+sorted, so everyone in a sealed group sees the same list. `sealGroup()` asks the backend to
+seal the group with the members it has now and resolves once it confirms. `waitForGroup()`
+resolves with the group once it is sealed, and takes `timeout` and `signal` like `wait()`.
+
+```js
+try {
+  const { members } = await jsPsych.multiplayer.waitForGroup({ timeout: 5 * 60000 });
+} catch (error) {
+  if (error.name === "MultiplayerTimeoutError") {
+    // The group didn't fill in time
+  }
+}
+```
+
 ### `subscribe(callback, options?): Unsubscribe`
 
-Calls `callback(data, presence)` immediately with the current state, then after every
-change: another participant's write, your own write, or a change in presence. Returns a
+Calls `callback(data, presence, group)` immediately with the current state, then after every
+change: another participant's write, your own write, a change in presence, or a change in the
+group. Returns a
 function that removes the subscription; aborting `options.signal` does the same.
 
 When the session closes, by `disconnect()` or a lost connection, each callback is called
@@ -173,7 +202,7 @@ controller.abort();
 
 ### `wait(condition, options?): Promise<GroupSessionData>`
 
-Resolves with the shared data once `condition(data, presence)` returns true. It checks the
+Resolves with the shared data once `condition(data, presence, group)` returns true. It checks the
 current state first, so an already-true condition resolves at once.
 
 | Option         | Description                                                                             |
@@ -229,7 +258,7 @@ An adapter has two parts. The **adapter** holds configuration; each call to its
 interface MultiplayerAdapter {
   connect(options: {
     signal: AbortSignal;
-    onChange(): void; // call when getAll() or connectedParticipants() may have changed
+    onChange(): void; // call when getAll(), connectedParticipants(), or group() may have changed
     onStatus(status: "connected" | "reconnecting" | "closed"): void;
   }): Promise<MultiplayerConnection>;
 }
@@ -240,6 +269,8 @@ interface MultiplayerConnection {
   getAll(): GroupSessionData;
   connectedParticipants(): string[];
   push(data: Record<string, unknown>): Promise<void>;
+  group?(): { size: number | null; members: string[]; sealed: boolean }; // optional
+  sealGroup?(): Promise<void>; // optional
   disconnect(): Promise<void>;
 }
 ```
@@ -253,6 +284,9 @@ an adapter keeps the same `participantId` for every connection made from the sam
 reports `"reconnecting"` then `"connected"` whenever other participants may have seen it drop
 out. Its `sessionId` names the group: the same non-empty string for every participant in it,
 for every connection and page load, and different for each group. Shared randomness is seeded
-with it. It stores and returns the reserved `$mp` key like any other data. jsPsych's
+with it. It stores and returns the reserved `$mp` key like any other data. An adapter whose backend
+forms groups resolves `connect()` once the backend has assigned one, and reports it through the
+optional `group()` and `sealGroup()`; the backend, not the browser, decides who joins which
+group. jsPsych's
 "Multiplayer Adapter Development" page, part of
 [jsPsych#3694](https://github.com/jspsych/jsPsych/pull/3694), covers each method in detail.

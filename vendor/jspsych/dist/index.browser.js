@@ -772,6 +772,12 @@ var jsPsychModule = (function (exports) {
 	  }
 	  return { data, metas };
 	}
+	function sortedIds(ids) {
+	  return [...new Set(ids)].sort();
+	}
+	function isIdList(value) {
+	  return Array.isArray(value) && value.every((id) => typeof id === "string");
+	}
 	function assertRecord(data) {
 	  if (data === null || typeof data !== "object" || Array.isArray(data)) {
 	    throw new TypeError("MultiplayerAPI: data must be a plain object of JSON values.");
@@ -813,6 +819,23 @@ var jsPsychModule = (function (exports) {
 	    /** Frozen snapshot shared by every reader: `remote` with `slot` on top. */
 	    this.data = {};
 	    this.presenceData = {};
+	    /** Frozen snapshot of the group's membership. */
+	    this.groupData = Object.freeze({ size: null, members: [], sealed: false });
+	    /**
+	     * The roster this participant's own backend confirmed as sealed, sent to the
+	     * group in the reserved key. Null until then.
+	     */
+	    this.ownRoster = null;
+	    /**
+	     * Every roster seen so far, from this backend or any participant's slot.
+	     * Non-null means the group is sealed. It only grows, so a sealed group
+	     * never becomes unsealed and nobody drops off the roster.
+	     */
+	    this.roster = null;
+	    /** Set by the first announce(); pushes wait for it. */
+	    this.announced = false;
+	    /** Memoized so overlapping sealGroup() calls ask the backend once. */
+	    this.sealing = null;
 	    this.presenceStatus = /* @__PURE__ */ new Map();
 	    this.awayTimers = /* @__PURE__ */ new Map();
 	    /** Each participant's page load, as last seen while they were connected. */
@@ -862,6 +885,9 @@ var jsPsychModule = (function (exports) {
 	    const ownMeta = metas[this.participantId];
 	    this.previousInstance = ownMeta && ownMeta.instance !== identity.instance ? ownMeta.instance : null;
 	    this.refreshPresence();
+	    if (this.refreshGroup() && this.roster) {
+	      this.refreshPresence();
+	    }
 	    this.rebuild();
 	  }
 	  /**
@@ -923,6 +949,10 @@ var jsPsychModule = (function (exports) {
 	  /** The presence status of every participant seen in the session, including this one. Frozen. */
 	  presence() {
 	    return this.presenceData;
+	  }
+	  /** The group's size, members, and whether it is sealed. Frozen. */
+	  group() {
+	    return this.groupData;
 	  }
 	  // ---------------------------------------------------------- randomness
 	  /**
@@ -1003,6 +1033,14 @@ var jsPsychModule = (function (exports) {
 	      return;
 	    }
 	    this.identity.epoch++;
+	    this.announced = true;
+	    this.sendMeta();
+	  }
+	  /** Push the slot so the group sees this participant's current bookkeeping. */
+	  sendMeta() {
+	    if (this.isClosed) {
+	      return;
+	    }
 	    this.slotConfirmed = false;
 	    if (!this.nextBatch) {
 	      this.nextBatch = newBatch();
@@ -1018,6 +1056,9 @@ var jsPsychModule = (function (exports) {
 	      epoch: this.identity.epoch,
 	      written: this.slot !== void 0
 	    };
+	    if (this.ownRoster) {
+	      meta.sealed = this.ownRoster;
+	    }
 	    return deepFreeze({ ...this.slot, [RESERVED_KEY]: meta });
 	  }
 	  /** Start the sender if it's idle; a running sender picks up the change itself. */
@@ -1116,10 +1157,10 @@ var jsPsychModule = (function (exports) {
 	      const onAbort = () => cancel(new MultiplayerCancelledError());
 	      const listener = {
 	        active: true,
-	        callback: (data, presence) => {
+	        callback: (data, presence, group) => {
 	          let met;
 	          try {
-	            met = condition(data, presence);
+	            met = condition(data, presence, group);
 	          } catch (e) {
 	            finish(() => reject(e));
 	            return;
@@ -1138,7 +1179,7 @@ var jsPsychModule = (function (exports) {
 	        reject(new MultiplayerCancelledError());
 	        return;
 	      }
-	      listener.callback(this.data, this.presenceData);
+	      listener.callback(this.data, this.presenceData, this.groupData);
 	      if (!listener.active) {
 	        return;
 	      }
@@ -1153,6 +1194,56 @@ var jsPsychModule = (function (exports) {
 	        timer = window.setTimeout(() => cancel(new MultiplayerTimeoutError(timeout)), timeout);
 	      }
 	    });
+	  }
+	  // ---------------------------------------------------------------- group
+	  /**
+	   * Ask the backend to stop letting new participants join, so the group is
+	   * sealed with the members it has now. Use it to start with fewer people than
+	   * the group can hold. Resolves once the backend confirms, and at once if the
+	   * group is already sealed. Rejects if the adapter can't seal groups.
+	   */
+	  async sealGroup() {
+	    this.assertWritable();
+	    if (this.groupData.sealed) {
+	      return;
+	    }
+	    if (typeof this.connection.sealGroup !== "function") {
+	      throw new Error("MultiplayerAPI: this adapter can't seal groups.");
+	    }
+	    this.sealing ??= (async () => {
+	      try {
+	        await this.connection.sealGroup();
+	      } finally {
+	        this.sealing = null;
+	      }
+	    })();
+	    await this.sealing;
+	    if (this.isClosed || this.ownRoster) {
+	      return;
+	    }
+	    const members = this.readAdapterGroup()?.members ?? this.groupData.members;
+	    this.ownRoster = sortedIds([...members, this.participantId]);
+	    this.sendMeta();
+	    if (this.refreshGroup()) {
+	      this.refreshPresence();
+	      this.rebuild();
+	      this.notify();
+	      this.flushEvents();
+	    }
+	  }
+	  /**
+	   * Resolve with the group's state once it is sealed, e.g. to hold everyone in
+	   * a waiting room until the group is complete. Rejects at once if the adapter
+	   * doesn't form groups, since the group could then never be sealed.
+	   */
+	  async waitForGroup(options = {}) {
+	    if (typeof this.connection.group !== "function" && typeof this.connection.sealGroup !== "function") {
+	      throw new Error(
+	        "MultiplayerAPI: this adapter doesn't form groups, so waitForGroup() would never resolve. Wait for a number of participants with wait() instead."
+	      );
+	    }
+	    await this.wait((_data, _presence, group) => group.sealed, { ...options, participants: [] });
+	    return this.groupData;
 	  }
 	  /**
 	   * Remove every subscription and reject pending waits with a
@@ -1175,7 +1266,7 @@ var jsPsychModule = (function (exports) {
 	      return;
 	    }
 	    try {
-	      listener.callback(this.data, this.presenceData);
+	      listener.callback(this.data, this.presenceData, this.groupData);
 	    } catch (e) {
 	      console.error("MultiplayerAPI: subscriber callback threw", e);
 	    }
@@ -1248,8 +1339,12 @@ var jsPsychModule = (function (exports) {
 	    } catch (e) {
 	      console.error("MultiplayerAPI: could not read the adapter's session data", e);
 	    }
-	    const presenceChanged = this.refreshPresence();
-	    if (dataChanged || presenceChanged) {
+	    let presenceChanged = this.refreshPresence();
+	    const groupChanged = this.refreshGroup();
+	    if (groupChanged) {
+	      presenceChanged = this.refreshPresence() || presenceChanged;
+	    }
+	    if (dataChanged || presenceChanged || groupChanged) {
 	      this.rebuild();
 	      this.notify();
 	    }
@@ -1304,7 +1399,8 @@ var jsPsychModule = (function (exports) {
 	    const ids = /* @__PURE__ */ new Set([
 	      ...connectedNow,
 	      ...Object.keys(this.remote),
-	      ...this.presenceStatus.keys()
+	      ...this.presenceStatus.keys(),
+	      ...this.roster ?? []
 	    ]);
 	    ids.delete(this.participantId);
 	    let changed = false;
@@ -1415,6 +1511,77 @@ ${meta.instance}`;
 	    this.notify();
 	    this.events.push(() => this.options.onParticipantLeft?.(id));
 	    this.flushEvents();
+	  }
+	  // ---------------------------------------------------------------- group state
+	  /** The adapter's report of the group, or undefined if it has none or it is malformed. */
+	  readAdapterGroup() {
+	    if (typeof this.connection.group !== "function") {
+	      return void 0;
+	    }
+	    let reported;
+	    try {
+	      reported = this.connection.group();
+	    } catch (e) {
+	      console.error("MultiplayerAPI: could not read the adapter's group", e);
+	      return void 0;
+	    }
+	    if (reported === null || typeof reported !== "object" || !Array.isArray(reported.members)) {
+	      console.error("MultiplayerAPI: the adapter's group() returned", reported);
+	      return void 0;
+	    }
+	    const { size } = reported;
+	    return {
+	      size: Number.isInteger(size) && size > 0 ? size : null,
+	      members: reported.members.map(String),
+	      sealed: reported.sealed === true
+	    };
+	  }
+	  /**
+	   * Work out the group's state from the adapter and the rosters in everyone's
+	   * slots. Returns whether it changed. A newly sealed report from this
+	   * participant's own backend is sent on to the group.
+	   */
+	  refreshGroup() {
+	    const reported = this.readAdapterGroup();
+	    if (!this.ownRoster) {
+	      const previous = this.metas[this.participantId]?.sealed;
+	      if (reported?.sealed) {
+	        this.ownRoster = sortedIds([...reported.members, this.participantId]);
+	      } else if (isIdList(previous)) {
+	        this.ownRoster = sortedIds([...previous, this.participantId]);
+	      }
+	      if (this.ownRoster && this.announced) {
+	        this.sendMeta();
+	      }
+	    }
+	    const rosters = Object.values(this.metas).map((meta) => meta.sealed).filter(isIdList);
+	    if (this.ownRoster) {
+	      rosters.push(this.ownRoster);
+	    }
+	    if (rosters.length > 0) {
+	      this.roster ??= /* @__PURE__ */ new Set([this.participantId]);
+	      for (const id of rosters.flat()) {
+	        this.roster.add(id);
+	      }
+	    }
+	    let members;
+	    if (this.roster) {
+	      members = sortedIds(this.roster);
+	    } else if (reported) {
+	      members = sortedIds([...reported.members, this.participantId]);
+	    } else {
+	      members = sortedIds([this.participantId, ...this.presenceStatus.keys()]);
+	    }
+	    const next = {
+	      size: reported?.size ?? this.groupData.size,
+	      members,
+	      sealed: this.roster !== null
+	    };
+	    if (JSON.stringify(next) === JSON.stringify(this.groupData)) {
+	      return false;
+	    }
+	    this.groupData = deepFreeze(next);
+	    return true;
 	  }
 	  // ---------------------------------------------------------------- closing
 	  /**
@@ -1580,7 +1747,22 @@ ${meta.instance}`;
 	  presence() {
 	    return this.requireSession().presence();
 	  }
-	  /** Call `callback` now and after every change to the group session or presence. */
+	  /** The group's size, members, and whether it is sealed. Frozen. */
+	  group() {
+	    return this.requireSession().group();
+	  }
+	  /**
+	   * Stop new participants from joining, sealing the group with the members it
+	   * has now. Rejects if the adapter can't seal groups.
+	   */
+	  async sealGroup() {
+	    return this.requireSession().sealGroup();
+	  }
+	  /** Resolve with the group's state once it is sealed. */
+	  async waitForGroup(options) {
+	    return this.requireSession().waitForGroup(options);
+	  }
+	  /** Call `callback` now and after every change to the group session, presence, or group. */
 	  subscribe(callback, options) {
 	    return this.requireSession().subscribe(callback, options);
 	  }

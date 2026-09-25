@@ -13,7 +13,12 @@
  * failure paths.
  */
 
-import { FirebaseBackend, RawSessionSnapshot, Unsubscribe } from "./firebase-backend";
+import {
+  FirebaseBackend,
+  RawSessionSnapshot,
+  TransactionValue,
+  Unsubscribe,
+} from "./firebase-backend";
 
 interface SessionListener {
   path: string;
@@ -39,6 +44,26 @@ export class FakeRtdb {
   /** The raw string stored at `path`, if any. */
   get(path: string): string | undefined {
     return this.data.get(path);
+  }
+
+  /** What a transaction on `path` sees: its string, its children, or null. */
+  valueAt(path: string): TransactionValue {
+    return this.data.get(path) ?? this.snapshotOf(path);
+  }
+
+  /** Replace `path` and everything under it with `value`, then notify listeners once. */
+  replace(path: string, value: TransactionValue): void {
+    for (const key of [...this.data.keys()]) {
+      if (key === path || key.startsWith(`${path}/`)) this.data.delete(key);
+    }
+    if (typeof value === "string") {
+      this.data.set(path, value);
+    } else if (value) {
+      for (const [child, childValue] of Object.entries(value)) {
+        this.data.set(`${path}/${child}`, childValue);
+      }
+    }
+    this.fire(path);
   }
 
   /**
@@ -115,6 +140,18 @@ export interface FakeBackendOptions {
    * security-rules write denial, e.g. a membership record already bound to another session).
    */
   denyWrite?: (path: string) => boolean;
+  /**
+   * Transactions first run their update on null, as the real SDK does before it has the server's
+   * value, and then on the stored value. The first result is discarded.
+   */
+  transactionsGuessNull?: boolean;
+  /** Runs inside each transaction, after the update guessed and before it reads the stored value. */
+  beforeTransactionRead?: (path: string) => void;
+  /**
+   * `onDisconnectRemove()` rejects for paths matching this predicate. RTDB checks the rules when
+   * an onDisconnect is armed, so arming a write the rules forbid fails at once.
+   */
+  denyOnDisconnect?: (path: string) => boolean;
 }
 
 export class FakeBackend implements FirebaseBackend {
@@ -125,6 +162,10 @@ export class FakeBackend implements FirebaseBackend {
   private readonly neverSnapshot: boolean;
   private readonly deferInitialSnapshot: boolean;
   private readonly denyWrite: ((path: string) => boolean) | null;
+  private readonly transactionsGuessNull: boolean;
+  private readonly beforeTransactionRead: ((path: string) => void) | null;
+  private readonly denyOnDisconnect: ((path: string) => boolean) | null;
+  transactionCalls: string[] = [];
 
   /** Paths with an armed onDisconnect().remove(), consumed when the "server" fires it. */
   private readonly armed = new Set<string>();
@@ -140,6 +181,9 @@ export class FakeBackend implements FirebaseBackend {
     this.neverSnapshot = options.neverSnapshot ?? false;
     this.deferInitialSnapshot = options.deferInitialSnapshot ?? false;
     this.denyWrite = options.denyWrite ?? null;
+    this.transactionsGuessNull = options.transactionsGuessNull ?? false;
+    this.beforeTransactionRead = options.beforeTransactionRead ?? null;
+    this.denyOnDisconnect = options.denyOnDisconnect ?? null;
   }
 
   signIn(): Promise<string> {
@@ -161,6 +205,30 @@ export class FakeBackend implements FirebaseBackend {
     return Promise.resolve();
   }
 
+  get(path: string): Promise<string | null> {
+    return Promise.resolve(this.rtdb.get(path) ?? null);
+  }
+
+  /** Atomic, as the server makes it: nothing else runs between the read and the write. */
+  async transaction(
+    path: string,
+    update: (current: TransactionValue) => TransactionValue | undefined,
+  ): Promise<{ committed: boolean; value: TransactionValue }> {
+    this.transactionCalls.push(path);
+    if (this.transactionsGuessNull) update(null);
+    this.beforeTransactionRead?.(path);
+    const current = this.rtdb.valueAt(path);
+    const next = update(current);
+    if (next === undefined) return { committed: false, value: current };
+    if (this.denyWrite?.(path)) {
+      throw new Error(
+        "PERMISSION_DENIED: Client doesn't have permission to access the desired data.",
+      );
+    }
+    this.rtdb.replace(path, next);
+    return { committed: true, value: next };
+  }
+
   onValue(
     path: string,
     onData: (snapshot: RawSessionSnapshot | null) => void,
@@ -179,6 +247,9 @@ export class FakeBackend implements FirebaseBackend {
   }
 
   onDisconnectRemove(path: string): Promise<void> {
+    if (this.denyOnDisconnect?.(path)) {
+      return Promise.reject(new Error("PERMISSION_DENIED: Permission denied"));
+    }
     this.armed.add(path);
     return Promise.resolve();
   }

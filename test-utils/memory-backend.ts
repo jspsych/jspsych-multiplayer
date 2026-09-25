@@ -12,6 +12,7 @@ import {
   AdapterConnectOptions,
   ConnectOptions,
   GroupSessionData,
+  GroupState,
   initJsPsych,
   JsPsych,
   MultiplayerAdapter,
@@ -28,6 +29,18 @@ export class MemoryHub {
 
   /** Participants with no jsPsych instance in the test who count as connected. See addPeer(). */
   peers = new Set<string>();
+
+  /** The sealed group's roster, once seal() is called. Null while the group is forming. */
+  roster: string[] | null = null;
+
+  /**
+   * Seal the group with these members, as a backend that forms groups does.
+   * Until then, connections report a forming group of everyone connected.
+   */
+  seal(members: string[]) {
+    this.roster = [...members];
+    this.broadcast();
+  }
 
   /** Tell every open connection that something changed. */
   broadcast() {
@@ -113,6 +126,13 @@ export class MemoryConnection implements MultiplayerConnection {
 
   getAll() {
     return this.hub.data;
+  }
+
+  group(): GroupState {
+    const { roster } = this.hub;
+    return roster
+      ? { size: roster.length, members: roster, sealed: true }
+      : { size: null, members: this.connectedParticipants(), sealed: false };
   }
 
   connectedParticipants() {

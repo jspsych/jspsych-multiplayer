@@ -13,6 +13,7 @@ import {
   isMultiplayerError,
   nextGateKey,
   remainingParticipants,
+  sealedGroupSize,
 } from "./multiplayer";
 
 const info = <const>{
@@ -21,12 +22,14 @@ const info = <const>{
   parameters: {
     /**
      * How many group members must be ready (including this participant) before the trial ends.
-     * Required. May be a function returning a number, so the count can be read from earlier state,
-     * e.g. `() => expectedGroupSize`.
+     * May be a function returning a number, so the count can be read from earlier state, e.g.
+     * `() => expectedGroupSize`. Null (the default) means everyone in the group: the members of a
+     * sealed group (see `jsPsych.multiplayer.group()`) who haven't left. With a group that isn't
+     * sealed when the trial starts, it is required.
      */
     expected_players: {
       type: ParameterType.INT,
-      default: undefined,
+      default: null,
     },
     /** The HTML content shown above the ready button (the instructions to the participant). */
     stimulus: {
@@ -195,11 +198,18 @@ class MultiplayerReadyPlugin implements JsPsychPlugin<Info> {
   async trial(display_element: HTMLElement, trial: TrialType<Info>, on_load?: () => void) {
     const multiplayer = getMultiplayer(this.jsPsych);
 
-    const expected = trial.expected_players;
+    const expected = trial.expected_players ?? sealedGroupSize(multiplayer);
+    if (expected === null) {
+      throw new Error(
+        "multiplayer-ready: set `expected_players` (the total group size, including this " +
+          "participant). It can be left out only once the group is sealed, e.g. after " +
+          "jsPsych.multiplayer.waitForGroup().",
+      );
+    }
     if (typeof expected !== "number" || !Number.isInteger(expected) || expected < 1) {
       throw new Error(
-        "multiplayer-ready: the `expected_players` parameter is required and must be a positive " +
-          "integer (the total group size, including this participant).",
+        "multiplayer-ready: `expected_players` must be a positive integer (the total group size, " +
+          "including this participant).",
       );
     }
 

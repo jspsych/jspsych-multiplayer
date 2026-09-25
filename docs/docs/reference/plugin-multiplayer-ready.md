@@ -38,7 +38,7 @@ timeline.push({
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
-| `expected_players` | `number` | required | How many group members, including this participant, must be ready before the trial ends. Can be a function that returns the number. |
+| `expected_players` | `number \| null` | `null` | How many group members, including this participant, must be ready before the trial ends. Can be a function that returns the number. `null` means everyone in a [sealed group](../guides/forming-groups) who hasn't left; if the group isn't sealed when the trial starts, you must set it. |
 | `stimulus` | HTML string | required | The content shown above the button. |
 | `prompt` | HTML string | `null` | A reminder shown below the button. `null` shows nothing. |
 | `button_label` | `string` | `"I'm ready"` | The button's label. |
@@ -47,7 +47,7 @@ timeline.push({
 | `data_key` | `string \| null` | `null` | The key that marks this participant as ready at this gate. `null` generates `ready-1`, `ready-2`, … (see [Gate keys](#gate-keys)). |
 | `timeout` | `number \| null` | `null` | The longest time to wait for the others **after** clicking, in ms. When it runs out, the trial ends with `timed_out: true` and `on_timeout` is called. `null`, `0`, or a negative number waits indefinitely. It does not limit how long this participant takes to click. |
 | `on_timeout` | `function \| null` | `null` | Called with the timeout error if `timeout` runs out first. The trial ends either way. |
-| `participants` | `string[] \| null` | `null` | The participants this gate depends on. If one of them leaves before the group is ready, the trial ends with `partner_left: true`. `null` means every other participant who is connected when this participant clicks. `[]` ignores departures. |
+| `participants` | `string[] \| null` | `null` | The participants this gate depends on. If one of them leaves before the group is ready, the trial ends with `partner_left: true`. `null` means every other participant who is connected when this participant clicks. In a [sealed group](../guides/forming-groups), `null` means the rest of the group's members who haven't left, including any who are only `away`. `[]` ignores departures. |
 | `minimum_wait` | `number` | `0` | The shortest time, in ms, to keep the waiting message on screen after the click, so it doesn't flash by for the last participant to click. It does not lengthen a wait that is already longer. |
 
 ## Data

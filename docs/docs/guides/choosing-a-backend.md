@@ -73,9 +73,12 @@ Small studies usually stay within the free tier.
 
 Three things to plan for:
 
-- **You form the groups.** Everyone who opens the experiment with the same `?mp_session=`
-  value in the address is in the same group, so each group needs its own link. JATOS, by
-  contrast, puts arriving participants into groups for you.
+- **Choose how groups form.** By default, everyone who opens the experiment with the same
+  `?mp_session=` value in the address is in the same group, so each group needs its own link.
+  With the adapter's `matchmaking` option, everyone opens one link and the adapter fills
+  groups as participants arrive, as JATOS does. Either way,
+  `jsPsych.multiplayer.waitForGroup()` holds matched participants in a waiting room until their
+  group is full (see [Forming groups](../reference/adapter-multiplayer-firebase#forming-groups)).
 - **The configuration is public.** Anyone can read it from your experiment's page. The
   security rules are what protect the data, so always deploy them.
 - **Recruitment and saving the jsPsych data are up to you.** Firebase only carries the shared

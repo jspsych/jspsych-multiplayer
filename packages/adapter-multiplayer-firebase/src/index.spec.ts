@@ -499,3 +499,218 @@ describe("FirebaseAdapter — with the jsPsych multiplayer core", () => {
     expect(a.multiplayer.status).toBe("closed");
   });
 });
+
+describe("FirebaseAdapter — matchmaking", () => {
+  const LOBBY = "study-1";
+  const lobbyPath = `${PREFIX}-lobby/${LOBBY}`;
+  const groupPath = (session: string) => `${PREFIX}-groups/${session}`;
+
+  function matchmakingAdapter(
+    backend: FakeBackend,
+    id: string,
+    overrides: FirebaseAdapterOptions = {},
+  ) {
+    return new FirebaseAdapter({
+      participantId: id,
+      backend,
+      connectTimeoutMs: 50,
+      matchmaking: { lobby: LOBBY, groupSize: 2 },
+      ...overrides,
+    });
+  }
+
+  async function arrive(
+    rtdb: FakeRtdb,
+    id: string,
+    overrides: FirebaseAdapterOptions = {},
+    backendOptions = {},
+  ) {
+    const backend = new FakeBackend({ rtdb, uid: id, ...backendOptions });
+    const options = makeOptions();
+    const connection = await matchmakingAdapter(backend, id, overrides).connect(options);
+    return { backend, options, connection };
+  }
+
+  it("rejects bad options", () => {
+    const backend = new FakeBackend();
+    expect(() => matchmakingAdapter(backend, "a", { sessionId: "s" })).toThrow(/sessionId/);
+    expect(() =>
+      matchmakingAdapter(backend, "a", { matchmaking: { lobby: LOBBY, groupSize: 0 } }),
+    ).toThrow(/groupSize/);
+    expect(() =>
+      matchmakingAdapter(backend, "a", { matchmaking: { lobby: "a/b", groupSize: 2 } }),
+    ).toThrow(/lobby/);
+  });
+
+  it("without matchmaking the connection doesn't form groups", async () => {
+    const { connection } = await join(new FakeRtdb(), "a");
+    expect(connection.group).toBeUndefined();
+    expect(connection.sealGroup).toBeUndefined();
+  });
+
+  it("fills a group as participants arrive, seals it when full, and starts the next", async () => {
+    const rtdb = new FakeRtdb();
+    const a = await arrive(rtdb, "a");
+    expect(a.connection.group!()).toEqual({ size: 2, members: ["a"], sealed: false });
+
+    const b = await arrive(rtdb, "b");
+    expect(b.connection.sessionId).toBe(a.connection.sessionId);
+    expect(a.connection.group!()).toEqual({ size: 2, members: ["a", "b"], sealed: true });
+    expect(b.connection.group!()).toEqual({ size: 2, members: ["a", "b"], sealed: true });
+
+    const c = await arrive(rtdb, "c");
+    expect(c.connection.sessionId).not.toBe(a.connection.sessionId);
+    expect(c.connection.group!()).toEqual({ size: 2, members: ["c"], sealed: false });
+    expect(rtdb.get(lobbyPath)).toBe(c.connection.sessionId);
+  });
+
+  it("the session paths use the assigned session", async () => {
+    const rtdb = new FakeRtdb();
+    const { connection } = await arrive(rtdb, "a");
+    const session = connection.sessionId;
+    expect(rtdb.get(`${PREFIX}-presence/${session}/a`)).toBe("1");
+    await connection.push({ x: 1 });
+    expect(rtdb.get(`${PREFIX}/${session}/a`)).toBe(JSON.stringify({ x: 1 }));
+  });
+
+  it("a participant who leaves a filling group frees their place", async () => {
+    const rtdb = new FakeRtdb();
+    const a = await arrive(rtdb, "a");
+    await a.connection.disconnect();
+    expect(rtdb.get(`${groupPath(a.connection.sessionId)}/a`)).toBeUndefined();
+
+    const b = await arrive(rtdb, "b");
+    expect(b.connection.sessionId).toBe(a.connection.sessionId);
+    expect(b.connection.group!()).toEqual({ size: 2, members: ["b"], sealed: false });
+  });
+
+  it("a participant who leaves a sealed group stays on the roster", async () => {
+    const rtdb = new FakeRtdb();
+    const a = await arrive(rtdb, "a");
+    const b = await arrive(rtdb, "b");
+    await b.connection.disconnect();
+    expect(a.connection.group!()).toEqual({ size: 2, members: ["a", "b"], sealed: true });
+  });
+
+  it("the server frees the place of a participant whose network drops while the group fills", async () => {
+    const rtdb = new FakeRtdb();
+    const a = await arrive(rtdb, "a");
+    a.backend.simulateDrop();
+    expect(rtdb.get(`${groupPath(a.connection.sessionId)}/a`)).toBeUndefined();
+
+    // Back before anyone took it: they take their place again
+    a.backend.setConnected(true);
+    await flush();
+    expect(a.options.onStatus).toHaveBeenLastCalledWith("connected");
+    expect(a.connection.group!().members).toEqual(["a"]);
+  });
+
+  it("a participant whose place was filled while they were away is closed out", async () => {
+    jest.spyOn(console, "error").mockImplementation(() => {});
+    const rtdb = new FakeRtdb();
+    const a = await arrive(rtdb, "a");
+    a.backend.simulateDrop();
+    const b = await arrive(rtdb, "b");
+    const c = await arrive(rtdb, "c");
+    expect(c.connection.sessionId).toBe(b.connection.sessionId);
+    expect(b.connection.group!()).toEqual({ size: 2, members: ["b", "c"], sealed: true });
+
+    a.backend.setConnected(true);
+    await flush();
+    expect(a.options.onStatus).toHaveBeenLastCalledWith("closed");
+  });
+
+  it("sealGroup() seals the group early, and later arrivals go to a new group", async () => {
+    const rtdb = new FakeRtdb();
+    const three = { matchmaking: { lobby: LOBBY, groupSize: 3 } };
+    const a = await arrive(rtdb, "a", three);
+    const b = await arrive(rtdb, "b", three);
+    await a.connection.sealGroup!();
+    expect(b.connection.group!()).toEqual({ size: 3, members: ["a", "b"], sealed: true });
+    await b.connection.sealGroup!();
+
+    const c = await arrive(rtdb, "c", three);
+    expect(c.connection.sessionId).not.toBe(a.connection.sessionId);
+  });
+
+  it("a late arrival moves on from a sealed group whose rules refuse its onDisconnect", async () => {
+    const rtdb = new FakeRtdb();
+    const three = { matchmaking: { lobby: LOBBY, groupSize: 3 } };
+    // Like the recommended rules: nothing under a sealed group may be written, even on disconnect
+    const sealedRules = {
+      denyOnDisconnect: (path: string) =>
+        rtdb.get(`${path.slice(0, path.lastIndexOf("/"))}/:sealed`) !== undefined,
+    };
+    const a = await arrive(rtdb, "a", three, sealedRules);
+    await a.connection.sealGroup!();
+    const b = await arrive(rtdb, "b", three, sealedRules);
+    expect(b.connection.sessionId).not.toBe(a.connection.sessionId);
+    expect(b.backend.isArmed(`${groupPath(b.connection.sessionId)}/b`)).toBe(true);
+  });
+
+  it("a group that fills between reading the lobby and claiming a place sends the arrival on", async () => {
+    const rtdb = new FakeRtdb();
+    const a = await arrive(rtdb, "a");
+    const session = a.connection.sessionId;
+    let raced = false;
+    const c = await arrive(
+      rtdb,
+      "c",
+      {},
+      {
+        beforeTransactionRead: (path: string) => {
+          if (path === groupPath(session) && !raced) {
+            raced = true;
+            // Another participant's claim commits first and fills the group
+            rtdb.replace(path, { a: "1", b: "1", ":sealed": JSON.stringify(["a", "b"]) });
+          }
+        },
+      },
+    );
+    expect(c.connection.sessionId).not.toBe(session);
+    expect(c.connection.group!().members).toEqual(["c"]);
+  });
+
+  it("works when transactions first run on a guessed null, as the real SDK's do", async () => {
+    const rtdb = new FakeRtdb();
+    const a = await arrive(rtdb, "a", {}, { transactionsGuessNull: true });
+    const b = await arrive(rtdb, "b", {}, { transactionsGuessNull: true });
+    expect(b.connection.sessionId).toBe(a.connection.sessionId);
+    expect(b.connection.group!().sealed).toBe(true);
+  });
+
+  it("with session binding, a same-tab reload goes back to its own group", async () => {
+    const rtdb = new FakeRtdb();
+    const uidMode = { participantId: undefined, useUidAsParticipantId: true };
+    const a = await arrive(rtdb, "a", uidMode);
+    expect(rtdb.get(membership("a"))).toBe(a.connection.sessionId);
+    await arrive(rtdb, "b", uidMode);
+    await a.connection.disconnect();
+
+    // The lobby has moved on, but a's uid is bound to its first group
+    await arrive(rtdb, "c", uidMode);
+    const reloaded = await arrive(rtdb, "a", uidMode);
+    expect(reloaded.connection.sessionId).toBe(a.connection.sessionId);
+  });
+
+  it("with the core, everyone's waiting room ends when the group is full", async () => {
+    const rtdb = new FakeRtdb();
+    const connectJsPsych = async (id: string) => {
+      const jsPsych = initJsPsych();
+      await jsPsych.multiplayer.connect(
+        matchmakingAdapter(new FakeBackend({ rtdb, uid: id, ownsApp: false }), id),
+      );
+      return jsPsych;
+    };
+    const a = await connectJsPsych("a");
+    const waiting = a.multiplayer.waitForGroup();
+    const b = await connectJsPsych("b");
+    await expect(waiting).resolves.toEqual({ size: 2, members: ["a", "b"], sealed: true });
+    expect(b.multiplayer.sessionId).toBe(a.multiplayer.sessionId);
+    expect(b.multiplayer.shuffle("order", [1, 2, 3, 4])).toEqual(
+      a.multiplayer.shuffle("order", [1, 2, 3, 4]),
+    );
+    await a.multiplayer.disconnect();
+    await b.multiplayer.disconnect();
+  });
+});
