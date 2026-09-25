@@ -70,13 +70,11 @@ const { distDir, assetsDir, jasFileName } = buildAssetsAndMetadata({
     title: "Multiplayer Ultimatum Game",
     description: "Two-player ultimatum game built with the jsPsych multiplayer packages.",
     componentTitle: "Ultimatum Game",
-    // Deliberately UNCAPPED, unlike the two-member cap the original version of this script used.
-    // This repo's ultimatum demo models OPEN recruitment: plugin-multiplayer-role assigns the first
-    // two arrivals as proposer/responder and gives every later arrival the `spectator` overflow
-    // role, routed to a "game is full" screen. A JATOS batch capped at 2 active members would keep
-    // extras out of the group entirely, so that whole documented path would be unreachable in the
-    // packaged study. Cap it here only if you actually want JATOS to enforce exactly two.
-    batch: { maxActiveMembers: null, maxTotalMembers: null },
+    // Groups of exactly two. JATOS puts each arrival in a group with room, and the adapter seals
+    // (fixes) a group once it has `maxActiveMembers` members; the page waits for that with
+    // jsPsych.multiplayer.waitForGroup(), so a third arrival starts a new group instead of
+    // joining a game in progress. Without a cap, no group would ever count as full or be sealed.
+    batch: { maxActiveMembers: 2, maxTotalMembers: null },
   },
 });
 

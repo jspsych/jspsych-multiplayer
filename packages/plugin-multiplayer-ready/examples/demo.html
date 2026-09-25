@@ -40,8 +40,8 @@
     const prefix = `mpready-demo:${sessionId}:`;
 
     // --- Minimal localStorage adapter -------------------------------------------------------------
-    // Implements the adapter contract: connect() returns a connection with participantId, getAll,
-    // connectedParticipants, push, and disconnect, and calls onChange() when data changes. To keep
+    // Implements the adapter contract: connect() returns a connection with participantId, sessionId,
+    // getAll, connectedParticipants, push, and disconnect, and calls onChange() when data changes. To keep
     // the demo short, everyone with a slot counts as connected, so nobody is ever marked as left.
     const demoAdapter = {
       async connect({ onChange }) {
@@ -58,6 +58,7 @@
         window.addEventListener("storage", onChange);
         return {
           participantId: myId,
+          sessionId,
           getAll,
           connectedParticipants: () => [myId, ...Object.keys(getAll())],
           async push(data) {
@@ -109,6 +110,13 @@
       stimulus: "<p>🎉 Everyone's ready! Press any key to begin the experiment.</p>",
     };
 
-    jsPsych.multiplayer.connect(demoAdapter).then(() => jsPsych.run([readyGate, start]));
+    jsPsych.multiplayer
+      .connect(demoAdapter)
+      .then(() => jsPsych.run([readyGate, start]))
+      .catch((error) => {
+        // Show a failed connect instead of leaving a blank page
+        console.error(error);
+        document.body.textContent = "Couldn't connect: " + error.message;
+      });
   </script>
 </html>

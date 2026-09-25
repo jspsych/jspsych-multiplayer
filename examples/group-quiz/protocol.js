@@ -18,7 +18,7 @@ const PHASES = Object.freeze({
 const QUESTION_DURATION_MS = 20000;
 const BASE_SCORE = 1000;
 
-/** Returns the participant ID of the host, or null if no host has pushed yet. */
+/** Returns the participant ID of the host, or null if no host has written yet. */
 function getHostId(group) {
   return Object.keys(group).find((id) => group[id]?.role === "host") ?? null;
 }
@@ -28,7 +28,7 @@ function getHostId(group) {
 // JATOS does not guarantee a client observes every intermediate snapshot. If a
 // lagging player's snapshot jumps past a phase, an exact `phase === X` barrier
 // would become permanently unsatisfiable and the player hangs forever. To avoid
-// that, every host push also carries a `step`: a number that only ever
+// that, every host write also carries a `step`: a number that only ever
 // increases. Players wait with `hostStepValue(group) >= phaseStep(...)`, and a
 // `>=` test on a monotonic value can never be missed — once true it stays true.
 
@@ -48,7 +48,7 @@ function phaseStep(questionIndex, phase) {
   return (questionIndex ?? 0) * PHASES_PER_QUESTION + PHASE_ORDER[phase];
 }
 
-/** The host's current step, or -1 if no host has pushed a step yet. */
+/** The host's current step, or -1 if no host has written a step yet. */
 function hostStepValue(group) {
   const hostId = getHostId(group);
   const step = hostId !== null ? group[hostId]?.step : undefined;

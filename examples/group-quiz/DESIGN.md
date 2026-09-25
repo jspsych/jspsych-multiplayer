@@ -12,8 +12,11 @@ timeline and coordination is by deterministic consensus.
 
 ## The core idea
 
-Everything lives on one shared object — the **group session**, a map keyed by participant ID.
-**Each participant writes ONLY their own key.** There are two kinds of participant:
+Everything lives on one shared object — the **session scope** of the group's shared data, a map
+keyed by participant ID. The host runs no trials, so its reads and writes use the session scope by
+default; the players run a jsPsych timeline, where calls default to the running trial's own part of
+the data, so they pass `{ scope: "session" }` on every protocol read and write. **Each participant
+writes ONLY their own key.** There are two kinds of participant:
 
 - **The host** (the presenter screen). Writes one key: the game state — the source of truth for what
   phase the game is in and which question is live.
@@ -55,7 +58,7 @@ no jsPsych instance to hang a plugin off.
 ### The answer key is host-only by design
 
 `questions.js` carries `correct`, and the protocol keeps **correctness a host decision**: players
-push only their `choice`, and the host publishes `correctChoice` at `reveal`. If players could read
+write only their `choice`, and the host publishes `correctChoice` at `reveal`. If players could read
 the key before `reveal`, anyone could win from devtools.
 
 The demo compromises on this for convenience: `index.html` is a single file serving both roles, so it
@@ -81,7 +84,7 @@ wait_for: (group) => group[hostId]?.phase === PHASES.REVEAL   // ✗ deadlocks
 If the client's next snapshot jumps from `question` straight to `leaderboard`, the `=== "reveal"`
 test becomes **permanently unsatisfiable** and that player hangs forever.
 
-So every host push also carries a `step`: a number that **only ever increases**
+So every host write also carries a `step`: a number that **only ever increases**
 (`questionIndex × 4 + phaseOrder`). Players wait on
 
 ```js
@@ -109,6 +112,10 @@ coordination. This demo was **not**, and the reason is structural rather than hi
   running a timeline, because a presenter screen reacts continuously (`subscribe`) rather than
   advancing through trials. Plugins
   are trials; there is nowhere to put one. Half the game is therefore out of reach by construction.
+- **`sync` waits on its own trial's data.** The host's state lives in the session scope (the host
+  has no trials to scope it to), so a sync barrier's `wait_for` would never see it. Each player
+  barrier is instead a small `call-function` trial around `jsPsych.multiplayer.wait(condition,
+  { scope: "session", participants: [hostId] })`.
 - **`countdown` resolves the consensus start as the _minimum_ start timestamp across all slots** —
   peer-to-peer agreement with no authority. This quiz's clock is **host-authoritative**: the host
   stamps `questionStartTime` and every player derives from it. Substituting min-across-slots would
@@ -128,9 +135,9 @@ coordination. This demo was **not**, and the reason is structural rather than hi
 
 The composition-first demos are `ultimatum-game-jatos.html`, `scoreboard-room.html`, and
 `match-room.html`. This one earns its place by showing the other half: what the raw primitives
-(`push` / `subscribe` / `getAll` / `wait`) look like when a demo genuinely needs them, and what the
-sync plugin still buys you even then — every one of the player's four "wait for the host" points is
-one declarative barrier trial rather than bespoke coordination code.
+(`update` / `subscribe` / `getAll` / `wait`) look like when a demo genuinely needs them — every one of
+the player's four "wait for the host" points is one call to a shared `hostBarrier()` helper around
+`wait()`, rather than bespoke coordination code.
 
 ---
 
@@ -138,15 +145,14 @@ one declarative barrier trial rather than bespoke coordination code.
 
 - **A host who leaves ends the game.** The player's mid-game barriers (`revealBarrier`,
   `leaderboardBarrier`, `nextQuestionBarrier`) name the host in `participants`. If the host closes
-  the presenter screen, each barrier ends with `partner_left: true` once the host counts as `left`
-  (after the dropout timeout, 10 s by default), and every player skips to the end screen. There is
-  no host hand-over. The barriers have no `timeout`, because a presenter pausing between questions
-  while still connected is normal.
+  the presenter screen, each wait fails with a `participant_left` error once the host counts as
+  `left` (after the dropout timeout, 10 s by default), and every player skips to the end screen. A
+  reloaded host page counts as having left too. There is no host hand-over. The barriers have no
+  `timeout`, because a presenter pausing between questions while still connected is normal.
 - **Group size is unproven at audience scale.** JATOS group studies were designed for small groups,
   and the "room full of phones" premise assumes the group session stays responsive with ~20+
-  members pushing. That has not been load-tested. It is the demo's single biggest risk, and it is a
-  property of the JATOS backend, not of these packages — `plugin-multiplayer-sync` does nothing to
-  mitigate it.
+  members writing. That has not been load-tested. It is the demo's single biggest risk, and it is a
+  property of the JATOS backend, not of these packages.
 - **Single host, no election.** Whoever clicks "I'm the Host" first is the host; a second person
   clicking it produces a second `role: "host"` entry and `getHostId` picks whichever key iterates
   first. Fine for a presenter-driven demo, wrong for anything unsupervised.

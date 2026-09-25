@@ -44,7 +44,6 @@ const assets = [
     dest: "plugin-html-keyboard-response.js",
   },
   { src: multiplayerAsset(root, "adapter-multiplayer-jatos"), dest: "jatos-adapter.js" },
-  { src: multiplayerAsset(root, "plugin-multiplayer-sync"), dest: "plugin-multiplayer-sync.js" },
   // protocol.js and questions.js are already loaded by flat name, so they need no rewrite below.
   { src: "examples/group-quiz/protocol.js", dest: "protocol.js" },
   { src: "examples/group-quiz/questions.js", dest: "questions.js" },
@@ -58,7 +57,6 @@ const pathRewrites = {
   "https://unpkg.com/@jspsych/plugin-html-button-response": "plugin-html-button-response.js",
   "https://unpkg.com/@jspsych/plugin-html-keyboard-response": "plugin-html-keyboard-response.js",
   "../../packages/adapter-multiplayer-jatos/dist/index.browser.min.js": "jatos-adapter.js",
-  "../../packages/plugin-multiplayer-sync/dist/index.browser.min.js": "plugin-multiplayer-sync.js",
 };
 
 // ── Build ─────────────────────────────────────────────────────────────────────

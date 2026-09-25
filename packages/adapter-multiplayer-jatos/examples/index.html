@@ -50,7 +50,22 @@
     // option is sealWhenFull (default true). Timeouts are options of connect() itself, e.g.
     // connect(adapter, { connectTimeout: 20000, reconnectTimeout: 5 * 60_000 }) — see the README.
     jatos.onLoad(async () => {
-      await jsPsych.multiplayer.connect(new jsPsychAdapterMultiplayerJatos());
+      try {
+        await jsPsych.multiplayer.connect(new jsPsychAdapterMultiplayerJatos());
+      } catch (error) {
+        // Show a failed connect instead of leaving a blank page
+        console.error(error);
+        document.body.innerHTML = "<p>Couldn't connect to the study server. Please reload the page.</p>";
+        return;
+      }
+      // A reload keeps the participant's ID, but the group counts them as having left
+      if (jsPsych.multiplayer.restarted) {
+        document.body.innerHTML = "<p>You reloaded the page, so you can't rejoin this study.</p>";
+        return;
+      }
+      // With groups of a fixed size (the batch's max active members), wait until JATOS has
+      // filled and sealed this participant's group before starting.
+      await jsPsych.multiplayer.waitForGroup();
       await jsPsych.run(timeline);
     });
   </script>
