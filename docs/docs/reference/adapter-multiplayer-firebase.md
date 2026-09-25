@@ -67,6 +67,9 @@ Pass these to the constructor. Give either `firebaseConfig` or `database`; if yo
 
 ## Forming groups
 
+The [Forming groups](../guides/forming-groups) guide explains both ways of forming groups and the
+waiting room; this section covers what is specific to Firebase.
+
 ### One link per group
 
 Without `matchmaking`, the session ID decides the group. The first participant to open the

@@ -8,7 +8,12 @@ import {
 } from "jspsych";
 
 import { version } from "../package.json";
-import { getMultiplayer, isMultiplayerError, remainingParticipants } from "./multiplayer";
+import {
+  getMultiplayer,
+  isMultiplayerError,
+  remainingParticipants,
+  sealedGroupSize,
+} from "./multiplayer";
 import { makeReadiness } from "./readiness";
 import { AssignOptions, assignRoles } from "./roles";
 import {
@@ -41,7 +46,9 @@ const info = <const>{
     strategy: { type: ParameterType.FUNCTION, default: "join_order" },
     /**
      * Wait for EXACTLY this many participants before computing (fail-loud). Participants who have
-     * left the session don't count and aren't assigned. `null` trusts an upstream barrier.
+     * left the session don't count and aren't assigned. `null` (the default) means the members of
+     * a sealed group (see `jsPsych.multiplayer.group()`) who haven't left; with a group that isn't
+     * sealed, `null` trusts an upstream barrier.
      */
     group_size: { type: ParameterType.INT, default: null },
     /** Round index, for `rotate` and per-round `random`. Increment each re-run. */
@@ -186,12 +193,14 @@ class MultiplayerRolePlugin implements JsPsychPlugin<Info> {
     // over participants PRESENT in the snapshot, so it can resolve the instant THIS client has pushed —
     // assigning over a partial group. Warn unless an upstream barrier is trusted to have admitted and
     // pushed every peer first.
-    if (trial.group_size == null && trial.ready == null) {
+    const groupSize = trial.group_size ?? sealedGroupSize(multiplayer);
+    if (groupSize == null && trial.ready == null) {
       console.warn(
         "plugin-multiplayer-role: no `group_size` and no custom `ready` — readiness can resolve as " +
           "soon as this client has pushed, assigning over a partial group. Set `group_size` (the exact " +
-          "count) or supply a `ready` predicate unless an upstream barrier guarantees all peers have " +
-          "already pushed into this session.",
+          "count), seal the group first (jsPsych.multiplayer.waitForGroup()), or supply a `ready` " +
+          "predicate unless an upstream barrier guarantees all peers have already pushed into this " +
+          "session.",
       );
     }
 
@@ -218,7 +227,7 @@ class MultiplayerRolePlugin implements JsPsychPlugin<Info> {
     on_load?.();
 
     const isReady = makeReadiness({
-      groupSize: trial.group_size,
+      groupSize,
       strategy: trial.strategy,
       rankBy: trial.rank_by ?? undefined,
       roleFrom: trial.role_from ?? undefined,

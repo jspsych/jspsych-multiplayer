@@ -61,7 +61,7 @@ a participant who leaves frees their place; after it, they count as a dropout. A
 group when it is full. `waitForGroup()` holds participants in a waiting room until then, and
 `sealGroup()` seals it early. With a backend where you form the groups (the local and Firebase
 adapters' `?mp_session=` links), `members` is everyone who has shown up, the group is never
-sealed, and `sealGroup()` and `waitForGroup()` reject.
+sealed, and `sealGroup()` and `waitForGroup()` reject. See [Forming groups](../guides/forming-groups).
 
 ### Rejoining
 

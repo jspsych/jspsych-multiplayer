@@ -98,7 +98,8 @@ shares it, so each group gets its own
 ## Forming groups
 
 Everyone opens the same study link, and JATOS puts each arriving participant into a group that
-still has room. `connect()` resolves as soon as the participant has a group, which is usually
+still has room. The [Forming groups](../guides/forming-groups) guide explains the idea; this
+section covers what is specific to JATOS. `connect()` resolves as soon as the participant has a group, which is usually
 before the group is full, so start the experiment with a waiting room:
 
 ```js

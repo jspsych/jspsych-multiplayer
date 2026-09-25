@@ -36,14 +36,35 @@ export function isMultiplayerError(
 }
 
 /**
- * The other participants who are connected right now. Participants who are only
- * `away` are left out: leftover slots from members who left earlier start out
- * `away` and become `left` a few seconds later, which would otherwise end a
- * gate that starts right after joining.
+ * The other participants this participant waits on. In a sealed group
+ * (see `jsPsych.multiplayer.group()`), that is the rest of the roster, except
+ * members who have already left: a member who is only `away` may come back,
+ * so the gate still waits for them. Otherwise it is the others who are
+ * connected right now. Participants who are only `away` are left out then:
+ * leftover slots from members who left earlier start out `away` and become
+ * `left` a few seconds later, which would otherwise end a gate that starts
+ * right after joining.
  */
 export function remainingParticipants(multiplayer: Multiplayer): string[] {
   const presence = multiplayer.presence();
-  return Object.keys(presence).filter(
-    (id) => id !== multiplayer.participantId && presence[id] === "connected",
-  );
+  const isOther = (id: string) => id !== multiplayer.participantId;
+  // Older jsPsych builds have no group()
+  const group = typeof multiplayer.group === "function" ? multiplayer.group() : null;
+  if (group?.sealed) {
+    return group.members.filter((id) => isOther(id) && presence[id] !== "left");
+  }
+  return Object.keys(presence).filter((id) => isOther(id) && presence[id] === "connected");
+}
+
+/**
+ * How many members of a sealed group haven't left, counting this participant,
+ * or null when the group isn't sealed (or the jsPsych build has no group()).
+ * Plugins use it as the default group size.
+ */
+export function sealedGroupSize(multiplayer: Multiplayer): number | null {
+  if (typeof multiplayer.group !== "function") return null;
+  const group = multiplayer.group();
+  if (!group.sealed) return null;
+  const presence = multiplayer.presence();
+  return group.members.filter((id) => presence[id] !== "left").length;
 }

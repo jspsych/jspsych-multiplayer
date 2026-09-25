@@ -16,6 +16,7 @@ import {
   isMultiplayerError,
   nextGateKey,
   remainingParticipants,
+  sealedGroupSize,
 } from "./multiplayer";
 
 // Public types are part of the API. They erase at build time, so exporting them does not add a
@@ -53,9 +54,11 @@ const info = <const>{
     data_key: { type: ParameterType.STRING, default: null },
     /**
      * The group size — including this participant — that must record a choice before the barrier
-     * lifts and the reveal is shown. Set it to the exact expected count. Required.
+     * lifts and the reveal is shown. Set it to the exact expected count. Null (the default) means
+     * the members of a sealed group (see `jsPsych.multiplayer.group()`) who haven't left; with a
+     * group that isn't sealed when the trial starts, it is required.
      */
-    expected_players: { type: ParameterType.INT, default: undefined },
+    expected_players: { type: ParameterType.INT, default: null },
     /** HTML shown after this participant has chosen, while waiting for the rest of the group. */
     waiting_message: {
       type: ParameterType.HTML_STRING,
@@ -209,11 +212,18 @@ class MultiplayerChoicePlugin implements JsPsychPlugin<Info> {
         "plugin-multiplayer-choice: `choices` is required and must be a non-empty array of option labels.",
       );
     }
-    const expected = trial.expected_players;
+    const expected = trial.expected_players ?? sealedGroupSize(multiplayer);
+    if (expected === null) {
+      throw new Error(
+        "plugin-multiplayer-choice: set `expected_players` (the group size, including this " +
+          "participant, that must choose before the barrier lifts). It can be left out only once " +
+          "the group is sealed, e.g. after jsPsych.multiplayer.waitForGroup().",
+      );
+    }
     if (typeof expected !== "number" || !Number.isInteger(expected) || expected < 1) {
       throw new Error(
-        "plugin-multiplayer-choice: `expected_players` is required and must be a positive integer " +
-          "(the group size, including this participant, that must choose before the barrier lifts).",
+        "plugin-multiplayer-choice: `expected_players` must be a positive integer (the group size, " +
+          "including this participant, that must choose before the barrier lifts).",
       );
     }
     const revealMode = trial.reveal_mode;

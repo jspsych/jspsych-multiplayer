@@ -247,6 +247,58 @@ describe("multiplayer-ready plugin", () => {
     }
   });
 
+  describe("in a sealed group", () => {
+    it("expected_players defaults to the roster, and waits for a member who is only away", async () => {
+      const { plugin, finished, hub, multiplayer } = await setup({ dropoutTimeout: null });
+      const peer = await hub.join("p2");
+      hub.seal(["p1", "p2", "p3"]);
+      // p3 has a place but hasn't connected yet
+      expect(multiplayer.presence().p3).toBe("away");
+      const el = display();
+
+      const done = plugin.trial(el, { ...defaults, expected_players: null, timeout: 40 } as never);
+      clickReady(el);
+      await peer.jsPsych.multiplayer.update({ "ready-1": true });
+      await done;
+      expect(finished[0]).toMatchObject({ timed_out: true, n_ready: 2 });
+    });
+
+    it("members who already left don't count toward the default", async () => {
+      const { plugin, finished, hub } = await setup({ dropoutTimeout: 10 });
+      const peer = await hub.join("p2");
+      hub.seal(["p1", "p2", "p3"]);
+      await sleep(20);
+      const el = display();
+
+      const done = plugin.trial(el, { ...defaults, expected_players: null } as never);
+      clickReady(el);
+      await peer.jsPsych.multiplayer.update({ "ready-1": true });
+      await done;
+      expect(finished[0]).toMatchObject({ timed_out: false, partner_left: false, n_ready: 2 });
+    });
+
+    it("ends with partner_left when a roster member leaves while waiting", async () => {
+      const { plugin, finished, hub } = await setup({ dropoutTimeout: 10 });
+      const peer = await hub.join("p2");
+      hub.seal(["p1", "p2"]);
+      const el = display();
+
+      const done = plugin.trial(el, { ...defaults, expected_players: null } as never);
+      clickReady(el);
+      await sleep(0);
+      await peer.jsPsych.multiplayer.disconnect();
+      await done;
+      expect(finished[0]).toMatchObject({ partner_left: true, left_participant: "p2" });
+    });
+  });
+
+  it("without a sealed group, a missing expected_players says how to fix it", async () => {
+    const { plugin } = await setup();
+    await expect(
+      plugin.trial(display(), { ...defaults, expected_players: null } as never),
+    ).rejects.toThrow(/sealed/);
+  });
+
   it("propagates a write failure instead of masking it as a timeout", async () => {
     const { plugin, finished, me } = await setup();
     me.connection.pushImpl = async () => {

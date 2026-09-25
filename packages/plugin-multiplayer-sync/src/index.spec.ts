@@ -180,6 +180,17 @@ describe("multiplayer-sync plugin", () => {
     expect(finished[0]).toMatchObject({ partner_left: false, timed_out: true });
   });
 
+  it("in a sealed group, participants: null depends on the roster, including members who are away", async () => {
+    const { plugin, finished, hub, multiplayer } = await setup({ dropoutTimeout: 20 });
+    hub.seal(["p1", "p2"]);
+    // p2 has a place but isn't connected: they start out away and are still waited on
+    expect(multiplayer.presence().p2).toBe("away");
+
+    await plugin.trial(display(), { ...defaults, wait_for: () => false } as never);
+
+    expect(finished[0]).toMatchObject({ partner_left: true, left_participant: "p2" });
+  });
+
   it("ignores departures when participants is []", async () => {
     const { plugin, finished, hub } = await setup({ dropoutTimeout: 10 });
     const peer = await hub.join("p2");

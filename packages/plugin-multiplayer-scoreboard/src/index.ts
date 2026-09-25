@@ -14,6 +14,7 @@ import {
   isMultiplayerError,
   nextGateKey,
   remainingParticipants,
+  sealedGroupSize,
 } from "./multiplayer";
 import { LeaderboardRow, buildLeaderboard, countReported } from "./scoreboard";
 import { getLeaderboard, getMyRank, getMyScore, setMyStanding } from "./store";
@@ -53,8 +54,10 @@ const info = <const>{
     /**
      * Wait until AT LEAST this many participants have reported a score before revealing the board (a
      * barrier, so no one sees a partial ranking). Set it to the total expected count. Participants
-     * who have left the session don't count. `null` reveals immediately from whoever has reported so
-     * far — only sensible when an upstream barrier already gathered everyone.
+     * who have left the session don't count. `null` (the default) means the members of a sealed
+     * group (see `jsPsych.multiplayer.group()`) who haven't left; with a group that isn't sealed,
+     * `null` reveals immediately from whoever has reported so far — only sensible when an upstream
+     * barrier already gathered everyone.
      */
     group_size: { type: ParameterType.INT, default: null },
     /**
@@ -195,11 +198,13 @@ class MultiplayerScoreboardPlugin implements JsPsychPlugin<Info> {
           "trial can never end. Provide a `button_label`.",
       );
     }
-    if (trial.group_size == null) {
+    const target = trial.group_size ?? sealedGroupSize(multiplayer);
+    if (target == null) {
       console.warn(
         "plugin-multiplayer-scoreboard: no `group_size` — the board reveals as soon as this client " +
-          "reports, so it may be partial. Set `group_size` (the exact count) unless an upstream " +
-          "barrier already gathered every peer's score.",
+          "reports, so it may be partial. Set `group_size` (the exact count), or seal the group " +
+          "first (jsPsych.multiplayer.waitForGroup()), unless an upstream barrier already gathered " +
+          "every peer's score.",
       );
     }
     // `score` is meant to be auto-computed from this client's own prior data (a dynamic `score`
@@ -228,7 +233,6 @@ class MultiplayerScoreboardPlugin implements JsPsychPlugin<Info> {
       },
     };
 
-    const target = trial.group_size;
     const isReady =
       typeof target === "number"
         ? (g: GroupSessionData, presence: PresenceData) =>

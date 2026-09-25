@@ -362,6 +362,31 @@ describe("plugin-multiplayer-role — trial wrapper", () => {
     expect(finished[0].timed_out).toBe(false);
   });
 
+  it("in a sealed group, group_size defaults to the roster, without a warning", async () => {
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+    const { hub, jsPsych, finished } = await setup("p1");
+    hub.seal(["p1", "p2"]);
+    const plugin = new MultiplayerRolePlugin(jsPsych as never);
+
+    plugin.trial(display(), {
+      roles: ["a", "b"],
+      strategy: "join_order",
+      round: 0,
+      push_data: {},
+      timeout: 30000,
+    } as never);
+    await flush();
+    expect(warn).not.toHaveBeenCalled();
+    expect(finished).toHaveLength(0); // p2 is on the roster but hasn't arrived
+
+    const p2 = await hub.join("p2");
+    await p2.jsPsych.multiplayer.update({ joinedAt: 99 });
+    await flush();
+    expect(finished).toHaveLength(1);
+    expect(Object.keys(finished[0].role_map).sort()).toEqual(["p1", "p2"]);
+    warn.mockRestore();
+  });
+
   it("warns and can resolve over a partial group when group_size and ready are both omitted", async () => {
     const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
     const { api, jsPsych, finished } = await setup("p1"); // only this client present, no group_size cap

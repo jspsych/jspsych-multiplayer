@@ -44,7 +44,7 @@ timeline.push({
 | `message` | HTML string | `"<p>Waiting for other players…</p>"` | Shown while waiting. |
 | `timeout` | `number \| null` | `null` | The longest time to wait, in ms. When it runs out, the trial ends with `timed_out: true` and `on_timeout` is called. `null`, `0`, or a negative number waits indefinitely. |
 | `on_timeout` | `function \| null` | `null` | Called with the timeout error if `timeout` runs out first. The trial ends either way. |
-| `participants` | `string[] \| null` | `[]` | The participants this wait depends on. If one of them leaves before the condition is true, the trial ends with `partner_left: true`. The default, `[]`, ignores departures, which suits a lobby that keeps waiting for others to join. `null` means every other participant who is connected when the wait starts. Can be a function, e.g. `() => [partnerId]`. |
+| `participants` | `string[] \| null` | `[]` | The participants this wait depends on. If one of them leaves before the condition is true, the trial ends with `partner_left: true`. The default, `[]`, ignores departures, which suits a lobby that keeps waiting for others to join. `null` means every other participant who is connected when the wait starts. In a [sealed group](../guides/forming-groups), `null` means the rest of the group's members who haven't left, including any who are only `away`. Can be a function, e.g. `() => [partnerId]`. |
 | `minimum_wait` | `number` | `0` | The shortest time, in ms, to keep the message on screen, so it doesn't flash by when the condition is already true. It does not lengthen a wait that is already longer. |
 
 ## Data

@@ -124,6 +124,26 @@ describe("plugin-multiplayer-match — trial wrapper", () => {
     expect(Object.keys(finished[0].match_map)).toHaveLength(4);
   });
 
+  it("in a sealed group, expected_players defaults to the roster, without a warning", async () => {
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+    const { hub, jsPsych, finished } = await setup("a");
+    hub.seal(["a", "b"]);
+
+    const done = new MultiplayerMatchPlugin(jsPsych as never).trial(display(), {
+      ...base,
+      expected_players: null,
+    } as never);
+    await flush();
+    expect(warn).not.toHaveBeenCalledWith(expect.stringMatching(/expected_players/));
+    expect(finished).toHaveLength(0); // b is on the roster but hasn't arrived
+
+    const b = await hub.join("b");
+    await b.jsPsych.multiplayer.update({ joinedAt: 2 });
+    await done;
+    expect(finished[0].partners).toEqual(["b"]);
+    warn.mockRestore();
+  });
+
   it("warns when neither expected_players nor a ready predicate is set", async () => {
     const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
     const { api, jsPsych } = await setup("a");
