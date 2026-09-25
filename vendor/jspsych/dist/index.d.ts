@@ -785,7 +785,8 @@ interface ConnectOptions extends SessionOptions {
     connectTimeout?: number | null;
     /**
      * Whether to add `multiplayer_participant_id` and `multiplayer_session_id` to every row of
-     * jsPsych's data, so data from the members of a group can be joined. Defaults to true.
+     * jsPsych's data recorded while connected, so data from the members of a group can be joined.
+     * Defaults to true.
      */
     recordIds?: boolean;
 }
@@ -813,11 +814,6 @@ interface WaitOptions extends SubscribeOptions {
 }
 /** Options for waitForGroup(). */
 type GroupWaitOptions = Pick<WaitOptions, "timeout" | "signal">;
-/** What jsPsych gives the MultiplayerAPI. */
-interface MultiplayerDependencies {
-    /** Add properties to every row of jsPsych's data. */
-    addDataProperties(properties: Record<string, unknown>): void;
-}
 /** Key of the hooks jsPsych calls as its timeline runs. Not part of the public API. */
 declare const timelineHooks: unique symbol;
 /**
@@ -825,18 +821,19 @@ declare const timelineHooks: unique symbol;
  * it, so plugins can call jsPsych.multiplayer.update() and so on without holding a session.
  */
 declare class MultiplayerAPI {
-    private readonly dependencies?;
     /** The latest session, open or closed. Closed sessions still answer reads. */
     private session;
     private connecting;
     /** The running trial's scope name, or null between trials. */
     private trialScope;
+    /** The IDs to add to each row of jsPsych's data, or null when not recording them. */
+    private recordedIds;
     /**
      * This page load's identity, shared by every session opened from it, so the group can tell a
      * reconnect of this page from a reload.
      */
     private readonly identity;
-    constructor(dependencies?: MultiplayerDependencies);
+    constructor();
     /** This participant's ID within the group. Null until connect() resolves. */
     get participantId(): string | null;
     /** The group session's ID, the same for every participant in the group. Null until connect() resolves. */
@@ -919,6 +916,8 @@ declare class MultiplayerAPI {
         trialFinished: () => void;
         /** The experiment finished or was aborted: end every subscription and wait. */
         experimentEnded: () => void;
+        /** Properties to add to a trial's data row, or null for none. */
+        dataProperties: () => Record<string, string> | null;
     };
 }
 

@@ -717,7 +717,7 @@ function parseSlot(raw) {
   const scopes = {};
   if (isRecord(raw.scopes)) {
     for (const [name, data] of Object.entries(raw.scopes)) {
-      if (isRecord(data)) scopes[name] = data;
+      if (isRecord(data) && name !== "__proto__") scopes[name] = data;
     }
   }
   return {
@@ -732,7 +732,10 @@ function parseSlot(raw) {
   };
 }
 function scopeData(slot, scope) {
-  return scope === null ? slot.session : slot.scopes[scope];
+  if (scope === null) {
+    return slot.session;
+  }
+  return Object.prototype.hasOwnProperty.call(slot.scopes, scope) ? slot.scopes[scope] : void 0;
 }
 function assertRecord(data) {
   if (!isRecord(data)) {
@@ -1223,13 +1226,14 @@ class MultiplayerSession {
     if (typeof this.connection.sealGroup !== "function") {
       throw new MultiplayerError("unsupported", "this adapter can't seal groups.");
     }
-    this.sealing ??= (async () => {
-      try {
-        await this.connection.sealGroup();
-      } finally {
-        this.sealing = null;
-      }
-    })();
+    if (!this.sealing) {
+      const sealing = Promise.resolve().then(() => this.connection.sealGroup());
+      this.sealing = sealing;
+      sealing.finally(() => {
+        if (this.sealing === sealing) this.sealing = null;
+      }).catch(() => {
+      });
+    }
     await this.sealing;
     this.handleChange();
   }
@@ -1345,7 +1349,7 @@ class MultiplayerSession {
     this.remoteJson = json;
     const slots = {};
     for (const [id, raw] of Object.entries(fromJson(json))) {
-      if (id === this.participantId) continue;
+      if (id === this.participantId || id === "__proto__") continue;
       const slot = parseSlot(raw);
       if (slot) slots[id] = slot;
     }
@@ -1414,6 +1418,15 @@ class MultiplayerSession {
       this.readSlots();
       this.refreshGroup();
       this.refreshPresence();
+      if (this.isEvicted()) {
+        void this.close(
+          new MultiplayerError(
+            "connection_lost",
+            "the rest of the group counted this participant as having left."
+          )
+        );
+        return;
+      }
       this.announce();
     }
     this.rebuild();
@@ -1609,6 +1622,9 @@ class MultiplayerSession {
   /** Work out the group's state from the adapter, or from presence. Returns whether it changed. */
   refreshGroup() {
     const reported = this.readAdapterGroup();
+    if (!reported && typeof this.connection.group === "function") {
+      return false;
+    }
     let next;
     if (reported) {
       if (reported.sealed || this.roster) {
@@ -1686,13 +1702,14 @@ const DEFAULT_CONNECT_TIMEOUT = 2e4;
 const timelineHooks = Symbol("multiplayer timeline hooks");
 _a = timelineHooks;
 class MultiplayerAPI {
-  constructor(dependencies) {
-    this.dependencies = dependencies;
+  constructor() {
     /** The latest session, open or closed. Closed sessions still answer reads. */
     this.session = null;
     this.connecting = null;
     /** The running trial's scope name, or null between trials. */
     this.trialScope = null;
+    /** The IDs to add to each row of jsPsych's data, or null when not recording them. */
+    this.recordedIds = null;
     /**
      * This page load's identity, shared by every session opened from it, so the group can tell a
      * reconnect of this page from a reload.
@@ -1720,7 +1737,10 @@ class MultiplayerAPI {
       /** The experiment finished or was aborted: end every subscription and wait. */
       experimentEnded: () => {
         this.session?.cancelListeners("all");
-      }
+        this.trialScope = null;
+      },
+      /** Properties to add to a trial's data row, or null for none. */
+      dataProperties: () => this.recordedIds
     };
     autoBind(this);
   }
@@ -1813,12 +1833,10 @@ class MultiplayerAPI {
         throw new MultiplayerError("cancelled", "connect() was cancelled before it finished.");
       }
       this.session = session;
-      if (recordIds) {
-        this.dependencies?.addDataProperties({
-          multiplayer_participant_id: session.participantId,
-          multiplayer_session_id: session.sessionId
-        });
-      }
+      this.recordedIds = recordIds ? {
+        multiplayer_participant_id: session.participantId,
+        multiplayer_session_id: session.sessionId
+      } : null;
     } catch (e) {
       if (timedOut) {
         throw new MultiplayerError("timeout", `connect() timed out after ${timeout}ms.`);
@@ -3846,6 +3864,7 @@ class JsPsych {
         this.multiplayer[timelineHooks].trialEnded();
         const result = trial.getResult();
         if (result) {
+          Object.assign(result, this.multiplayer[timelineHooks].dataProperties());
           result.time_elapsed = this.getTotalTime();
           this.data.write(trial);
         }
@@ -3921,9 +3940,7 @@ class JsPsych {
       );
     }
     this.data = new JsPsychData(this.dataDependencies);
-    this.multiplayer = new MultiplayerAPI({
-      addDataProperties: (properties) => this.data.addProperties(properties)
-    });
+    this.multiplayer = new MultiplayerAPI();
     this.pluginAPI = createJointPluginAPIObject(this);
     this.extensionManager = new ExtensionManager(
       this.extensionManagerDependencies,
