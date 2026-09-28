@@ -1,6 +1,6 @@
 {
   "name": "@jspsych-multiplayer/adapter-multiplayer-jatos",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "JATOS group study adapter for the jsPsych multiplayer API",
   "type": "module",
   "main": "dist/index.cjs",
@@ -41,7 +41,7 @@
   },
   "homepage": "https://github.com/jspsych/jspsych-multiplayer/blob/main/packages/adapter-multiplayer-jatos/README.md",
   "dependencies": {
-    "@jspsych-multiplayer/utils": "^0.0.0"
+    "@jspsych-multiplayer/utils": "^0.1.0"
   },
   "peerDependencies": {
     "jspsych": ">=8.0.0"
