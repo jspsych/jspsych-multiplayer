@@ -38,12 +38,12 @@ timeline.push({
 });
 ```
 
-| | |
-| --- | --- |
-| Package | `@jspsych-multiplayer/plugin-multiplayer-reference-game` |
-| Browser global | `jsPsychMultiplayerReferenceGame` |
-| Trial type | `multiplayer-reference-game` |
-| Requires | a connected session (see [Getting started](../getting-started)) and a role for each player, usually from [`multiplayer-role`](plugin-multiplayer-role) |
+|                |                                                                                                                                                        |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Package        | `@jspsych-multiplayer/plugin-multiplayer-reference-game`                                                                                               |
+| Browser global | `jsPsychMultiplayerReferenceGame`                                                                                                                      |
+| Trial type     | `multiplayer-reference-game`                                                                                                                           |
+| Requires       | a connected session (see [Getting started](../getting-started)) and a role for each player, usually from [`multiplayer-role`](plugin-multiplayer-role) |
 
 ## Parameters
 
@@ -54,109 +54,110 @@ In the tables below, _k_ is the number of targets.
 
 ### Objects and layout
 
-| Parameter | Type | Default | Description |
-| --- | --- | --- | --- |
-| `stimuli` | `object[]` | required | The objects, as `{ id, src?, html?, label? }`. Each `id` must be unique. `src` is an image URL; `html` is inline HTML, such as an SVG; otherwise `label` (or the `id`) is shown as text. Every object is on screen. |
-| `columns` | `number` | `6` | How many columns the grid has. Ignored when `rows` is set. |
-| `rows` | `number \| null` | `null` | How many rows the grid has. The number of columns is then worked out from it. `null` uses `columns`. |
-| `cell_size` | `number \| null` | `null` | The width of each grid column, in pixels. `null` lets each be between 3 and 6 em wide. |
-| `scramble_mode` | `string` | `"independent"` | How the two players' arrangements relate: `"independent"` (different random arrangements), `"disjoint"` (different, and no object is in the same place for both, as in the original study; needs at least 2 objects), `"shared"` (the same arrangement for both), or `"matcher_only"` (the director sees `stimuli` in the order given; the matcher's is shuffled). |
-| `seed` | `string \| null` | `null` | Picks different arrangements within the session. Randomness is seeded by the session ID (or the `randomSeed` connect option), so each group gets its own arrangements. |
-| `show_labels` | `boolean` | `false` | Show each object's `label` (or `id`) under it. |
+| Parameter       | Type             | Default         | Description                                                                                                                                                                                                                                                                                                                                                        |
+| --------------- | ---------------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `stimuli`       | `object[]`       | required        | The objects, as `{ id, src?, html?, label? }`. Each `id` must be unique. `src` is an image URL; `html` is inline HTML, such as an SVG; otherwise `label` (or the `id`) is shown as text. Every object is on screen.                                                                                                                                                |
+| `columns`       | `number`         | `6`             | How many columns the grid has. Ignored when `rows` is set.                                                                                                                                                                                                                                                                                                         |
+| `rows`          | `number \| null` | `null`          | How many rows the grid has. The number of columns is then worked out from it. `null` uses `columns`.                                                                                                                                                                                                                                                               |
+| `cell_size`     | `number \| null` | `null`          | The width of each grid column, in pixels. `null` lets each be between 3 and 6 em wide.                                                                                                                                                                                                                                                                             |
+| `scramble_mode` | `string`         | `"independent"` | How the two players' arrangements relate: `"independent"` (different random arrangements), `"disjoint"` (different, and no object is in the same place for both, as in the original study; needs at least 2 objects), `"shared"` (the same arrangement for both), or `"matcher_only"` (the director sees `stimuli` in the order given; the matcher's is shuffled). |
+| `seed`          | `string \| null` | `null`          | Picks different arrangements within the session. Randomness is seeded by the session ID (or the `randomSeed` connect option), so each group gets its own arrangements.                                                                                                                                                                                             |
+| `show_labels`   | `boolean`        | `false`         | Show each object's `label` (or `id`) under it.                                                                                                                                                                                                                                                                                                                     |
 
 ### Targets and scoring
 
-| Parameter | Type | Default | Description |
-| --- | --- | --- | --- |
-| `targets` | `string[]` | required | The `id`s of the target objects, in order. |
-| `ordered` | `boolean \| null` | `null` | Whether the matcher must put the targets in the right slots (`true`) or only pick the right objects (`false`). `null` means `true` when _k_ > 1. |
-| `scoring` | `string \| function` | `"per_slot"` | How `n_correct` is counted: `"per_slot"` (one per correct slot), `"all_or_nothing"` (_k_ if every slot is right, else 0), or your own `(assignment, targets) => number`, whose result is rounded and kept between 0 and _k_. |
+| Parameter        | Type                              | Default      | Description                                                                                                                                      |
+| ---------------- | --------------------------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `targets`        | `string[]`                        | required     | The `id`s of the target objects, in order.                                                                                                       |
+| `ordered`        | `boolean \| null`                 | `null`       | Whether the matcher must put the targets in the right slots (`true`) or only pick the right objects (`false`). `null` means `true` when _k_ > 1. |
+| `scoring`        | `string`                          | `"per_slot"` | How `n_correct` is counted: `"per_slot"` (one per correct slot) or `"all_or_nothing"` (_k_ if every slot is right, else 0).                      |
+| `score_function` | `(assignment, targets) => number` | `null`       | Your own scoring, in place of `scoring`. The result is rounded and kept between 0 and _k_.                                                       |
 
 ### Roles
 
-| Parameter | Type | Default | Description |
-| --- | --- | --- | --- |
-| `role` | `string` | required | This participant's role: `"director"` or `"matcher"`. Usually `() => jsPsychMultiplayerRole.getMyRole()`. |
-| `role_labels` | `object` | `{ director: "Director", matcher: "Matcher" }` | The names used for the two roles on screen. |
-| `director_can_select` | `boolean` | `false` | Let the director click objects to highlight them for themselves. The highlight is not sent or scored. |
-| `reveal_target_to` | `string` | `"director"` | Who sees the targets outlined before the answer: `"director"`, `"matcher"`, `"both"`, or `"none"`. |
+| Parameter             | Type      | Default                                        | Description                                                                                               |
+| --------------------- | --------- | ---------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `role`                | `string`  | required                                       | This participant's role: `"director"` or `"matcher"`. Usually `() => jsPsychMultiplayerRole.getMyRole()`. |
+| `role_labels`         | `object`  | `{ director: "Director", matcher: "Matcher" }` | The names used for the two roles on screen.                                                               |
+| `director_can_select` | `boolean` | `false`                                        | Let the director click objects to highlight them for themselves. The highlight is not sent or scored.     |
+| `reveal_target_to`    | `string`  | `"director"`                                   | Who sees the targets outlined before the answer: `"director"`, `"matcher"`, `"both"`, or `"none"`.        |
 
 ### Chat
 
-| Parameter | Type | Default | Description |
-| --- | --- | --- | --- |
-| `chat_enabled` | `boolean` | `true` | Show the chat panel. |
-| `chat_role` | `string` | `"both"` | Who can send messages: `"director"`, `"matcher"`, or `"both"`. Both can always read. |
-| `max_messages` | `number \| null` | `null` | The most messages this participant can send in the round. `null` means no limit. |
-| `max_length` | `number \| null` | `null` | The longest a message can be, in characters. Longer messages are cut when sent. `null` means no limit. |
-| `require_message_before_response` | `boolean` | `false` | Ignore the matcher's clicks until the director has sent a message this round, as in the original study's Experiment 2. Ignored clicks are shown a hint and recorded as `gated_click` in `interaction_history`. Has no effect when `chat_enabled` is `false`. |
-| `placeholder` | `string` | `"Type a message…"` | Placeholder text in the empty text box. |
-| `chat_persists` | `boolean` | `false` | Keep one conversation across rounds: the log is kept in the session scope and shared by every reference-game trial with `chat_persists` on. `false` starts each round with an empty chat. |
-| `chat_position` | `string` | `"below"` | Where the chat panel goes: `"below"` or `"beside"` the grid. |
-| `typing_indicator` | `boolean` | `false` | Show "Matcher is typing…" (or "Director is typing…") while the partner types. It is only a hint: it never holds up the trial, and it is hidden while the partner is away or has left. |
-| `typing_ttl` | `number` | `2500` | How long the typing hint stays up after the partner's last keystroke, in ms. |
-| `typing_throttle` | `number` | `800` | While typing, send at most one update per this many ms. |
-| `typing_label` | `string \| null` | `null` | The typing hint's text. `null` uses the partner's role label, e.g. "Matcher is typing…". |
+| Parameter                         | Type             | Default             | Description                                                                                                                                                                                                                                                  |
+| --------------------------------- | ---------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `chat_enabled`                    | `boolean`        | `true`              | Show the chat panel.                                                                                                                                                                                                                                         |
+| `chat_role`                       | `string`         | `"both"`            | Who can send messages: `"director"`, `"matcher"`, or `"both"`. Both can always read.                                                                                                                                                                         |
+| `max_messages`                    | `number \| null` | `null`              | The most messages this participant can send in the round. `null` means no limit.                                                                                                                                                                             |
+| `max_length`                      | `number \| null` | `null`              | The longest a message can be, in characters. Longer messages are cut when sent. `null` means no limit.                                                                                                                                                       |
+| `require_message_before_response` | `boolean`        | `false`             | Ignore the matcher's clicks until the director has sent a message this round, as in the original study's Experiment 2. Ignored clicks are shown a hint and recorded as `gated_click` in `interaction_history`. Has no effect when `chat_enabled` is `false`. |
+| `placeholder`                     | `string`         | `"Type a message…"` | Placeholder text in the empty text box.                                                                                                                                                                                                                      |
+| `chat_persists`                   | `boolean`        | `false`             | Keep one conversation across rounds: the log is kept in the session scope and shared by every reference-game trial with `chat_persists` on. `false` starts each round with an empty chat.                                                                    |
+| `chat_position`                   | `string`         | `"below"`           | Where the chat panel goes: `"below"` or `"beside"` the grid.                                                                                                                                                                                                 |
+| `typing_indicator`                | `boolean`        | `false`             | Show "Matcher is typing…" (or "Director is typing…") while the partner types. It is only a hint: it never holds up the trial, and it is hidden while the partner is away or has left.                                                                        |
+| `typing_ttl`                      | `number`         | `2500`              | How long the typing hint stays up after the partner's last keystroke, in ms.                                                                                                                                                                                 |
+| `typing_throttle`                 | `number`         | `800`               | While typing, send at most one update per this many ms.                                                                                                                                                                                                      |
+| `typing_label`                    | `string \| null` | `null`              | The typing hint's text. `null` uses the partner's role label, e.g. "Matcher is typing…".                                                                                                                                                                     |
 
 ### Answering
 
-| Parameter | Type | Default | Description |
-| --- | --- | --- | --- |
-| `response_mode` | `string \| null` | `null` | `"click"` (one click is the answer) or `"assign_slots"` (numbered slots). `null` means `"click"` when _k_ = 1 and `"assign_slots"` otherwise. |
-| `auto_submit` | `boolean \| null` | `null` | Send the answer as soon as every slot is filled, without a Submit button. `null` means `true` when _k_ = 1. |
-| `submit_label` | `string` | `"Submit"` | The label of the Submit button. |
-| `allow_change` | `boolean` | `true` | Let the matcher change a choice before submitting. |
-| `selection_timeout` | `number \| null` | `null` | The matcher's time limit, in ms. When it runs out, whatever they have chosen so far is submitted and scored, and the round ends with `multiplayer_outcome: "timeout"`. It keeps running while the matcher waits for a message under `require_message_before_response`. |
+| Parameter           | Type              | Default    | Description                                                                                                                                                                                                                                                            |
+| ------------------- | ----------------- | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `response_mode`     | `string \| null`  | `null`     | `"click"` (one click is the answer) or `"assign_slots"` (numbered slots). `null` means `"click"` when _k_ = 1 and `"assign_slots"` otherwise.                                                                                                                          |
+| `auto_submit`       | `boolean \| null` | `null`     | Send the answer as soon as every slot is filled, without a Submit button. `null` means `true` when _k_ = 1.                                                                                                                                                            |
+| `submit_label`      | `string`          | `"Submit"` | The label of the Submit button.                                                                                                                                                                                                                                        |
+| `allow_change`      | `boolean`         | `true`     | Let the matcher change a choice before submitting.                                                                                                                                                                                                                     |
+| `selection_timeout` | `number \| null`  | `null`     | The matcher's time limit, in ms. When it runs out, whatever they have chosen so far is submitted and scored, and the round ends with `multiplayer_outcome: "timeout"`. It keeps running while the matcher waits for a message under `require_message_before_response`. |
 
 ### Feedback
 
-| Parameter | Type | Default | Description |
-| --- | --- | --- | --- |
-| `feedback` | `boolean` | `true` | Show feedback after the matcher answers. `false` ends the trial as soon as the answer arrives. |
-| `feedback_content` | `object` | `{ reveal_target: true, show_score: true, show_partner_choice: true }` | What feedback shows: the targets, the score, and the matcher's choices. To show the two players different things, key it by role: `{ director: {…}, matcher: {…} }`. Missing entries are `true`. |
-| `feedback_to` | `string` | `"both"` | Who sees feedback: `"director"`, `"matcher"`, or `"both"`. |
-| `feedback_duration` | `number \| null` | `3000` | How long feedback stays up, in ms. `null` shows a **Continue** button instead. |
-| `show_running_score` | `boolean` | `false` | Add a running total to the score line: this round's `n_correct` plus the `n_correct` of this participant's earlier reference-game trials in the jsPsych data. |
+| Parameter            | Type             | Default                                                                | Description                                                                                                                                                                                      |
+| -------------------- | ---------------- | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `feedback`           | `boolean`        | `true`                                                                 | Show feedback after the matcher answers. `false` ends the trial as soon as the answer arrives.                                                                                                   |
+| `feedback_content`   | `object`         | `{ reveal_target: true, show_score: true, show_partner_choice: true }` | What feedback shows: the targets, the score, and the matcher's choices. To show the two players different things, key it by role: `{ director: {…}, matcher: {…} }`. Missing entries are `true`. |
+| `feedback_to`        | `string`         | `"both"`                                                               | Who sees feedback: `"director"`, `"matcher"`, or `"both"`.                                                                                                                                       |
+| `feedback_duration`  | `number \| null` | `3000`                                                                 | How long feedback stays up, in ms. `null` shows a **Continue** button instead.                                                                                                                   |
+| `show_running_score` | `boolean`        | `false`                                                                | Add a running total to the score line: this round's `n_correct` plus the `n_correct` of this participant's earlier reference-game trials in the jsPsych data.                                    |
 
 ### Rounds, timing, and data
 
-| Parameter | Type | Default | Description |
-| --- | --- | --- | --- |
-| `prompt` | HTML string or `(role) => string` | `""` | Shown above the board. A function receives this participant's role, so the two players can get different instructions. |
-| `round` | `number` | required | The round number. Must be different for every round in the experiment (see [Rounds](#rounds)). Usually `jsPsych.timelineVariable("round")`. |
-| `partner_id` | `string \| null` | `null` | The partner's participant ID. `null` finds the one other participant: the other member of a [sealed group](../guides/forming-groups), or else the other connected participant. Set it when the session can hold more than two people. |
-| `round_timeout` | `number \| null` | `null` | The longest the round can last before feedback, in ms. When it runs out, the round ends with `multiplayer_outcome: "timeout"` and no answer. If neither this nor `selection_timeout` is set, a warning is logged: a partner who stays connected but never acts would leave the trial waiting forever. |
-| `end_on_participant_left` | `boolean` | `true` | End the round, with no answer, if the partner leaves before feedback. |
-| `save_orders` | `boolean` | `true` | Save both players' arrangements in `my_order` and `partner_order`. |
-| `save_transcript` | `boolean` | `true` | Save the chat in `chat_transcript`. |
-| `save_interaction_history` | `boolean` | `false` | Save every choice the matcher made before submitting in `interaction_history`. |
-| `save_group` | `boolean` | `false` | Save this round's shared data, as it was at the end of the trial, in `group`. |
+| Parameter                  | Type                                   | Default  | Description                                                                                                                                                                                                                                                                                           |
+| -------------------------- | -------------------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `prompt`                   | HTML string or `{ director, matcher }` | `""`     | Shown above the board. Give an object with one entry per role so the two players get different instructions.                                                                                                                                                                                          |
+| `round`                    | `number`                               | required | The round number. Must be different for every round in the experiment (see [Rounds](#rounds)). Usually `jsPsych.timelineVariable("round")`.                                                                                                                                                           |
+| `partner_id`               | `string \| null`                       | `null`   | The partner's participant ID. `null` finds the one other participant: the other member of a [sealed group](../guides/forming-groups), or else the other connected participant. Set it when the session can hold more than two people.                                                                 |
+| `round_timeout`            | `number \| null`                       | `null`   | The longest the round can last before feedback, in ms. When it runs out, the round ends with `multiplayer_outcome: "timeout"` and no answer. If neither this nor `selection_timeout` is set, a warning is logged: a partner who stays connected but never acts would leave the trial waiting forever. |
+| `end_on_participant_left`  | `boolean`                              | `true`   | End the round, with no answer, if the partner leaves before feedback.                                                                                                                                                                                                                                 |
+| `save_orders`              | `boolean`                              | `true`   | Save both players' arrangements in `my_order` and `partner_order`.                                                                                                                                                                                                                                    |
+| `save_transcript`          | `boolean`                              | `true`   | Save the chat in `chat_transcript`.                                                                                                                                                                                                                                                                   |
+| `save_interaction_history` | `boolean`                              | `false`  | Save every choice the matcher made before submitting in `interaction_history`.                                                                                                                                                                                                                        |
+| `save_group`               | `boolean`                              | `false`  | Save this round's shared data, as it was at the end of the trial, in `group`.                                                                                                                                                                                                                         |
 
 ## Data
 
 Both players get a row for each round. Fields about the answer are `null` if the round ended
 without one.
 
-| Field | Type | Description |
-| --- | --- | --- |
-| `role` | `string` | `"director"` or `"matcher"`. |
-| `round` | `number` | The round number. |
-| `targets` | `string[]` | The target `id`s, in order. |
-| `assignment` | `string \| object \| null` | The matcher's answer. With one target, the `id` they clicked. With more, an object from slot number (starting at 1) to `id`, e.g. `{ "1": "c", "2": "a" }`. |
-| `n_correct` | `number \| null` | The score, counted as `scoring` says. |
-| `n_targets` | `number` | _k_, the number of targets. |
-| `accuracy` | `number \| null` | `n_correct / n_targets`. |
-| `correct` | `boolean \| null` | `true` if every slot was right, whatever `scoring` says. |
-| `rt` | `number \| null` | For the matcher, ms from the start of the trial to the answer. `null` for the director. |
-| `chat_transcript` | `object[]` | The round's chat, as `{ id, senderId, seq, text, ts, round }` messages. Only when `save_transcript` is `true`. |
-| `message_count` | `number` | How many messages are in the chat. |
-| `messages_sent` | `number` | How many of them this participant sent. |
-| `my_order` | `string[]` | The `id`s in the order this participant saw them, row by row. Only when `save_orders` is `true`. |
-| `partner_order` | `string[] \| null` | The same for the partner. `null` if the partner was never found. Only when `save_orders` is `true`. |
-| `interaction_history` | `object[]` | The matcher's choices before submitting, as `{ t, action, slot, object_id }`. `t` is ms from the start of the trial; `action` is `"assign"`, `"reassign"`, `"clear"`, or `"gated_click"`. Only for the matcher, and only when `save_interaction_history` is `true`. |
-| `multiplayer_outcome` | `string` | How the round ended: `"completed"` (the matcher answered), `"timeout"` (see below), `"participant_left"` (the partner left the study), `"connection_lost"` (this participant's connection was lost for good), or `"cancelled"` (the experiment called `jsPsych.multiplayer.disconnect()` during the round). |
-| `left_participant` | `string \| null` | The partner's ID, when `multiplayer_outcome` is `"participant_left"`. |
-| `group` | `object` | Every participant's shared data for this round. Only when `save_group` is `true`. |
+| Field                 | Type                       | Description                                                                                                                                                                                                                                                                                                 |
+| --------------------- | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `role`                | `string`                   | `"director"` or `"matcher"`.                                                                                                                                                                                                                                                                                |
+| `round`               | `number`                   | The round number.                                                                                                                                                                                                                                                                                           |
+| `targets`             | `string[]`                 | The target `id`s, in order.                                                                                                                                                                                                                                                                                 |
+| `assignment`          | `string \| object \| null` | The matcher's answer. With one target, the `id` they clicked. With more, an object from slot number (starting at 1) to `id`, e.g. `{ "1": "c", "2": "a" }`.                                                                                                                                                 |
+| `n_correct`           | `number \| null`           | The score, counted as `scoring` says.                                                                                                                                                                                                                                                                       |
+| `n_targets`           | `number`                   | _k_, the number of targets.                                                                                                                                                                                                                                                                                 |
+| `accuracy`            | `number \| null`           | `n_correct / n_targets`.                                                                                                                                                                                                                                                                                    |
+| `correct`             | `boolean \| null`          | `true` if every slot was right, whatever `scoring` says.                                                                                                                                                                                                                                                    |
+| `rt`                  | `number \| null`           | For the matcher, ms from the start of the trial to the answer. `null` for the director.                                                                                                                                                                                                                     |
+| `chat_transcript`     | `object[]`                 | The round's chat, as `{ id, senderId, seq, text, ts, round }` messages. Only when `save_transcript` is `true`.                                                                                                                                                                                              |
+| `message_count`       | `number`                   | How many messages are in the chat.                                                                                                                                                                                                                                                                          |
+| `messages_sent`       | `number`                   | How many of them this participant sent.                                                                                                                                                                                                                                                                     |
+| `my_order`            | `string[]`                 | The `id`s in the order this participant saw them, row by row. Only when `save_orders` is `true`.                                                                                                                                                                                                            |
+| `partner_order`       | `string[] \| null`         | The same for the partner. `null` if the partner was never found. Only when `save_orders` is `true`.                                                                                                                                                                                                         |
+| `interaction_history` | `object[]`                 | The matcher's choices before submitting, as `{ t, action, slot, object_id }`. `t` is ms from the start of the trial; `action` is `"assign"`, `"reassign"`, `"clear"`, or `"gated_click"`. Only for the matcher, and only when `save_interaction_history` is `true`.                                         |
+| `multiplayer_outcome` | `string`                   | How the round ended: `"completed"` (the matcher answered), `"timeout"` (see below), `"participant_left"` (the partner left the study), `"connection_lost"` (this participant's connection was lost for good), or `"cancelled"` (the experiment called `jsPsych.multiplayer.disconnect()` during the round). |
+| `left_participant`    | `string \| null`           | The partner's ID, when `multiplayer_outcome` is `"participant_left"`.                                                                                                                                                                                                                                       |
+| `group`               | `object`                   | Every participant's shared data for this round. Only when `save_group` is `true`.                                                                                                                                                                                                                           |
 
 `multiplayer_outcome: "timeout"` has two cases. If `selection_timeout` ran out, the matcher's
 partial answer was scored and feedback was shown, so `assignment` and `n_correct` are filled in.
@@ -238,10 +239,10 @@ const gameRound = {
   require_message_before_response: true,
   show_running_score: true,
   round_timeout: 90000,
-  prompt: (role) =>
-    role === "director"
-      ? "<p>Describe the outlined shape so your partner can find it.</p>"
-      : "<p>Click the shape your partner describes.</p>",
+  prompt: {
+    director: "<p>Describe the outlined shape so your partner can find it.</p>",
+    matcher: "<p>Click the shape your partner describes.</p>",
+  },
   on_finish: (data) => {
     if (
       data.multiplayer_outcome === "participant_left" ||

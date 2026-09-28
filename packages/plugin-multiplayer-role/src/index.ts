@@ -35,19 +35,24 @@ import {
 // default export without deviating from the convention.
 export type { Snapshot, RoleAssignment, RoleMap, Ctx, AssignOptions } from "./roles";
 
+/** The string presets `strategy` accepts. */
+const STRATEGIES = ["join_order", "random", "rotate"] as const;
+type Preset = (typeof STRATEGIES)[number];
+
 const info = <const>{
   name: "multiplayer-role",
   version: version,
   parameters: {
     /** The roles to hand out: an array (one slot per entry) or an object of counts. */
     roles: { type: ParameterType.OBJECT, default: undefined },
+    /** How participants are ordered into slots: `"join_order"`, `"random"`, or `"rotate"`. */
+    strategy: { type: ParameterType.STRING, default: "join_order" },
     /**
-     * How participants are ordered into slots: a string preset (`"join_order"`/`"random"`/`"rotate"`)
-     * or a custom `(snapshot, ctx) => roleMap`. FUNCTION is deliberate — it stops jsPsych's
-     * dynamic-parameter machinery from CALLING the value and substituting its return. A string preset
-     * is still a valid default/value; do NOT "fix" this to OBJECT.
+     * `(snapshot, ctx) => roleMap`. A custom rule that returns the whole role map, in place of
+     * `strategy`, `rank_by`, and `role_from`. Requires `ready`. FUNCTION, so jsPsych passes the
+     * function itself rather than calling it before the trial.
      */
-    strategy: { type: ParameterType.FUNCTION, default: "join_order" },
+    assign_roles: { type: ParameterType.FUNCTION, default: null },
     /**
      * Wait for EXACTLY this many participants to reach this trial before computing (fail-loud).
      * Participants who have left the session don't count and aren't assigned. `null` (the default)
@@ -64,13 +69,12 @@ const info = <const>{
      * by the session ID (or the `randomSeed` connect option), so each group gets its own assignment.
      */
     seed: { type: ParameterType.STRING, default: null },
-    /** `(entry, id, ctx) => number`. Order by a numeric key, highest first. FUNCTION: see `strategy`. */
+    /** `(entry, id, ctx) => number`. Order by a numeric key, highest first. FUNCTION: see `assign_roles`. */
     rank_by: { type: ParameterType.FUNCTION, default: null },
-    /** `(entry, id, ctx) => string`. The role IS a value each participant carries. FUNCTION: see `strategy`. */
+    /** `(entry, id, ctx) => string`. The role IS a value each participant carries. FUNCTION: see `assign_roles`. */
     role_from: { type: ParameterType.FUNCTION, default: null },
     /**
-     * `(snapshot, presence) => boolean`. Override the readiness gate; REQUIRED when `strategy` is a
-     * custom function. `snapshot` holds the participants who have reached this trial and haven't
+     * `(snapshot, presence) => boolean`. Override the readiness gate; REQUIRED with `assign_roles`. `snapshot` holds the participants who have reached this trial and haven't
      * left. Both arguments are frozen, so don't modify them.
      */
     ready: { type: ParameterType.FUNCTION, default: null },
@@ -192,15 +196,23 @@ class MultiplayerRolePlugin implements JsPsychPlugin<Info> {
       );
     }
 
-    // A custom strategy function is opaque to the readiness derivation, so it cannot infer when the
-    // group is safe to assign over. Require an explicit `ready` predicate rather than silently gating
-    // on participant count alone.
-    if (typeof trial.strategy === "function" && trial.ready == null) {
+    const preset = (trial.strategy ?? "join_order") as Preset;
+    if (!STRATEGIES.includes(preset)) {
       throw new Error(
-        "plugin-multiplayer-role: a custom `strategy` function requires an explicit `ready` " +
-          "predicate (the readiness gate cannot be derived from an opaque strategy).",
+        `plugin-multiplayer-role: \`strategy\` must be one of ${STRATEGIES.join(", ")} ` +
+          `(got ${JSON.stringify(trial.strategy)}). Pass a custom function as \`assign_roles\`.`,
       );
     }
+    // A custom rule is opaque to the readiness derivation, so it cannot infer when the group is safe
+    // to assign over. Require an explicit `ready` predicate rather than silently gating on
+    // participant count alone.
+    if (trial.assign_roles != null && trial.ready == null) {
+      throw new Error(
+        "plugin-multiplayer-role: `assign_roles` requires an explicit `ready` predicate (the " +
+          "readiness gate cannot be derived from a custom rule).",
+      );
+    }
+    const strategy = (trial.assign_roles ?? preset) as AssignOptions["strategy"];
 
     // The accessors read this jsPsych's data when called without one
     rememberJsPsych(this.jsPsych);
@@ -226,7 +238,7 @@ class MultiplayerRolePlugin implements JsPsychPlugin<Info> {
 
     const isReady = makeReadiness({
       groupSize,
-      strategy: trial.strategy,
+      strategy,
       rankBy: trial.rank_by ?? undefined,
       roleFrom: trial.role_from ?? undefined,
       ready: trial.ready ?? undefined,
@@ -279,7 +291,7 @@ class MultiplayerRolePlugin implements JsPsychPlugin<Info> {
         () => {
           const roleMap = assignRoles(readySnapshot, {
             roles: trial.roles as AssignOptions["roles"],
-            strategy: trial.strategy,
+            strategy,
             seed: trial.seed ?? undefined,
             round: trial.round,
             balanced: trial.balanced,

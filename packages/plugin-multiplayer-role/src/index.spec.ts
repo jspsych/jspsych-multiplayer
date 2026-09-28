@@ -58,12 +58,20 @@ describe("plugin-multiplayer-role — trial wrapper", () => {
     expect(() => plugin.trial(display(), { roles: ["a", "b"] } as never)).toThrow(/participantId/i);
   });
 
-  it("guards: a custom strategy function requires an explicit `ready` predicate", () => {
+  it("guards: assign_roles requires an explicit `ready` predicate", () => {
     const jsPsych = { multiplayer: { participantId: "me" } };
     const plugin = new MultiplayerRolePlugin(jsPsych as never);
-    expect(() => plugin.trial(display(), { roles: ["a"], strategy: () => ({}) } as never)).toThrow(
-      /ready/i,
-    );
+    expect(() =>
+      plugin.trial(display(), { roles: ["a"], assign_roles: () => ({}) } as never),
+    ).toThrow(/ready/i);
+  });
+
+  it("guards: strategy must be one of the presets", () => {
+    const jsPsych = { multiplayer: { participantId: "me" } };
+    const plugin = new MultiplayerRolePlugin(jsPsych as never);
+    expect(() =>
+      plugin.trial(display(), { roles: ["a"], strategy: "alphabetical" } as never),
+    ).toThrow(/assign_roles/);
   });
 
   it("happy path (join_order): assigns over the ready snapshot and finishes", async () => {
@@ -229,7 +237,7 @@ describe("plugin-multiplayer-role — trial wrapper", () => {
     expect(finished[0].assigned_self).toBe(true); // p3 IS in the map, as overflow
   });
 
-  it("assigned_self false: a custom strategy that omits me yields role null but not a timeout", async () => {
+  it("assigned_self false: an assign_roles rule that omits me yields role null but not a timeout", async () => {
     const { api, jsPsych, finished } = await setup("p1");
     api.seed("p2", {});
 
@@ -237,8 +245,8 @@ describe("plugin-multiplayer-role — trial wrapper", () => {
 
     plugin.trial(display(), {
       roles: ["x"],
-      // Custom strategy hands p2 a role and leaves p1 (me) out — a deliberate spectator.
-      strategy: (snapshot: Record<string, unknown>) => ({ p2: { role: "x" } }),
+      // A custom rule hands p2 a role and leaves p1 (me) out — a deliberate spectator.
+      assign_roles: (snapshot: Record<string, unknown>) => ({ p2: { role: "x" } }),
       ready: (snapshot: Record<string, unknown>) => Object.keys(snapshot).length === 2,
       round: 0,
       write_data: {},
@@ -504,10 +512,8 @@ describe("plugin-multiplayer-role — real jsPsych pipeline (startTimeline smoke
     hub.addPeer("p2", { joinedAt: 200 });
     hub.seed("p2", {}, { scope: "#0" });
 
-    // jsPsych's parameter pipeline warns when a FUNCTION-typed parameter receives a string — the
-    // documented, deliberate tradeoff of typing `strategy` as FUNCTION (see info.parameters). Capture
-    // the warning so it is asserted (the tradeoff is known) rather than leaking into test output.
-    const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+    // A string preset is a plain STRING parameter, so jsPsych has nothing to warn about
+    const warn = jest.spyOn(console, "warn");
     const { getData, expectFinished, finished } = await startTimeline(
       [
         {
@@ -522,7 +528,7 @@ describe("plugin-multiplayer-role — real jsPsych pipeline (startTimeline smoke
 
     await finished;
     await expectFinished();
-    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/non-function value.*strategy/i));
+    expect(warn).not.toHaveBeenCalledWith(expect.stringMatching(/non-function value/i));
     warn.mockRestore();
 
     const data = getData().values()[0];
@@ -536,8 +542,6 @@ describe("plugin-multiplayer-role — real jsPsych pipeline (startTimeline smoke
 
 // ---------------------------------------------------------------------------------------------------
 describe("plugin-multiplayer-role — trial scope (real jsPsych timeline)", () => {
-  // jsPsych warns that the `strategy` default is a string; see the startTimeline smoke test
-  beforeEach(() => jest.spyOn(console, "warn").mockImplementation(() => {}));
   afterEach(() => jest.restoreAllMocks());
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
   const roleTrial = {
@@ -637,8 +641,6 @@ describe("plugin-multiplayer-role — trial scope (real jsPsych timeline)", () =
 
 // ---------------------------------------------------------------------------------------------------
 describe("plugin-multiplayer-role — accessors", () => {
-  // jsPsych warns that the `strategy` default is a string; see the startTimeline smoke test
-  beforeEach(() => jest.spyOn(console, "warn").mockImplementation(() => {}));
   afterEach(() => jest.restoreAllMocks());
   /** Run a two-player role trial for p1, with p2 as a peer who has reached the trial. */
   async function runRoleTrial(hub: MemoryHub, p1JoinedAt: number) {

@@ -464,6 +464,45 @@ describe("multiplayer-reference-game: multi-target (full-board) assign task", ()
     expect(finished[0]).toMatchObject({ n_correct: 2, correct: true });
   });
 
+  it("score_function replaces the scoring preset", async () => {
+    const api = await makeApi("matcher");
+    const { jsPsych, finished } = makeJsPsych(api);
+    const el = display();
+
+    run(jsPsych, el, {
+      ...base,
+      stimuli: STIMULI4,
+      targets: ["a", "b"],
+      ordered: false,
+      partner_id: "director",
+      score_function: (assignment: Record<string, string>) => Object.keys(assignment).length - 1,
+    });
+    clickCell(el, "b");
+    clickCell(el, "a");
+    submitBtn(el).dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    expect(finished[0]).toMatchObject({ n_correct: 1 });
+  });
+
+  it("a scoring value that isn't a preset points to score_function", async () => {
+    const { jsPsych } = makeJsPsych(await makeApi("matcher"));
+    expect(() => run(jsPsych, display(), { ...base, scoring: "per_target" })).toThrow(
+      /score_function/,
+    );
+  });
+
+  it("prompt can give each role its own instructions", async () => {
+    const { jsPsych } = makeJsPsych(await makeApi("matcher"));
+    const el = display();
+    run(jsPsych, el, {
+      ...base,
+      partner_id: "director",
+      prompt: { director: "Describe the target.", matcher: "Pick the target." },
+    });
+    expect(el.textContent).toContain("Pick the target.");
+    expect(el.textContent).not.toContain("Describe the target.");
+  });
+
   it("records the pre-submit interaction history when enabled", async () => {
     const api = await makeApi("matcher");
     const { jsPsych, finished } = makeJsPsych(api);

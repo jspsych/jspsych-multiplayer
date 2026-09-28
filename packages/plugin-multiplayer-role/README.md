@@ -46,14 +46,15 @@ adapter (e.g. JATOS group sessions).
 | Parameter       | Type            | Default                     | Description                                                                                                                                                                                                                                                                                                                                                                                 |
 | --------------- | --------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `roles`         | array \| object | _required_                  | The roles to hand out. An array is one slot per entry (`["proposer", "responder"]`); an object is counts (`{ leader: 1, follower: 3 }`).                                                                                                                                                                                                                                                    |
-| `strategy`      | string \| fn    | `"join_order"`              | How participants are ordered into the role slots. One of `"join_order"`, `"random"`, `"rotate"`, or a custom `(snapshot, ctx) => roleMap` function (see below).                                                                                                                                                                                                                             |
+| `strategy`      | string          | `"join_order"`              | How participants are ordered into the role slots: `"join_order"`, `"random"`, or `"rotate"` (see below).                                                                                                                                                                                                                                                                                    |
+| `assign_roles`  | fn              | `null`                      | `(snapshot, ctx) => roleMap`. Your own rule, returning the whole map; takes precedence over everything else. Requires `ready`.                                                                                                                                                                                                                                                              |
 | `group_size`    | int             | `null`                      | If set, assignment waits for **exactly** this many participants to reach this trial before computing (fail-loud, not `>=`). Participants who have left the session don't count and aren't assigned. `null` assumes an upstream waiting-room barrier already capped the group. In a sealed group (`jsPsych.multiplayer.group().sealed`), `null` counts the group's members who haven't left. |
 | `round`         | int             | `0`                         | Round index, for `rotate` and per-round `random`. Increment it each time you re-run the trial.                                                                                                                                                                                                                                                                                              |
 | `balanced`      | bool            | `false`                     | For `rotate`: use the balanced (Latin-square) variant — see [Rotation](#rotation-rotate).                                                                                                                                                                                                                                                                                                   |
 | `seed`          | string          | `null`                      | Picks a different random assignment within the session. Randomness is seeded by the session ID (or the `randomSeed` connect option), so each group gets its own assignment and every client computes the same one.                                                                                                                                                                          |
 | `rank_by`       | fn              | `null`                      | `(entry, id, ctx) => number`. Order participants by a numeric key (highest first), e.g. a task score.                                                                                                                                                                                                                                                                                       |
 | `role_from`     | fn              | `null`                      | `(entry, id, ctx) => string`. The role **is** a value each participant already carries; must return a declared role. Does not enforce per-role counts.                                                                                                                                                                                                                                      |
-| `ready`         | fn              | `null`                      | `(snapshot, presence) => boolean`. Override the readiness gate; **required** when `strategy` is a custom function. `snapshot` holds the participants who have reached this trial and haven't left (see [What the strategies see](#what-the-strategies-see)); both arguments are frozen, so don't modify them.                                                                               |
+| `ready`         | fn              | `null`                      | `(snapshot, presence) => boolean`. Override the readiness gate; **required** with `assign_roles`. `snapshot` holds the participants who have reached this trial and haven't left (see [What the strategies see](#what-the-strategies-see)); both arguments are frozen, so don't modify them.                                                                                                |
 | `overflow_role` | string          | `null`                      | Role for participants beyond the declared slots — applies whenever the participant count exceeds the number of declared slots, whether or not `group_size` is set. If unset, overflow throws.                                                                                                                                                                                               |
 | `write_data`    | object          | `{}`                        | Data this client contributes to the snapshot (e.g. the score `rank_by` ranks on). Merged into this participant's data in the trial's own scope, so it never reaches another trial.                                                                                                                                                                                                          |
 | `save_group`    | bool            | `false`                     | Include the full group snapshot in the trial data. Off by default to avoid data bloat.                                                                                                                                                                                                                                                                                                      |
@@ -68,32 +69,34 @@ adapter (e.g. JATOS group sessions).
 | --------------------- | ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `role`                | string | This participant's assigned role (`null` unless `multiplayer_outcome` is `"completed"`, and for a spectator).                                                                                                                                                                                                                                                                           |
 | `role_map`            | object | The full `participantId -> { role }` map every client agreed on (`null` unless `multiplayer_outcome` is `"completed"`).                                                                                                                                                                                                                                                                 |
-| `assigned_self`       | bool   | Whether this participant appears in the agreed map. `false` only when an assignment ran but a **custom strategy** left this participant out (a spectator) — overflow participants are in the map (with `overflow_role`), so they read `true`. Distinguishes that spectator case from an unassigned outcome (where `role_map` is `null`).                                                |
+| `assigned_self`       | bool   | Whether this participant appears in the agreed map. `false` only when an assignment ran but an **`assign_roles`** rule left this participant out (a spectator) — overflow participants are in the map (with `overflow_role`), so they read `true`. Distinguishes that spectator case from an unassigned outcome (where `role_map` is `null`).                                           |
 | `multiplayer_outcome` | string | How the trial ended: `"completed"`, `"timeout"` (readiness was not reached before `timeout`), `"participant_left"` (a participant in `participants` left the session), or `"connection_lost"` (this participant's connection was lost for good). If the wait is instead **cancelled** because the experiment ended or was aborted, the trial stops quietly and writes no record at all. |
 | `left_participant`    | string | The ID of the participant who left, when `multiplayer_outcome` is `"participant_left"`; `null` otherwise.                                                                                                                                                                                                                                                                               |
 | `group`               | object | The full snapshot assigned over — only present when `save_group: true`.                                                                                                                                                                                                                                                                                                                 |
 
 ## Strategies
 
-The `strategy` parameter takes one of three string presets or a custom function:
+The `strategy` parameter takes one of three string presets:
 
 | `strategy`   | Ordering                                                                                  | Requires                         |
 | ------------ | ----------------------------------------------------------------------------------------- | -------------------------------- |
 | `join_order` | by `joinedAt` in the session data (falls back to id order)                                | every participant has `joinedAt` |
 | `random`     | Fisher–Yates shuffle from the session's shared randomness (`jsPsych.multiplayer.shuffle`) | the id set only                  |
 | `rotate`     | base order rotated by round; optional `balanced`                                          | the id set only                  |
-| custom fn    | you compute the whole map (and own the consensus burden)                                  | —                                |
 
-Two **separate** parameters provide attribute- and value-based ordering — they are _not_ `strategy`
-values, and they take precedence over `strategy` when set:
+Three **separate** parameters take functions, and they take precedence over `strategy` when set:
 
-| Parameter   | Ordering                                     | Requires                        |
-| ----------- | -------------------------------------------- | ------------------------------- |
-| `rank_by`   | by a numeric key, highest first              | a finite key per participant    |
-| `role_from` | the role is a value each participant carries | a defined value per participant |
+| Parameter      | Ordering                                                 | Requires                        |
+| -------------- | -------------------------------------------------------- | ------------------------------- |
+| `assign_roles` | you compute the whole map (and own the consensus burden) | a custom `ready`                |
+| `rank_by`      | by a numeric key, highest first                          | a finite key per participant    |
+| `role_from`    | the role is a value each participant carries             | a defined value per participant |
 
-When more than one is supplied, precedence is **custom `strategy` function → `role_from` → `rank_by` →
-string `strategy` preset**.
+When more than one is supplied, precedence is **`assign_roles` → `role_from` → `rank_by` → the
+`strategy` preset**.
+
+Function parameters are passed to the plugin as they are, not called before the trial like a
+dynamic parameter, so each is its own `FUNCTION` parameter and `strategy` stays a plain string.
 
 Every preset starts from the **sorted** id list, so the result is invariant to snapshot key order —
 that's what makes all clients agree.
@@ -112,7 +115,7 @@ balance odd `n` (the standard Williams caveat), but the frequency guarantee stil
 
 ## What the strategies see
 
-The snapshot that `strategy`, `rank_by`, `role_from`, and `ready` see holds every participant who has
+The snapshot that `assign_roles`, `rank_by`, `role_from`, and `ready` see holds every participant who has
 reached **this** trial and hasn't left. Each entry is that participant's session data (see
 `{ scope: "session" }` in the multiplayer API) with their `write_data` from this trial merged over
 it. So an accessor can read both a value written before the trial, such as a condition the page
