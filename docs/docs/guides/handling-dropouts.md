@@ -79,8 +79,8 @@ on_finish: (data) => {
   - in a [sealed group](forming-groups), every other member who hasn't left, including
     members who are only `away` (they may come back);
   - otherwise, every other participant who is `connected` when the wait starts.
-    Participants who are only `away` at that moment are left out, because data left over from
-    an earlier member starts out `away` and becomes `left` a few seconds later.
+    Participants who are only `away` at that moment are left out: before the group is sealed,
+    someone whose connection dropped may never come back, and their place can go to someone new.
 
   Pass a list to depend on specific participants, or `[]` to ignore departures.
 - **Live plugins** (`chat`, `draw`, `reference-game`) take `end_on_participant_left`,

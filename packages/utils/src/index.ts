@@ -85,8 +85,8 @@ export function withoutLeft(ids: readonly string[], presence: PresenceData): str
  * `jsPsych.multiplayer.group()`), that is the rest of the roster, except members who have already
  * left: a member who is only `away` may come back, so a wait still depends on them. Otherwise it
  * is the others who are connected right now. Participants who are only `away` are left out then:
- * data left over from members who left earlier starts out `away` and becomes `left` a few seconds
- * later, which would otherwise end a wait that starts right after joining.
+ * before the group is sealed, someone whose connection dropped may never come back and their
+ * place can go to someone new, so a wait shouldn't fail because of them.
  */
 export function remainingParticipants(multiplayer: Multiplayer): string[] {
   const presence = multiplayer.presence();

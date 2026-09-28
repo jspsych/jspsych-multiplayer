@@ -171,7 +171,7 @@ itself guarantee those N have reached this trial; the plugin emits a console war
 
 Presence narrows the gap. Participants who have `left` are dropped from the group, and the group
 isn't ready until every remaining participant is `connected`. So a participant who is only `away`, such
-as a slot left over from an earlier member, can't be given a role, and clients don't assign roles while
+as one whose connection just dropped, can't be given a role, and clients don't assign roles while
 they disagree about who is still there.
 
 ## Accessors that throw
