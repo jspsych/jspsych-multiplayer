@@ -96,7 +96,7 @@ same pure function on every client:
   `"random"`, a shuffle seeded by the session ID), every client produces the identical partition — the same consensus
   property `plugin-multiplayer-role` relies on.
 - Participants who have `left` are dropped, and the group isn't ready until every remaining participant
-  is `connected`. A participant who is only `away`, such as a slot left over from an earlier member,
+  is `connected`. A participant who is only `away`, such as one whose connection just dropped,
   can't be matched, and clients don't partition while they disagree about who is still there.
 - On a **timeout** the trial fails loud (`matched_self: false, multiplayer_outcome: "timeout",
 match_map: null`) rather than hanging. The same happens, with the matching `multiplayer_outcome`,

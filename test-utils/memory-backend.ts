@@ -58,8 +58,8 @@ export class MemoryHub {
    * Write a participant's data directly, as if a participant with no jsPsych
    * instance in the test had pushed it. `data` goes in the session scope, or in
    * the trial scope named by `scope`. The participant isn't connected, so
-   * sessions see them as `away`, like data left over from an earlier member;
-   * use addPeer() for a participant who is present. Seeding the ID of a
+   * sessions don't count them, like data left behind by someone who was gone
+   * before they arrived; use addPeer() for a participant who is present. Seeding the ID of a
    * participant who has a session in the test has no visible effect, because
    * that session owns its own data.
    */
