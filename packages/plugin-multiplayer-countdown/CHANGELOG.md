@@ -1,8 +1,12 @@
-# @jspsych-multiplayer/plugin-multiplayer-role
+# @jspsych-multiplayer/plugin-multiplayer-countdown
 
 ## 0.2.0
 
 ### Minor Changes
+
+- [#41](https://github.com/jspsych/jspsych-multiplayer/pull/41) [`b4d2faa`](https://github.com/jspsych/jspsych-multiplayer/commit/b4d2faad65380f59a1afae34d7685fb8a9eb6f90) Thanks [@htsukamoto5](https://github.com/htsukamoto5)! - Add `plugin-multiplayer-countdown`, a synchronized group timer (countdown or count-up) for the jsPsych multiplayer API.
+
+  Every participant pushes its own start timestamp into its own slot, and each client derives the displayed time from the **minimum** timestamp across all slots — a coordination-free consensus (no elected anchor, no single point of failure) in the same spirit as `plugin-multiplayer-role`'s ordering. Late joiners and refreshes resume at the group's actual remaining time for free, and the pure consensus core (`startedAtKey` / `resolveStartedAt` / `computeRemaining` / `computeElapsed` / `formatTime`) is exposed as statics on the default export so demos can render their own synced display. Requires a jsPsych with the multiplayer API from jsPsych#3694.
 
 - [#94](https://github.com/jspsych/jspsych-multiplayer/pull/94) [`91ff22c`](https://github.com/jspsych/jspsych-multiplayer/commit/91ff22cd3d18d50298b64368fb21bfb9bd20539a) Thanks [@jodeleeuw](https://github.com/jodeleeuw)! - Move to jsPsych#3694's session-based multiplayer API, and handle participants who leave.
 
@@ -37,14 +41,7 @@
   - **scoreboard** drops its own timeout race and backstop wait in favor of the core's timeout, and
     shows a note on boards revealed after a departure or a lost connection.
 
-- [#106](https://github.com/jspsych/jspsych-multiplayer/pull/106) [`8b89cac`](https://github.com/jspsych/jspsych-multiplayer/commit/8b89cac0a90493467ea2752e4f5c107bceb2e24e) Thanks [@jodeleeuw](https://github.com/jodeleeuw)! - Use the sealed group when there is one (`jsPsych.multiplayer.group()`, from an adapter that forms groups):
-
-  - `expected_players` (ready, choice, match) and `group_size` (role, scoreboard) default to the sealed group's members who haven't left. `expected_players` on ready and choice is no longer required when the group is sealed; without a sealed group it still is, and the error says how to fix it.
-  - `participants: null` means the rest of the sealed group's members who haven't left, including a member who is only `away` at that moment, instead of only the participants connected when the trial starts. Without a sealed group it is unchanged.
-
-- [#105](https://github.com/jspsych/jspsych-multiplayer/pull/105) [`3f2f35c`](https://github.com/jspsych/jspsych-multiplayer/commit/3f2f35c0545c485e27e6e677708e80eb5139b246) Thanks [@jodeleeuw](https://github.com/jodeleeuw)! - The `random` strategy now draws from the session's shared randomness (`jsPsych.multiplayer.shuffle`), so each group gets its own assignment, and you can pin it across groups with the `randomSeed` connect option. `seed` now picks a different assignment within the session.
-
-- [#107](https://github.com/jspsych/jspsych-multiplayer/pull/107) [`be66150`](https://github.com/jspsych/jspsych-multiplayer/commit/be66150ff8d39b75da233302c4cb46dce11ba707) Thanks [@jodeleeuw](https://github.com/jodeleeuw)! - Port to the hardened multiplayer API. The trial now writes its data into its own scope of the shared data, and the snapshot the strategies see holds the participants who have reached this trial, each with their session data merged under their data from the trial. `joinedAt` is written once to the session scope, so `join_order` stays stable across rounds. `push_data` is renamed `write_data` and is no longer nested under `rounds[round]` (read `entry.score`, not `entry.rounds[round].score`). The trial records `multiplayer_outcome` and `left_participant` in place of `timed_out`, `partner_left`, and `connection_lost`, and a `timeout` of `0` now means no limit. The role accessors now read the last role trial's data instead of a module-level store; they take an optional `jsPsych` instance for pages that run several.
+- [#107](https://github.com/jspsych/jspsych-multiplayer/pull/107) [`be66150`](https://github.com/jspsych/jspsych-multiplayer/commit/be66150ff8d39b75da233302c4cb46dce11ba707) Thanks [@jodeleeuw](https://github.com/jodeleeuw)! - Port to the hardened multiplayer API. The start timestamp now lives in the trial's own scope of the shared data under `countdown_started_at`, so every countdown starts a fresh clock and the `name` parameter is removed. To run one clock across several trials, give them the same `multiplayer_scope`. The trial records `multiplayer_outcome` (`"completed"` or `"connection_lost"`) and `left_participant` in place of `connection_lost`.
 
 ### Patch Changes
 
@@ -65,17 +62,7 @@
   its disconnect cleanup, so a failure there left a connected-looking adapter with a leaked listener
   and a retry that silently did nothing; a failed `connect()` now releases everything it opened.
 
-- [#45](https://github.com/jspsych/jspsych-multiplayer/pull/45) [`fc1a842`](https://github.com/jspsych/jspsych-multiplayer/commit/fc1a8428551e8af5f90918ee96db76a09862337a) Thanks [@htsukamoto5](https://github.com/htsukamoto5)! - Update for jsPsych#3694's removal of `MultiplayerAPI.communicate()`: the plugin now calls `push()` followed by `wait()` directly instead of the removed fused convenience method. Also fixes the same timeout-mislabeling bug already patched in `plugin-multiplayer-sync`/`plugin-multiplayer-ready` — only a rejection whose `error.name === "MultiplayerTimeoutError"` is now recorded as `timed_out: true`; a backend or `push()` failure propagates and fails the trial loudly instead.
-
 - [#53](https://github.com/jspsych/jspsych-multiplayer/pull/53) [`57ea69d`](https://github.com/jspsych/jspsych-multiplayer/commit/57ea69dd54502b1b138b6898b928c808178f74af) Thanks [@htsukamoto5](https://github.com/htsukamoto5)! - Read the multiplayer API from `jsPsych.multiplayer` (jsPsych#3694's namespace), and throw an error that says so when it is absent. Builds that exposed these methods on `jsPsych.pluginAPI` predate the current API and are not supported.
 
 - Updated dependencies [[`403bfc4`](https://github.com/jspsych/jspsych-multiplayer/commit/403bfc482be7162b45432b0c7836af43c1eac919)]:
   - @jspsych-multiplayer/utils@0.1.0
-
-## 0.1.0
-
-### Minor Changes
-
-- [#15](https://github.com/jspsych/jspsych-multiplayer/pull/15) [`aba23cd`](https://github.com/jspsych/jspsych-multiplayer/commit/aba23cda671752fd63d9c51d65f7c2cc53a51a4c) Thanks [@htsukamoto5](https://github.com/htsukamoto5)! - Add `plugin-multiplayer-role`, a role-assignment plugin for the jsPsych multiplayer API.
-
-  It deterministically maps participants in a shared group session to roles, so every client computes the **same** assignment without a coordinator — the consensus problem researchers otherwise hand-roll. Declare role names and counts (e.g. `["proposer", "responder"]` or `{ leader: 1, follower: 3 }`) and choose an assignment strategy: `join_order`, shared-seeded `random`, `rotate` (per-round), attribute/outcome ranking via `rankBy`, direct lookup via `roleFrom`, or a fully custom function. Downstream trials read the result with `getMyRole()` / `getRoleMap()` (plus a `participantsByRole()` helper for role→id lookup), replacing the hand-rolled `myRole` pattern in the ultimatum-game example.

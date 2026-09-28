@@ -1,16 +1,20 @@
-# @jspsych-multiplayer/plugin-multiplayer-chat
+# @jspsych-multiplayer/plugin-multiplayer-draw
 
 ## 0.2.0
 
 ### Minor Changes
 
-- [#107](https://github.com/jspsych/jspsych-multiplayer/pull/107) [`be66150`](https://github.com/jspsych/jspsych-multiplayer/commit/be66150ff8d39b75da233302c4cb46dce11ba707) Thanks [@jodeleeuw](https://github.com/jodeleeuw)! - Port chat to the hardened multiplayer API.
+- [#34](https://github.com/jspsych/jspsych-multiplayer/pull/34) [`d37bcb3`](https://github.com/jspsych/jspsych-multiplayer/commit/d37bcb3d37fedf2daed5f9c9f2411d51879b6826) Thanks [@htsukamoto5](https://github.com/htsukamoto5)! - Add `plugin-multiplayer-draw`, a real-time collaborative drawing canvas for the jsPsych multiplayer API.
 
-  - Messages live in the trial's own scope, so each chat trial starts empty. **Removed `data_key`**; give several chat trials the same `multiplayer_scope` to continue one conversation across them.
+  Every participant draws on one shared canvas; strokes from everyone appear live on everyone else's screen. Includes pen/eraser tools, a fixed color palette, brush sizes, and undo/redo buttons that only ever act on the participant's own strokes. Where `plugin-multiplayer-chat` pushes once per message, this plugin pushes continuously while a stroke is active (throttled and point-decimated), making it the first plugin that stresses the multiplayer API's `subscribe` primitive at a genuinely high rate. Full repaints (triggered by undo or a canvas resize) paint strokes in a global timestamp order so the eraser's `destination-out` compositing behaves consistently across clients. Requires a jsPsych with the multiplayer API from jsPsych#3694.
+
+- [#107](https://github.com/jspsych/jspsych-multiplayer/pull/107) [`be66150`](https://github.com/jspsych/jspsych-multiplayer/commit/be66150ff8d39b75da233302c4cb46dce11ba707) Thanks [@jodeleeuw](https://github.com/jodeleeuw)! - Port draw to the hardened multiplayer API.
+
+  - Strokes live in the trial's own scope, so each draw trial starts with a blank canvas. **Removed `data_key`**; give several draw trials the same `multiplayer_scope` to keep drawing on one canvas.
   - New data field `multiplayer_outcome` (`"completed"`, `"participant_left"`, `"connection_lost"`, or `"cancelled"` when the experiment disconnects mid-trial). **Removed `partner_left` and `connection_lost`.** `ended_by` now only says which end condition completed the trial (`"duration"`, `"button"`, or `"condition"`) and is `null` otherwise.
   - With a sealed group, the trial ends when any other member who hasn't left leaves, including one who was only away when it started.
-  - Messages from a participant who leaves stay in the transcript.
-  - Uses `@jspsych-multiplayer/utils`. The "couldn't send" note is gone: the core retries failed writes.
+  - Strokes from a participant who leaves stay on the canvas and in the data.
+  - Uses `@jspsych-multiplayer/utils`. The "connection trouble" note is gone: the core retries failed writes.
 
 - [#94](https://github.com/jspsych/jspsych-multiplayer/pull/94) [`bae51f0`](https://github.com/jspsych/jspsych-multiplayer/commit/bae51f01cf64e5f1d383d05cd2b8aa179879d58d) Thanks [@jodeleeuw](https://github.com/jodeleeuw)! - Move chat, draw, and reference-game to the session-based jsPsych multiplayer API (jsPsych#3694) and handle participants leaving.
 
@@ -39,21 +43,9 @@
   its disconnect cleanup, so a failure there left a connected-looking adapter with a leaked listener
   and a retry that silently did nothing; a failed `connect()` now releases everything it opened.
 
-- [#29](https://github.com/jspsych/jspsych-multiplayer/pull/29) [`2650fa9`](https://github.com/jspsych/jspsych-multiplayer/commit/2650fa9da7a39cd74fb7ac9fb9c982ef99e1f082) Thanks [@htsukamoto5](https://github.com/htsukamoto5)! - Fix unreadable chat transcript: the plugin shipped no CSS, so sender and message text rendered as bare unstyled `<span>`s with nothing between them (e.g. "AliceHello"). Inject minimal scoped styles (boxed log, one message per line, bold sender label with a colon separator, own-message highlight) so the transcript is legible out of the box.
-
-  Also clarifies the chat-room example's name prompt ("Choose a display name — this is what other participants will see you as in the chat") since testers read the original wording as naming the chat room itself.
-
 - [#53](https://github.com/jspsych/jspsych-multiplayer/pull/53) [`57ea69d`](https://github.com/jspsych/jspsych-multiplayer/commit/57ea69dd54502b1b138b6898b928c808178f74af) Thanks [@htsukamoto5](https://github.com/htsukamoto5)! - Read the multiplayer API from `jsPsych.multiplayer` (jsPsych#3694's namespace), and throw an error that says so when it is absent. Builds that exposed these methods on `jsPsych.pluginAPI` predate the current API and are not supported.
 
 - [#62](https://github.com/jspsych/jspsych-multiplayer/pull/62) [`d1552c0`](https://github.com/jspsych/jspsych-multiplayer/commit/d1552c0ef70fbd8bfcdebd3c9636d96cd66c3eb6) Thanks [@jodeleeuw](https://github.com/jodeleeuw)! - Register trial timers through `jsPsych.pluginAPI.setTimeout` so they are cancelled when a trial is ended externally (`abortExperiment`, `endCurrentTimeline`, forced `finishTrial`), instead of firing into a finished trial. The plugins previously used bare `setTimeout` and only cleared handles on their own end paths, so external termination — exactly what multiplayer sync timeouts and host-ended sessions do — left timers alive.
 
 - Updated dependencies [[`403bfc4`](https://github.com/jspsych/jspsych-multiplayer/commit/403bfc482be7162b45432b0c7836af43c1eac919)]:
   - @jspsych-multiplayer/utils@0.1.0
-
-## 0.1.0
-
-### Minor Changes
-
-- [#21](https://github.com/jspsych/jspsych-multiplayer/pull/21) [`5e28485`](https://github.com/jspsych/jspsych-multiplayer/commit/5e284850abe647eefcf989eb47c930def733e37b) Thanks [@htsukamoto5](https://github.com/htsukamoto5)! - Add `plugin-multiplayer-chat`, a real-time chat-room trial for the jsPsych multiplayer API.
-
-  It is the first plugin built on the API's real-time `subscribe` primitive rather than the `push → wait` barrier used by `plugin-multiplayer-sync`: the trial stays open, subscribes to the shared group session, renders the merged transcript of every participant's messages, and lets this participant send messages. It ends on any configured condition — a `duration` timeout, an `end_button_label` click, or an `end_when` predicate over the group session — and stores the transcript this client saw in the trial data. Message text is rendered as text (never HTML), and because the API's `push` replaces a participant's slot, sending reads the client's own slot first so other pushed data (e.g. a role) is preserved. Built against a local interface mirroring the multiplayer API so it carries no build-time dependency on the unreleased core (jsPsych#3694); a pure `chat-core` module (message merge/sort/dedup) is unit-tested in isolation, and the trial is exercised against an in-memory mock that fires subscribers on every push.
