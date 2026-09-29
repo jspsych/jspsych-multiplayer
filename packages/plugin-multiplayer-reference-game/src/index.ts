@@ -124,15 +124,19 @@ const info = <const>{
       type: ParameterType.BOOL,
       default: null,
     },
-    /**
-     * `"per_slot"` (count correct slots out of k), `"all_or_nothing"`, or a custom
-     * `(assignment, targets) => number`. FUNCTION type is deliberate — it stops jsPsych's
-     * dynamic-parameter machinery from CALLING the value and substituting its return. A string
-     * preset is still a valid default/value; do NOT "fix" this to STRING.
-     */
+    /** `"per_slot"` (count correct slots out of k) or `"all_or_nothing"` (k or 0). */
     scoring: {
-      type: ParameterType.FUNCTION,
+      type: ParameterType.STRING,
       default: "per_slot",
+    },
+    /**
+     * `(assignment, targets) => number`. Your own scoring in place of `scoring`; the result is
+     * rounded and kept between 0 and k. FUNCTION, so jsPsych passes the function itself rather than
+     * calling it before the trial.
+     */
+    score_function: {
+      type: ParameterType.FUNCTION,
+      default: null,
     },
     // ── Roles ───────────────────────────────────────────────────────────────────────────────────
     /**
@@ -317,12 +321,11 @@ const info = <const>{
     },
     // ── Text, data & robustness ─────────────────────────────────────────────────────────────────
     /**
-     * Role-aware instructions rendered above the board: an HTML string, or `(role) => html`.
-     * FUNCTION type is deliberate (see `scoring`) so jsPsych does not call the function early with
-     * no arguments; a plain HTML string is still a valid value.
+     * Instructions rendered above the board: an HTML string, or an object with one per role, e.g.
+     * `{ director: "…", matcher: "…" }`.
      */
     prompt: {
-      type: ParameterType.FUNCTION,
+      type: ParameterType.COMPLEX,
       default: "",
     },
     /**
@@ -633,7 +636,14 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
       );
     }
     const ordered = (trial.ordered as boolean | null) ?? k > 1;
-    const scoring = trial.scoring as unknown as ScoringSpec;
+    const preset = (trial.scoring ?? "per_slot") as string;
+    if (preset !== "per_slot" && preset !== "all_or_nothing") {
+      throw new Error(
+        'multiplayer-reference-game: `scoring` must be "per_slot" or "all_or_nothing" ' +
+          `(got ${JSON.stringify(trial.scoring)}). Pass a custom function as \`score_function\`.`,
+      );
+    }
+    const scoring = (trial.score_function ?? preset) as ScoringSpec;
     const responseMode =
       (trial.response_mode as string | null) ?? (k === 1 ? "click" : "assign_slots");
     const autoSubmit = (trial.auto_submit as boolean | null) ?? k === 1;
@@ -841,9 +851,11 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
     }
 
     // --- Render the shell ------------------------------------------------------------------------
-    const promptParam = trial.prompt as unknown as string | ((role: Role) => string) | null;
+    const promptParam = trial.prompt as unknown as string | Partial<Record<Role, string>> | null;
     const promptHtml =
-      typeof promptParam === "function" ? String(promptParam(role)) : String(promptParam ?? "");
+      promptParam !== null && typeof promptParam === "object"
+        ? String(promptParam[role] ?? "")
+        : String(promptParam ?? "");
 
     display_element.innerHTML = `
       <div class="${P}${trial.chat_position === "beside" ? " is-beside" : ""}">

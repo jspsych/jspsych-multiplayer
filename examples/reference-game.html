@@ -187,10 +187,10 @@
           partnerGone = true;
         }
       },
-      prompt: (role) =>
-        role === "director"
-          ? "<p><strong>You are the Director.</strong> Describe the highlighted shape so your partner can pick it out.</p>"
-          : "<p><strong>You are the Matcher.</strong> Click the shape your partner is describing.</p>",
+      prompt: {
+        director: "<p><strong>You are the Director.</strong> Describe the highlighted shape so your partner can pick it out.</p>",
+        matcher: "<p><strong>You are the Matcher.</strong> Click the shape your partner is describing.</p>",
+      },
     };
 
     const gameLoop = {

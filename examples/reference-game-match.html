@@ -157,10 +157,10 @@
           partnerGone = true;
         }
       },
-      prompt: (role) =>
-        role === "director"
-          ? "<p><strong>You are the Director.</strong> Describe your shapes in badge order (1, 2, 3, …) so your partner can arrange theirs the same way.</p>"
-          : "<p><strong>You are the Matcher.</strong> For each numbered slot, click the slot and then the shape your partner says goes there. Fill every slot, then submit.</p>",
+      prompt: {
+        director: "<p><strong>You are the Director.</strong> Describe your shapes in badge order (1, 2, 3, …) so your partner can arrange theirs the same way.</p>",
+        matcher: "<p><strong>You are the Matcher.</strong> For each numbered slot, click the slot and then the shape your partner says goes there. Fill every slot, then submit.</p>",
+      },
     };
 
     const gameLoop = {
