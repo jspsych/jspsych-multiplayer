@@ -34,7 +34,7 @@
     "import-sort-style-module": "^6.0.0",
     "jspsych": "file:vendor/jspsych",
     "lint-staged": "^17.3.0",
-    "prettier": "^3.9.6",
+    "prettier": "^3.9.9",
     "prettier-plugin-import-sort": "^0.0.7"
   },
   "prettier": {
