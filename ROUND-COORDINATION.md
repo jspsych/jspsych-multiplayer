@@ -196,3 +196,75 @@ LF normalization for its existing test, and its original CRLF checkout was resto
 The example's inline script parses; local HTTP checks confirm the diagnostic page
 and rebuilt diagnostic bundles are served. The operator drives the next browser
 runs; no browser automation, merge, deployment or deadline adjustment was performed.
+
+## Hidden-tab policy: unresolved; deferred during Hawkins integration
+
+The instrumented operator run provides evidence of delayed background execution
+in Edge 155 on Windows. The declared visible pair completes three matching timeout
+rounds with no coordination failure; feedback callbacks fire after about
+3.005-3.010s. Its first round includes some hidden/visible transitions, so it is
+not a perfectly controlled always-visible run; later rounds stay visible.
+The hidden pair completes its first timeout despite a matcher feedback callback
+delayed to about 22s. In its second round, watchdog callbacks have approximately
+60s gaps. The matcher checks at about 59966.6ms after activation, just before
+expiry, then next checks at about 119965.3ms and reports `authority_stalled`.
+The director reports `result_delivery_timeout`; both save null behavioral result
+and scoring. This does not reproduce the earlier `feedback_ack_timeout` exactly,
+but demonstrates how prolonged hidden execution can exceed the current budgets.
+All paired authoritative results agree; diagnostic logs report no event overflow.
+
+**Undecided:** what prolonged hiding should mean for an experiment participant.
+There is no approved policy to pause/resume rounds, extend deadlines, require
+foreground visibility, or change dropout/recruitment/payment handling based on
+visibility. A visibility observation is not proof of disconnection or intentional
+nonparticipation. The final study policy, participant instructions and associated
+analysis/payment decisions belong in Hawkins experiment documentation before paid
+launch. The reusable library must not silently choose them for the experiment.
+
+**Current prototype behavior:** visibility is diagnostic only. Response deadlines
+continue on the matcher's monotonic clock; no visibility-triggered pause, deadline
+extension, authority replacement or transparent recovery is implemented. Short
+delays within budgets can complete normally. Longer delays can cause bounded
+coordination failure when a running/resumed client checks its watchdog, retaining
+any already accepted result. If both clients are suspended, neither can enforce a
+wall-clock bound until execution resumes. Existing budgets remain unchanged.
+
+Hidden-tab policy redesign is deferred to prioritize the public-hook integration
+into Hawkins. This is readiness for an integration prototype, not launch readiness
+or evidence that hidden-tab failures are resolved. Carry this unresolved decision
+into the new experiment branch's design/acceptance notes; do not edit the frozen
+comparison source/archive. More repeated local idle runs are not required before
+starting integration. Public API review and real deployment lifecycle validation
+remain required before adopting or merging the prototype.
+
+## Next work packet: consume the public implementation in Hawkins
+
+Use a new experiment branch/worktree based on the appropriate current experiment
+base, with the frozen prototype as reference/provenance. Pin and vendor the actual
+built utils/reference-game implementations from this feature branch, recording
+source and asset hashes; do not copy the coordinator implementation into Hawkins
+or retain the transport/finishTrial facade. The tested experiment's older core pin
+differs from this repository's vendored preview, so inspect adapter/core changes
+and record the chosen pins before running the new experiment.
+
+Wire `round_coordinator` to the existing assigned matcher/fixed dyad and round
+index, and `on_round_state` to local countdown and advisory reminder controls.
+Keep Hawkins-specific scoring normalization, raw plugin fields, interruption/save
+routing and timeout feedback. Failure routing must inspect `coordination_failure`
+even when a behavioral result was accepted and `multiplayer_outcome` stays played.
+
+This is not a drop-in substitution: public results use `kind/value/rt`, while the
+old facade uses `submission/context`. In particular, the frozen prototype commits
+the matcher's `directorDescribed` observation as result context for consistent
+timeout idle attribution; the current public handle has no result-context hook.
+Resolve that requirement explicitly during integration, adding only the smallest
+upstream boundary demonstrated necessary. Do not silently substitute independent
+local idle-role guesses or attribute certainty to messages still in transit.
+
+Port the paired checks to the public implementation, then produce a new disposable
+archive and compare full Hawkins gameplay, timeout feedback, reminders, delayed
+entry/feedback, frozen authority, interruption routing and available saved rows.
+Preserve the original comparison archive, keep DataPipe disabled for validation,
+and follow the operator-driven browser workflow unless automation is separately
+authorized. Further upstream fixes should be driven by these concrete integration
+requirements rather than speculative API expansion.
