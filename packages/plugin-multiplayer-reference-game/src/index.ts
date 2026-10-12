@@ -3,6 +3,9 @@ import {
   MultiplayerOutcome,
   outcomeOf,
   remainingParticipants,
+  Multiplayer,
+  RoundCoordinator,
+  RoundState,
 } from "@jspsych-multiplayer/utils";
 import {
   GroupSessionData,
@@ -47,10 +50,31 @@ export type {
 } from "./reference-core";
 export type { ChatMessage } from "./chat-core";
 
+export interface ReferenceGameRoundContext {
+  multiplayer: Multiplayer;
+  authorityId: string;
+  members: readonly string[];
+  roundIndex: number;
+  validate: (value: unknown) => value is Submission;
+}
+export type ReferenceGameRoundFactory = (
+  context: ReferenceGameRoundContext,
+) => RoundCoordinator<Submission>;
+
 const info = <const>{
   name: "multiplayer-reference-game",
   version: version,
   parameters: {
+    /** Optional fixed-authority round factory. FUNCTION prevents dynamic evaluation by jsPsych. */
+    round_coordinator: {
+      type: ParameterType.FUNCTION,
+      default: null,
+    },
+    /** Local lifecycle observer, e.g. to pause reminders outside active interaction. */
+    on_round_state: {
+      type: ParameterType.FUNCTION,
+      default: null,
+    },
     // ── Stimuli & display ───────────────────────────────────────────────────────────────────────
     /**
      * The shared object set (required). Each entry is `{ id, src?, html?, label? }`: `src` renders
@@ -394,6 +418,12 @@ const info = <const>{
     },
   },
   data: {
+    /** Coordinated rounds only. An accepted result may coexist with coordination failure. */
+    coordination_round_id: { type: ParameterType.STRING, default: undefined },
+    coordination_result: { type: ParameterType.OBJECT, default: undefined },
+    coordination_failure: { type: ParameterType.OBJECT, default: undefined },
+    coordination_local_submission: { type: ParameterType.OBJECT, default: undefined },
+    coordination_raw_plugin_result: { type: ParameterType.OBJECT, default: undefined },
     /** This participant's role this round: `"director"` or `"matcher"`. */
     role: {
       type: ParameterType.STRING,
@@ -439,9 +469,9 @@ const info = <const>{
       type: ParameterType.BOOL,
       default: undefined,
     },
-    /** Matcher only: ms from trial start to submission. Null for the director. */
+    /** Matcher only: ms from trial start, or authority activation when coordinated. Null for director. */
     rt: {
-      type: ParameterType.INT,
+      type: ParameterType.FLOAT,
       default: undefined,
     },
     /** The chat transcript as this client saw it at trial end — only when `save_transcript`. */
@@ -570,6 +600,12 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
     const role = trial.role as Role;
     const round = trial.round as unknown as number;
     const k = targets.length;
+    const coordinated = typeof trial.round_coordinator === "function";
+    if (coordinated && (trial.partner_id == null || !Number.isSafeInteger(round) || round < 0)) {
+      throw new Error(
+        "multiplayer-reference-game: coordinated rounds require explicit partner_id and a nonnegative integer round.",
+      );
+    }
 
     if (
       !Array.isArray(stimuli) ||
@@ -678,7 +714,7 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
     const hasRoundTimeout = typeof trial.round_timeout === "number" && trial.round_timeout > 0;
     const hasSelectionTimeout =
       typeof trial.selection_timeout === "number" && trial.selection_timeout > 0;
-    if (!hasRoundTimeout && !hasSelectionTimeout) {
+    if (!coordinated && !hasRoundTimeout && !hasSelectionTimeout) {
       console.warn(
         "multiplayer-reference-game: no `round_timeout` or `selection_timeout` set — if the partner " +
           "never responds this trial cannot end. Set `round_timeout` to bound the round.",
@@ -984,6 +1020,11 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
     let ended = false;
     let feedbackShown = false;
     let submitted = false; // matcher only: our push happened
+    let coordinator: RoundCoordinator<Submission> | null = null;
+    let feedbackFinished = false;
+    let acceptedResult: string | null = null;
+    let localSubmission: Record<string, unknown> | null = null;
+    const canInteract = () => !coordinated || coordinator?.state.phase === "active";
     // matcher only: has the partner (director) sent a message this round? Gates selections when
     // require_message_before_response is set; maintained by `updateGate`. Monotonic within a round
     // (messages only accrue), so once open it never re-closes.
@@ -1100,7 +1141,7 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
     const updateChatAvailability = () => {
       if (!chatInput || !chatForm) return;
       const send = chatForm.querySelector(`.${P}-chat-send`) as HTMLButtonElement;
-      const blocked = !canSend || feedbackShown || atMessageCap();
+      const blocked = !canSend || feedbackShown || !canInteract() || atMessageCap();
       chatInput.disabled = blocked;
       send.disabled = blocked;
       if (!canSend) chatInput.placeholder = "You can only read messages.";
@@ -1109,7 +1150,7 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
 
     const onChatSubmit = (e: Event) => {
       e.preventDefault();
-      if (ended || !canSend || !chatInput || atMessageCap()) return;
+      if (ended || !canInteract() || !canSend || !chatInput || atMessageCap()) return;
       let text = chatInput.value.trim();
       if (text === "") return;
       if (typeof trial.max_length === "number" && trial.max_length > 0) {
@@ -1185,6 +1226,7 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
         : null;
     }
     const onTypingInput = () => {
+      if (!canInteract()) return;
       if (!typingOn || ended || !chatInput) return;
       if (chatInput.value === "") {
         // Emptied (sending clears the field too, and onChatSubmit withdraws explicitly): withdraw
@@ -1240,7 +1282,7 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
         button.classList.toggle("is-active", s === activeSlot);
         button.classList.toggle("is-filled", typeof assignment[s] === "string");
       });
-      submitButton.disabled = !isComplete(assignment, k);
+      submitButton.disabled = !canInteract() || !isComplete(assignment, k);
     };
 
     const now = () => Math.round(performance.now() - start);
@@ -1252,7 +1294,7 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
     };
 
     const submit = (reason: "submit" | "timeout") => {
-      if (submitted || ended || !isMatcher) return;
+      if (submitted || ended || !isMatcher || !canInteract()) return;
       submitted = true;
       const rt = now();
       const score = scoreAssignment(assignment, targets, { ordered, scoring });
@@ -1266,6 +1308,11 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
         n_targets: k,
         ...(reason === "timeout" ? { timed_out: true } : {}),
       };
+      if (coordinator) {
+        localSubmission = JSON.parse(JSON.stringify(payload));
+        if (!coordinator.submit(payload as unknown as Submission)) submitted = false;
+        return;
+      }
       // `update` merges ONLY the submission into our data for the round, leaving the chat alone.
       // The write notifies the subscriber synchronously, which reads our own submission and enters
       // feedback. A write only rejects once the session has closed, which ends the trial.
@@ -1274,7 +1321,7 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
 
     const onGridClick = (e: Event) => {
       const cell = (e.target as HTMLElement).closest?.(`.${P}-cell`) as HTMLElement | null;
-      if (!cell || !grid.contains(cell) || ended || feedbackShown) return;
+      if (!cell || !grid.contains(cell) || ended || feedbackShown || !canInteract()) return;
       const objectId = cell.dataset.objectId!;
 
       if (!isMatcher) {
@@ -1331,7 +1378,7 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
 
     const onSlotsClick = (e: Event) => {
       const button = (e.target as HTMLElement).closest?.(`.${P}-slot`) as HTMLButtonElement | null;
-      if (!button || ended || feedbackShown || submitted) return;
+      if (!button || ended || feedbackShown || submitted || !canInteract()) return;
       activeSlot = Number(button.dataset.slot);
       updateMatcherUi();
     };
@@ -1438,8 +1485,20 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
 
     const end = (outcome: MultiplayerOutcome, leftParticipant: string | null = null) => {
       if (ended) return; // guard against a second trigger (e.g. a timer racing the Continue button)
+      if (coordinator && !coordinator.state.failure && coordinator.state.result) {
+        if (!feedbackFinished) {
+          feedbackFinished = true;
+          coordinator.ack("feedback", coordinator.state.result.id);
+          if (ended) return; // acknowledgment can synchronously release the round
+        }
+        if (coordinator.state.phase !== "complete" || coordinator.state.pendingWrites > 0) {
+          display_element.inert = true;
+          return;
+        }
+      }
       ended = true;
       controller.abort();
+      display_element.inert = false;
       if (feedbackTimer != null) clearTimeout(feedbackTimer);
       if (selectionTimer != null) clearTimeout(selectionTimer);
       if (roundTimer != null) clearTimeout(roundTimer);
@@ -1488,8 +1547,71 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
       if (trial.save_interaction_history && isMatcher) data.interaction_history = history;
       // Copied so trial data doesn't hold the multiplayer API's frozen snapshot
       if (trial.save_group) data.group = JSON.parse(JSON.stringify(api.getAll()));
+      if (coordinator) {
+        const snapshot = coordinator.state;
+        data.coordination_round_id = snapshot.roundId;
+        data.coordination_result = snapshot.result;
+        data.coordination_failure = snapshot.failure;
+        data.coordination_local_submission = localSubmission;
+        data.coordination_raw_plugin_result = Object.fromEntries(
+          ["multiplayer_outcome", "assignment", "correct", "n_correct", "accuracy", "rt"].map(
+            (field) => [field, data[field]],
+          ),
+        );
+        // Preserve a behavioral result if transport/acknowledgment fails during feedback.
+        if (snapshot.result) data.multiplayer_outcome = finalOutcome;
+        coordinator.dispose();
+      }
       this.jsPsych.finishTrial(data);
     };
+
+    if (coordinated) {
+      const matcher = isMatcher ? me : partner!;
+      const validate = (value: unknown): value is Submission => {
+        if (!value || typeof value !== "object") return false;
+        const sub = value as Submission;
+        if (
+          !sub.assignment ||
+          typeof sub.assignment !== "object" ||
+          Array.isArray(sub.assignment) ||
+          sub.timed_out
+        )
+          return false;
+        const entries = Object.entries(sub.assignment);
+        return (
+          entries.length === k &&
+          entries.every(
+            ([slot, id]) =>
+              Number.isInteger(Number(slot)) &&
+              String(Number(slot)) === slot &&
+              Number(slot) >= 1 &&
+              Number(slot) <= k &&
+              idSet.has(id),
+          ) &&
+          new Set(entries.map(([, id]) => id)).size === k
+        );
+      };
+      const factory = trial.round_coordinator as unknown as ReferenceGameRoundFactory;
+      coordinator = factory({
+        multiplayer: api,
+        authorityId: matcher,
+        members: [matcher, isMatcher ? partner! : me],
+        roundIndex: round,
+        validate,
+      });
+      if (
+        coordinator.authorityId !== matcher ||
+        coordinator.members.length !== 2 ||
+        !coordinator.members.includes(me) ||
+        !coordinator.members.includes(partner!) ||
+        coordinator.state.roundId !== JSON.stringify([api.sessionId, matcher, round])
+      ) {
+        coordinator.dispose();
+        throw new Error(
+          "multiplayer-reference-game: round coordinator must use this session, round and fixed matcher dyad.",
+        );
+      }
+    }
 
     // --- Wire up ---------------------------------------------------------------------------------
     grid.addEventListener("click", onGridClick);
@@ -1514,7 +1636,7 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
       }
       onChatUpdate();
       try {
-        if (!feedbackShown) {
+        if (!coordinated && !feedbackShown) {
           const matcherId = isMatcher ? me : partner;
           const sub = matcherId ? readSubmission(group, matcherId) : undefined;
           if (sub) enterFeedback(sub);
@@ -1532,6 +1654,7 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
       // showing the round is complete, so a departure then changes nothing.
       if (
         trial.end_on_participant_left &&
+        !coordinated &&
         !ended &&
         !feedbackShown &&
         partner != null &&
@@ -1554,7 +1677,7 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
     // A wait that never succeeds, for the session closing: it then fails with why. The trial
     // ending cancels it too (and aborting the experiment does), which must not end anything, but
     // must end the session-scope subscription above.
-    if (!ended) {
+    if (!ended && !coordinated) {
       api
         .wait(() => false)
         .catch((error) => {
@@ -1585,6 +1708,7 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
 
     if (
       !ended &&
+      !coordinated &&
       isMatcher &&
       typeof trial.selection_timeout === "number" &&
       trial.selection_timeout > 0
@@ -1593,10 +1717,53 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
         if (!submitted && !feedbackShown && !ended) submit("timeout");
       }, trial.selection_timeout);
     }
-    if (!ended && hasRoundTimeout) {
+    if (!ended && !coordinated && hasRoundTimeout) {
       roundTimer = pluginAPI.setTimeout(() => {
         if (!feedbackShown && !ended) end("timeout");
       }, trial.round_timeout as number);
+    }
+    if (coordinator) {
+      display_element.inert = true;
+      coordinator.subscribe((snapshot) => {
+        if (ended) return;
+        if (typeof trial.on_round_state === "function") {
+          try {
+            (trial.on_round_state as (state: RoundState<Submission>) => void)(snapshot);
+          } catch (error) {
+            console.error("multiplayer-reference-game: on_round_state failed", error);
+          }
+          if (ended) return;
+        }
+        display_element.dataset.coordinationPhase = snapshot.phase;
+        display_element.inert = snapshot.phase === "preparing" || feedbackFinished;
+        updateChatAvailability();
+        if (isMatcher) updateMatcherUi();
+        if (snapshot.result && acceptedResult === null) {
+          acceptedResult = snapshot.result.id;
+          // Receipt precedes feedback completion even when feedback is disabled.
+          coordinator!.ack("result", snapshot.result.id);
+          enterFeedback(
+            snapshot.result.kind === "timeout"
+              ? { assignment: {}, rt: snapshot.result.rt, timed_out: true }
+              : { ...snapshot.result.value!, rt: snapshot.result.rt, timed_out: false },
+          );
+        }
+        if (snapshot.failure) {
+          end(
+            snapshot.result
+              ? finalOutcome
+              : snapshot.failure.reason === "cancelled"
+                ? "cancelled"
+                : "connection_lost",
+          );
+        } else if (
+          snapshot.phase === "complete" &&
+          snapshot.pendingWrites === 0 &&
+          feedbackFinished
+        )
+          end(finalOutcome);
+      });
+      coordinator.ready();
     }
   }
 }

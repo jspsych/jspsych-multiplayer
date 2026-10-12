@@ -7,6 +7,14 @@ description: One round of a two-player reference game, in which a director descr
 
 # `multiplayer-reference-game`
 
+The opt-in fixed matcher prototype exposes `round_coordinator` (FUNCTION factory, default null)
+and `on_round_state` (FUNCTION observer, default null). See the repository's
+[coordinated-round API and limits](https://github.com/jspsych/jspsych-multiplayer/blob/prototype/matcher-round-coordination/packages/plugin-multiplayer-reference-game/README.md#coordinated-rounds-prototype).
+It gates interaction until both clients are ready, uses one matcher-owned result through native
+scoring/feedback, and holds completion for both receipt and feedback acknowledgments.
+Independent response timers are disabled in this mode. Coordination failure remains explicit
+and can coexist with an accepted result. Physical rendering and countdown remain local.
+
 A reference game trial is one round of the repeated reference game ("tangrams") of Hawkins,
 Frank & Goodman (2020). Two players, a **director** and a **matcher**, see the same set of
 objects, each in a different arrangement, so they can't refer to objects by position. Only the

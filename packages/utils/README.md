@@ -1,6 +1,46 @@
 # @jspsych-multiplayer/utils
 
-Shared helpers for plugins and adapters built on the jsPsych multiplayer API (`jsPsych.multiplayer`). Researchers writing experiments don't need this package; the plugins use it.
+Shared helpers for plugins and adapters built on the jsPsych multiplayer API (`jsPsych.multiplayer`), including an opt-in round coordinator for experiment authors.
+
+## Fixed-authority rounds (prototype)
+
+`createRoundCoordinator<T>(multiplayer, { authorityId, members, roundIndex, deadlines, validate, signal? })`
+returns a `RoundCoordinator<T>`. This prototype supports exactly two fixed participants.
+Both clients must use the same configuration and payload validator. `roundIndex` is a unique
+nonnegative integer within the session and authority; reusing an own round record throws.
+Deadlines are positive milliseconds: `response`, `preparation`, `receipt`, `feedback`, `write`.
+The first result is immutable; only the authority may submit a validated JSON payload.
+
+| Handle member | Meaning |
+| --- | --- |
+| `state` | Frozen snapshot with `roundId`, `phase`, `revision`, `result`, `failure`, `pendingWrites`. |
+| `ready()` | Acknowledge construction; authority activates only after both are ready. |
+| `submit(value)` | Authority only. Strictly before expiry selects; at expiry commits timeout. Returns whether committed. |
+| `ack("result", id)` | Acknowledge accepting this result. |
+| `ack("feedback", id)` | Acknowledge local feedback finish, after receipt. |
+| `subscribe(callback)` | Immediate snapshot and later changes; returns unsubscribe. |
+| `abort(reason = "cancelled")` | Fail explicitly, retaining any accepted result. |
+| `dispose()` | Remove timers/waits/subscriptions; required at handoff or cleanup. |
+
+Phases are `preparing`, `active`, `result`, `complete`, `failed`. Result is
+`{ id, kind: "selection" | "timeout", value, rt }`; timeout has null value.
+`rt` is authority-local monotonic time from activation, not physical stimulus onset.
+Completion requires both result and feedback acknowledgments; consume completion only when
+`pendingWrites === 0`. Keep accepted results even if a later acknowledgment/write fails.
+The handle scores nothing, and has no renderer, shared clock or authority election.
+
+Cumulative records use separate session keys per `(sessionId, authorityId, roundIndex)`
+so core push coalescing can skip phases without losing results or acknowledgments.
+Observers can skip active/result snapshots. Preparation, delivery, receipt, feedback and write
+confirmation have local bounds. Transport close, departure, cancellation, identity/restart
+or a lost record fail explicitly; none becomes a behavioral timeout. A frozen page cannot run
+its watchdog until resumed. Partitions may prevent result delivery or agreement on failure reasons.
+Protocol sender validation assumes cooperative authenticated participants; this is not a
+server-enforced protection against a member forging their own data.
+
+Use the reference-game's [public factory hooks](../plugin-multiplayer-reference-game/README.md#coordinated-rounds-prototype)
+to connect the handle to normal plugin scoring, feedback and cleanup. No core or adapter changes
+are required by this prototype. Deployment lifecycle checks remain pending.
 
 ## For plugins
 

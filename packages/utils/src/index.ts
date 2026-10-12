@@ -6,6 +6,17 @@ import type {
   PresenceData,
 } from "jspsych";
 
+export { createRoundCoordinator } from "./round-coordinator";
+export type {
+  RoundCoordinator,
+  RoundCoordinatorOptions,
+  RoundDeadlines,
+  RoundFailure,
+  RoundPhase,
+  RoundResult,
+  RoundState,
+} from "./round-coordinator";
+
 /** jsPsych's multiplayer module: `jsPsych.multiplayer`. */
 export type Multiplayer = JsPsych["multiplayer"];
 

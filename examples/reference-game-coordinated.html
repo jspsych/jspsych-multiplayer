@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Matcher-owned rounds: local review</title>
+    <script src="../vendor/jspsych/dist/index.browser.js"></script>
+    <script src="../packages/utils/dist/index.browser.js"></script>
+    <script src="../packages/adapter-multiplayer-local/dist/index.browser.js"></script>
+    <script src="../packages/plugin-multiplayer-sync/dist/index.browser.js"></script>
+    <script src="../packages/plugin-multiplayer-role/dist/index.browser.js"></script>
+    <script src="../packages/plugin-multiplayer-reference-game/dist/index.browser.js"></script>
+    <link rel="stylesheet" href="../vendor/jspsych/css/jspsych.css" />
+  </head>
+  <body>
+    <p id="phase" role="status">Open the full same URL in exactly one other tab.</p>
+    <main id="experiment"></main>
+    <script>
+      // Local review only: no JATOS, recruitment, DataPipe or server-side saving.
+      const phase = document.getElementById("phase");
+      let role,
+        partner,
+        failed = false;
+      const jsPsych = initJsPsych({
+        display_element: "experiment",
+        on_finish() {
+          phase.textContent = failed ? "The game could not stay coordinated." : "Review complete.";
+          const button = document.createElement("button");
+          button.textContent = "Download this tab's data";
+          button.onclick = () => jsPsych.data.get().localSave("json", "coordinated-review.json");
+          document.getElementById("experiment").replaceChildren(button);
+        },
+      });
+      const deadlines = {
+        response: 60000,
+        preparation: 30000,
+        receipt: 15000,
+        feedback: 30000,
+        write: 15000,
+      };
+      const game = {
+        type: jsPsychMultiplayerReferenceGame,
+        stimuli: [
+          { id: "circle", html: "&#9679;" },
+          { id: "triangle", html: "&#9650;" },
+          { id: "square", html: "&#9632;" },
+        ],
+        targets: jsPsych.timelineVariable("targets"),
+        round: jsPsych.timelineVariable("round"),
+        role: () => role,
+        partner_id: () => partner,
+        require_message_before_response: true,
+        save_transcript: true,
+        save_interaction_history: true,
+        feedback_duration: 3000,
+        round_coordinator: (context) =>
+          jsPsychMultiplayerUtils.createRoundCoordinator(context.multiplayer, {
+            ...context,
+            deadlines,
+          }),
+        on_round_state: (state) => {
+          window.roundCoordinationSnapshot = state;
+          phase.textContent = `${role}: ${state.phase}`;
+        },
+        on_finish: (data) => {
+          failed ||= Boolean(data.coordination_failure);
+        },
+      };
+      const timeline = [
+        {
+          type: jsPsychMultiplayerSync,
+          write_data: { here: true },
+          participants: [],
+          timeout: 30000,
+          wait_for: (data, presence) =>
+            Object.keys(data).filter((id) => data[id].here && presence[id] === "connected")
+              .length === 2,
+        },
+        {
+          type: jsPsychMultiplayerRole,
+          roles: ["director", "matcher"],
+          strategy: "random",
+          timeout: 30000,
+          ready: (data) => Object.keys(data).length === 2,
+          on_finish() {
+            role = jsPsychMultiplayerRole.getMyRole();
+            const roles = jsPsychMultiplayerRole.participantsByRole();
+            partner = roles[role === "matcher" ? "director" : "matcher"]?.[0];
+            failed = !partner;
+          },
+        },
+        {
+          timeline: [{ timeline: [game], conditional_function: () => !failed }],
+          timeline_variables: [
+            { round: 0, targets: ["triangle"] },
+            { round: 1, targets: ["circle"] },
+            { round: 2, targets: ["square"] },
+          ],
+        },
+      ];
+      (async () => {
+        await jsPsych.multiplayer.connect(new jsPsychAdapterMultiplayerLocal());
+        if (jsPsych.multiplayer.restarted) {
+          phase.textContent = "Reload is unsupported. Start a fresh session in two tabs.";
+          return;
+        }
+        await jsPsych.run(timeline);
+      })().catch((error) => {
+        phase.textContent = "Review setup failed: " + error.message;
+      });
+    </script>
+  </body>
+</html>
