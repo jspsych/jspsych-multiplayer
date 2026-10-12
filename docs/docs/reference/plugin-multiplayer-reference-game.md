@@ -14,6 +14,10 @@ It gates interaction until both clients are ready, uses one matcher-owned result
 scoring/feedback, and holds completion for both receipt and feedback acknowledgments.
 Independent response timers are disabled in this mode. Coordination failure remains explicit
 and can coexist with an accepted result. Physical rendering and countdown remain local.
+For local investigation, `coordination_diagnostics: true` records visibility, result acceptance,
+feedback timer execution and acknowledgment requests in the row; the coordinator factory can
+also opt into `diagnostics: true` for watchdog gaps, write confirmations and peer acknowledgment
+state. Diagnostics are bounded, local and disabled by default; they do not change deadlines.
 
 A reference game trial is one round of the repeated reference game ("tangrams") of Hawkins,
 Frank & Goodman (2020). Two players, a **director** and a **matcher**, see the same set of

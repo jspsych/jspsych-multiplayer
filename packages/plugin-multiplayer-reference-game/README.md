@@ -69,6 +69,16 @@ the unchanged comparison packet; this public prototype needs new browser/JATOS v
 See [the local review example](../../examples/reference-game-coordinated.html) and
 [design/acceptance record](../../ROUND-COORDINATION.md).
 
+`coordination_diagnostics: true` (BOOL, default false) adds a local diagnostic object to the saved
+row. It records initial visibility, visibility/page lifecycle events, result acceptance, receipt
+and feedback acknowledgment requests, feedback timer scheduling/firing/lateness, timer cleanup
+and trial finish. Set `diagnostics: true` in the factory's utils options too to include watchdog
+gaps, write confirmation and acknowledgment observations. Each event list retains the last 128
+events and an overflow count. Monotonic times share `performance.timeOrigin` within this page;
+wall time is supplementary and can jump. These timestamps are not physical onset measurements.
+The review example enables both flags and downloads `coordinated-review-diagnostics.json`.
+No diagnostics are written into the multiplayer transport, and no extra watchdog is scheduled.
+
 Only `stimuli`, `targets`, and `role` are required; everything else has a sensible default.
 
 ### Stimuli & display

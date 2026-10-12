@@ -14,13 +14,20 @@ afterEach(async () => {
   await Promise.all(clients.splice(0).map((c) => c.jsPsych.multiplayer.disconnect()));
   jest.useRealTimers();
 });
-async function pair() {
+async function pair(diagnostics = false) {
   const hub = new MemoryHub();
   const m = await hub.join("m"),
     d = await hub.join("d");
   clients.push(m, d);
   jest.useFakeTimers();
-  const config = { authorityId: "m", members: ["m", "d"], roundIndex: 0, deadlines, validate };
+  const config = {
+    authorityId: "m",
+    members: ["m", "d"],
+    roundIndex: 0,
+    deadlines,
+    validate,
+    diagnostics,
+  };
   const interval = jest.spyOn(globalThis, "setInterval");
   const a = createRoundCoordinator(m.jsPsych.multiplayer, config);
   const authorityTimer = interval.mock.results.at(-1)!.value;
@@ -415,4 +422,71 @@ test("complete waits for local confirmation and remains bounded when it never ar
   await p.advance(200);
   expect(p.a.state.failure!.reason).toBe("write_confirmation_timeout");
   expect(p.a.state.result!.kind).toBe("selection");
+});
+
+test("diagnostics are opt-in, bounded and never part of shared records", async () => {
+  const p = await pair(true);
+  await p.ready();
+  p.a.submit({ choice: "A" });
+  await drain();
+  const id = p.a.state.result!.id;
+  p.a.ack("result", id);
+  p.b.ack("result", id);
+  p.a.ack("feedback", id);
+  p.b.ack("feedback", id);
+  await drain();
+  expect(
+    p.a.state.diagnostics!.events.some(
+      (e) => e.event === "ack_accepted" && e.detail.stage === "feedback",
+    ),
+  ).toBe(true);
+  expect(p.a.state.diagnostics!.events.some((e) => e.event === "write_confirmed")).toBe(true);
+  expect(
+    p.a.state.diagnostics!.events.some(
+      (e) => e.event === "phase_published" && e.detail.phase === "complete",
+    ),
+  ).toBe(true);
+  expect((p.m.jsPsych.multiplayer.get("m")![p.key()] as any).diagnostics).toBeUndefined();
+  const now = jest.spyOn(performance, "now");
+  for (let step = 1; step <= 150; step++) {
+    now.mockReturnValue(step * 2000);
+    jest.advanceTimersByTime(50);
+  }
+  expect(p.a.state.diagnostics!.maxWatchdogGap).toBe(2000);
+  expect(p.a.state.diagnostics!.events).toHaveLength(128);
+  expect(p.a.state.diagnostics!.droppedEvents).toBeGreaterThan(0);
+  expect(Object.isFrozen(p.a.state.diagnostics!.events)).toBe(true);
+  now.mockRestore();
+});
+
+test("delayed watchdog records elapsed time and the missing acknowledgment at failure", async () => {
+  const p = await pair(true);
+  await p.ready();
+  p.a.submit({ choice: "A" });
+  await drain();
+  const id = p.a.state.result!.id;
+  p.a.ack("result", id);
+  p.b.ack("result", id);
+  await drain();
+  const now = jest.spyOn(performance, "now").mockReturnValue(2000);
+  jest.advanceTimersByTime(50);
+  await drain();
+  expect(p.a.state.failure!.reason).toBe("feedback_ack_timeout");
+  const events = p.a.state.diagnostics!.events;
+  expect(events.find((e) => e.event === "watchdog_gap")!.detail.gap).toBe(2000);
+  expect(events.find((e) => e.event === "failure")!.detail).toMatchObject({
+    reason: "feedback_ack_timeout",
+    phaseElapsed: 2000,
+    acknowledgments: [
+      { participantId: "m", received: true, feedback: false },
+      { participantId: "d", received: true, feedback: false },
+    ],
+  });
+  now.mockRestore();
+});
+
+test("disabled diagnostics keep the original snapshot shape", async () => {
+  const p = await pair();
+  await p.ready();
+  expect(p.a.state).not.toHaveProperty("diagnostics");
 });

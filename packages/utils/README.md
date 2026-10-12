@@ -42,6 +42,15 @@ Use the reference-game's [public factory hooks](../plugin-multiplayer-reference-
 to connect the handle to normal plugin scoring, feedback and cleanup. No core or adapter changes
 are required by this prototype. Deployment lifecycle checks remain pending.
 
+For local diagnosis, set the handle option `diagnostics: true` (default false).
+`state.diagnostics` then contains monotonic timestamps, wall timestamps, configured budgets,
+write confirmations, phase transitions, accepted local acknowledgments, observed peer acknowledgment
+state and failure details. The existing watchdog records callback gaps of at least 1000ms and
+maximum monotonic/wall gaps. Only its actual interval callbacks count as watchdog samples;
+subscription-triggered deadline checks do not reset that measure. The last 128 events are retained,
+with `droppedEvents` reporting overflow. Diagnostics add no timers or shared transport fields,
+do not extend deadlines, and are local observations rather than clock synchronization evidence.
+
 ## For plugins
 
 | Helper | What it does |

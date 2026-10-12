@@ -11,6 +11,8 @@ export type {
   RoundCoordinator,
   RoundCoordinatorOptions,
   RoundDeadlines,
+  RoundDiagnosticEvent,
+  RoundDiagnostics,
   RoundFailure,
   RoundPhase,
   RoundResult,

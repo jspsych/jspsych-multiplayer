@@ -20,6 +20,23 @@ export interface RoundFailure {
   readonly phase: RoundPhase;
   readonly reporter: string;
 }
+/** Local observations only: never written to shared participant records. */
+export interface RoundDiagnosticEvent {
+  readonly event: string;
+  readonly at: number;
+  readonly wallTime: number;
+  readonly detail: Readonly<Record<string, unknown>>;
+}
+export interface RoundDiagnostics {
+  readonly timeOrigin: number;
+  readonly createdAt: number;
+  readonly deadlines: RoundDeadlines;
+  readonly watchdogInterval: number;
+  readonly maxWatchdogGap: number;
+  readonly maxWatchdogWallGap: number;
+  readonly droppedEvents: number;
+  readonly events: readonly RoundDiagnosticEvent[];
+}
 export interface RoundState<T> {
   readonly roundId: string;
   readonly phase: RoundPhase;
@@ -27,6 +44,7 @@ export interface RoundState<T> {
   readonly result: RoundResult<T> | null;
   readonly failure: RoundFailure | null;
   readonly pendingWrites: number;
+  readonly diagnostics?: RoundDiagnostics;
 }
 export interface RoundCoordinator<T> {
   readonly state: RoundState<T>;
@@ -48,6 +66,8 @@ export interface RoundCoordinatorOptions<T> {
   /** Must accept only the JSON payloads this round permits, on both clients. */
   validate: (value: unknown) => value is T;
   signal?: AbortSignal;
+  /** Opt-in bounded local timeline; adds no timers or shared transport writes. */
+  diagnostics?: boolean;
 }
 
 interface Authority<T> {
@@ -152,6 +172,33 @@ export function createRoundCoordinator<T>(
   let notifying = false,
     again = false;
   let timer: ReturnType<typeof setInterval> | undefined;
+  const diagnosticsEnabled = options.diagnostics === true;
+  const createdAt = phaseAt;
+  const watchdogInterval = Math.min(50, ...names.map((k) => deadlines[k]));
+  const diagnosticEvents: RoundDiagnosticEvent[] = [];
+  let droppedEvents = 0,
+    maxWatchdogGap = 0,
+    maxWatchdogWallGap = 0;
+  let lastWatchdogAt = createdAt,
+    lastWatchdogWall = Date.now();
+  function diagnostic(event: string, detail: Record<string, unknown> = {}) {
+    if (!diagnosticsEnabled) return;
+    if (diagnosticEvents.length === 128) {
+      diagnosticEvents.shift();
+      droppedEvents++;
+    }
+    diagnosticEvents.push({ event, at: performance.now(), wallTime: Date.now(), detail });
+  }
+  const acknowledgments = () =>
+    members.map((id) => {
+      const record = id === me ? own : peers.get(id);
+      return {
+        participantId: id,
+        ready: record?.ready === true,
+        received: record?.received === resultId,
+        feedback: record?.feedback === resultId,
+      };
+    });
   const state = (): RoundState<T> =>
     freeze(
       clone({
@@ -159,6 +206,20 @@ export function createRoundCoordinator<T>(
         phase: failure ? "failed" : authority.phase,
         failure,
         pendingWrites: writes.size,
+        ...(diagnosticsEnabled
+          ? {
+              diagnostics: {
+                timeOrigin: performance.timeOrigin,
+                createdAt,
+                deadlines,
+                watchdogInterval,
+                maxWatchdogGap,
+                maxWatchdogWallGap,
+                droppedEvents,
+                events: diagnosticEvents,
+              },
+            }
+          : {}),
       }),
     );
   function notify() {
@@ -192,6 +253,13 @@ export function createRoundCoordinator<T>(
     if (failure || disposed) return;
     failure = freeze({ reason, phase: authority.phase, reporter: me! });
     own.failure = failure;
+    diagnostic("failure", {
+      reason,
+      phase: authority.phase,
+      phaseElapsed: performance.now() - phaseAt,
+      acknowledgments: acknowledgments(),
+      pendingWrites: writes.size,
+    });
     // Accepted results remain intact. Failure announcement is best effort and never recursive.
     try {
       Promise.resolve(multiplayer.update({ [key]: wire() }, { scope: "session" })).catch(() => {});
@@ -206,10 +274,19 @@ export function createRoundCoordinator<T>(
     peers.set(me!, clone(own));
     const seq = ++sequence;
     writes.set(seq, performance.now());
+    diagnostic("write_requested", {
+      sequence: seq,
+      phase: authority.phase,
+      ready: own.ready,
+      received: own.received === resultId,
+      feedback: own.feedback === resultId,
+    });
     try {
       Promise.resolve(multiplayer.update({ [key]: wire() }, { scope: "session" })).then(
         () => {
+          const startedAt = writes.get(seq);
           if (disposed || !writes.delete(seq)) return;
+          diagnostic("write_confirmed", { sequence: seq, elapsed: performance.now() - startedAt! });
           notify();
         },
         () => {
@@ -226,6 +303,11 @@ export function createRoundCoordinator<T>(
   function transition(phase: RoundPhase, result = authority.result) {
     authority = { roundId, revision: authority.revision + 1, phase, result };
     phaseAt = performance.now();
+    diagnostic("phase_published", {
+      phase,
+      revision: authority.revision,
+      resultKind: result?.kind ?? null,
+    });
     publish();
   }
   function advance() {
@@ -303,6 +385,22 @@ export function createRoundCoordinator<T>(
       received: previous?.received || raw.received,
       feedback: previous?.feedback || raw.feedback,
     });
+    const current = peers.get(sender)!;
+    if (
+      previous?.ready !== current.ready ||
+      previous?.received !== current.received ||
+      previous?.feedback !== current.feedback ||
+      previous?.authority?.revision !== current.authority?.revision
+    ) {
+      diagnostic("record_observed", {
+        sender,
+        ready: current.ready,
+        received: current.received === resultId,
+        feedback: current.feedback === resultId,
+        authorityPhase: current.authority?.phase ?? null,
+        revision: current.authority?.revision ?? null,
+      });
+    }
     if (sender === authorityId && sender !== me) {
       const a = raw.authority;
       if (!validAuthority(a) || (a.phase !== "preparing" && !raw.ready)) {
@@ -325,6 +423,11 @@ export function createRoundCoordinator<T>(
       authority = freeze(clone(a));
       phaseAt = performance.now();
       if (a.phase === "active") activeAt = phaseAt;
+      diagnostic("phase_observed", {
+        phase: a.phase,
+        revision: a.revision,
+        resultKind: a.result?.kind ?? null,
+      });
       if (!peerFailure) notify();
     }
     if (peerFailure) {
@@ -402,6 +505,26 @@ export function createRoundCoordinator<T>(
   function onAbort() {
     fail("cancelled");
   }
+  function watchdog() {
+    if (diagnosticsEnabled) {
+      const now = performance.now(),
+        wall = Date.now();
+      const gap = now - lastWatchdogAt,
+        wallGap = wall - lastWatchdogWall;
+      maxWatchdogGap = Math.max(maxWatchdogGap, gap);
+      maxWatchdogWallGap = Math.max(maxWatchdogWallGap, wallGap);
+      if (gap >= 1000 || wallGap >= 1000)
+        diagnostic("watchdog_gap", {
+          gap,
+          wallGap,
+          expectedInterval: watchdogInterval,
+          phase: authority.phase,
+        });
+      lastWatchdogAt = now;
+      lastWatchdogWall = wall;
+    }
+    tick();
+  }
   const handle: RoundCoordinator<T> = {
     get state() {
       return state();
@@ -433,6 +556,7 @@ export function createRoundCoordinator<T>(
       else if (stage === "feedback" && own.received === id && own.feedback === null)
         own.feedback = id;
       else return;
+      diagnostic("ack_accepted", { stage, acknowledgments: acknowledgments() });
       publish();
       advance();
     },
@@ -479,7 +603,7 @@ export function createRoundCoordinator<T>(
           if (!disposed && !failure)
             fail(error?.code === "cancelled" ? "cancelled" : "transport_closed");
         });
-      timer = setInterval(tick, Math.min(50, ...names.map((k) => deadlines[k])));
+      timer = setInterval(watchdog, watchdogInterval);
     }
   }
   return handle;

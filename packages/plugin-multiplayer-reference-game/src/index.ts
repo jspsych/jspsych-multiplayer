@@ -5,6 +5,7 @@ import {
   remainingParticipants,
   Multiplayer,
   RoundCoordinator,
+  RoundDiagnosticEvent,
   RoundState,
 } from "@jspsych-multiplayer/utils";
 import {
@@ -74,6 +75,11 @@ const info = <const>{
     on_round_state: {
       type: ParameterType.FUNCTION,
       default: null,
+    },
+    /** Opt-in local visibility/feedback timing; no extra timers or shared writes. */
+    coordination_diagnostics: {
+      type: ParameterType.BOOL,
+      default: false,
     },
     // ── Stimuli & display ───────────────────────────────────────────────────────────────────────
     /**
@@ -424,6 +430,7 @@ const info = <const>{
     coordination_failure: { type: ParameterType.OBJECT, default: undefined },
     coordination_local_submission: { type: ParameterType.OBJECT, default: undefined },
     coordination_raw_plugin_result: { type: ParameterType.OBJECT, default: undefined },
+    coordination_diagnostics: { type: ParameterType.OBJECT, default: undefined },
     /** This participant's role this round: `"director"` or `"matcher"`. */
     role: {
       type: ParameterType.STRING,
@@ -1039,6 +1046,33 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
     // Ends the session-scope chat subscription `chat_persists` needs, which would otherwise outlive
     // the trial. The trial-scope subscription ends with the trial by itself.
     const controller = new AbortController();
+    const diagnosticsEnabled = coordinated && trial.coordination_diagnostics === true;
+    const diagnosticEvents: RoundDiagnosticEvent[] = [];
+    let droppedDiagnosticEvents = 0;
+    let feedbackScheduledAt: number | null = null,
+      feedbackScheduledWall: number | null = null;
+    let feedbackFiredAt: number | null = null;
+    function diagnostic(event: string, detail: Record<string, unknown> = {}) {
+      if (!diagnosticsEnabled || ended) return;
+      if (diagnosticEvents.length === 128) {
+        diagnosticEvents.shift();
+        droppedDiagnosticEvents++;
+      }
+      diagnosticEvents.push({
+        event,
+        at: performance.now(),
+        wallTime: Date.now(),
+        detail: { visibility: document.visibilityState, ...detail },
+      });
+    }
+    if (diagnosticsEnabled) {
+      diagnostic("trial_constructed");
+      const lifecycle = (event: Event) => diagnostic(event.type);
+      for (const name of ["visibilitychange", "freeze", "resume"])
+        document.addEventListener(name, lifecycle, { signal: controller.signal });
+      for (const name of ["pagehide", "pageshow"])
+        window.addEventListener(name, lifecycle, { signal: controller.signal });
+    }
     const chatGroup = (): GroupSessionData => api.getAll(chatScope);
     // `number`, not ReturnType<typeof setTimeout>: pluginAPI.setTimeout returns a numeric handle.
     let feedbackTimer: number | null = null;
@@ -1457,6 +1491,7 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
       finalAssignment = sub.assignment;
       finalScore = scoreAssignment(sub.assignment, targets, { ordered, scoring });
       finalOutcome = sub.timed_out ? "timeout" : "completed";
+      diagnostic("feedback_entered", { outcome: finalOutcome, showFeedback });
       if (isMatcher) finalRt = typeof sub.rt === "number" ? sub.rt : null;
       if (selectionTimer != null) clearTimeout(selectionTimer);
       if (roundTimer != null) clearTimeout(roundTimer);
@@ -1464,13 +1499,26 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
       updateChatAvailability();
 
       if (!showFeedback) {
+        diagnostic("feedback_skipped");
         end(finalOutcome);
         return;
       }
       renderFeedback(sub, finalScore);
       const duration = trial.feedback_duration as number | null;
       if (typeof duration === "number" && duration > 0) {
-        feedbackTimer = pluginAPI.setTimeout(() => end(finalOutcome), duration);
+        feedbackScheduledAt = performance.now();
+        feedbackScheduledWall = Date.now();
+        diagnostic("feedback_timer_scheduled", { duration, dueAt: feedbackScheduledAt + duration });
+        feedbackTimer = pluginAPI.setTimeout(() => {
+          feedbackFiredAt = performance.now();
+          diagnostic("feedback_timer_fired", {
+            duration,
+            elapsed: feedbackFiredAt - feedbackScheduledAt!,
+            lateBy: feedbackFiredAt - feedbackScheduledAt! - duration,
+            wallElapsed: Date.now() - feedbackScheduledWall!,
+          });
+          end(finalOutcome);
+        }, duration);
       } else {
         const cont = document.createElement("button");
         cont.type = "button";
@@ -1478,7 +1526,10 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
         cont.textContent = "Continue";
         // Continue only ADVANCES past feedback; it does not change HOW the round ended. Preserve the
         // underlying outcome ("completed"/"timeout") so a played round is never mislabelled.
-        cont.addEventListener("click", () => end(finalOutcome));
+        cont.addEventListener("click", () => {
+          diagnostic("feedback_continue_clicked");
+          end(finalOutcome);
+        });
         feedbackEl.after(cont);
       }
     }
@@ -1488,6 +1539,7 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
       if (coordinator && !coordinator.state.failure && coordinator.state.result) {
         if (!feedbackFinished) {
           feedbackFinished = true;
+          diagnostic("feedback_ack_requested", { resultId: coordinator.state.result.id });
           coordinator.ack("feedback", coordinator.state.result.id);
           if (ended) return; // acknowledgment can synchronously release the round
         }
@@ -1496,6 +1548,12 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
           return;
         }
       }
+      if (feedbackTimer !== null && feedbackFiredAt === null)
+        diagnostic("feedback_timer_cleared", {
+          scheduledAt: feedbackScheduledAt,
+          elapsed: performance.now() - feedbackScheduledAt!,
+        });
+      diagnostic("trial_finish", { outcome, feedbackShown, feedbackFinished, feedbackFiredAt });
       ended = true;
       controller.abort();
       display_element.inert = false;
@@ -1553,6 +1611,20 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
         data.coordination_result = snapshot.result;
         data.coordination_failure = snapshot.failure;
         data.coordination_local_submission = localSubmission;
+        if (diagnosticsEnabled)
+          data.coordination_diagnostics = {
+            schemaVersion: 1,
+            timeOrigin: performance.timeOrigin,
+            constructedAt: start,
+            feedbackDuration: trial.feedback_duration,
+            feedbackShown,
+            feedbackFinished,
+            feedbackScheduledAt,
+            feedbackFiredAt,
+            droppedEvents: droppedDiagnosticEvents,
+            events: JSON.parse(JSON.stringify(diagnosticEvents)),
+            coordinator: snapshot.diagnostics ?? null,
+          };
         data.coordination_raw_plugin_result = Object.fromEntries(
           ["multiplayer_outcome", "assignment", "correct", "n_correct", "accuracy", "rt"].map(
             (field) => [field, data[field]],
@@ -1740,7 +1812,12 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
         if (isMatcher) updateMatcherUi();
         if (snapshot.result && acceptedResult === null) {
           acceptedResult = snapshot.result.id;
+          diagnostic("result_accepted", {
+            resultId: snapshot.result.id,
+            kind: snapshot.result.kind,
+          });
           // Receipt precedes feedback completion even when feedback is disabled.
+          diagnostic("result_ack_requested", { resultId: snapshot.result.id });
           coordinator!.ack("result", snapshot.result.id);
           enterFeedback(
             snapshot.result.kind === "timeout"

@@ -150,7 +150,7 @@ describe("fixed matcher coordination through public plugin boundaries", () => {
     await Promise.all(clients.splice(0).map((c) => c.jsPsych.multiplayer.disconnect()));
     jest.useRealTimers();
   });
-  async function paired(overrides: Record<string, any> = {}) {
+  async function paired(overrides: Record<string, any> = {}, feedbackTimerDelay = 0) {
     const hub = new MemoryHub();
     const m = await hub.join("m"),
       d = await hub.join("d");
@@ -161,7 +161,11 @@ describe("fixed matcher coordination through public plugin boundaries", () => {
     const mr: Record<string, any>[] = [],
       dr: Record<string, any>[] = [];
     const factory = (context: any) => {
-      const handle = createRoundCoordinator(context.multiplayer, { ...context, deadlines });
+      const handle = createRoundCoordinator(context.multiplayer, {
+        ...context,
+        deadlines,
+        diagnostics: overrides.coordination_diagnostics === true,
+      });
       handles.push(handle);
       return handle;
     };
@@ -176,7 +180,9 @@ describe("fixed matcher coordination through public plugin boundaries", () => {
         {
           multiplayer: client.jsPsych.multiplayer,
           finishTrial: (row: any) => rows.push(row),
-          pluginAPI: { setTimeout: (fn: any, ms: number) => setTimeout(fn, ms) },
+          pluginAPI: {
+            setTimeout: (fn: any, ms: number) => setTimeout(fn, ms + feedbackTimerDelay),
+          },
         },
         el,
         {
@@ -349,6 +355,76 @@ describe("fixed matcher coordination through public plugin boundaries", () => {
     handles[0].abort();
     await timeline.expectFinished();
     expect(timeline.getData().values()[0].multiplayer_outcome).toBe("cancelled");
+  });
+  test("timeout diagnostics capture visibility, timer firing and both local acknowledgment requests", async () => {
+    const p = await paired({
+      feedback: true,
+      feedback_duration: 100,
+      coordination_diagnostics: true,
+    });
+    p.startDirector();
+    await p.drain();
+    const visibility = jest.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    document.dispatchEvent(new Event("visibilitychange"));
+    await p.advance(1100);
+    for (const row of [p.mr[0], p.dr[0]]) {
+      expect(row.coordination_failure).toBeNull();
+      const diag = row.coordination_diagnostics;
+      expect(diag.events.find((e: any) => e.event === "visibilitychange").detail.visibility).toBe(
+        "hidden",
+      );
+      expect(diag.events.find((e: any) => e.event === "feedback_timer_fired").detail).toMatchObject(
+        { elapsed: 100, lateBy: 0 },
+      );
+      expect(diag.events.some((e: any) => e.event === "result_ack_requested")).toBe(true);
+      expect(diag.events.some((e: any) => e.event === "feedback_ack_requested")).toBe(true);
+      expect(diag.feedbackFinished).toBe(true);
+      expect(
+        diag.coordinator.events.some(
+          (e: any) => e.event === "ack_accepted" && e.detail.stage === "feedback",
+        ),
+      ).toBe(true);
+    }
+    visibility.mockRestore();
+  });
+  test("delayed feedback callback leaves a scheduled-but-unfired diagnostic and preserves timeout", async () => {
+    const p = await paired(
+      { feedback: true, feedback_duration: 100, coordination_diagnostics: true },
+      1000,
+    );
+    p.startDirector();
+    await p.drain();
+    await p.advance(1600);
+    const diag = p.mr[0].coordination_diagnostics;
+    expect(p.mr[0].coordination_result.kind).toBe("timeout");
+    expect(p.mr[0].coordination_failure.reason).toBe("feedback_ack_timeout");
+    expect(diag.feedbackScheduledAt).toBe(1000);
+    expect(diag.feedbackFiredAt).toBeNull();
+    expect(diag.feedbackFinished).toBe(false);
+    expect(diag.events.some((e: any) => e.event === "feedback_timer_scheduled")).toBe(true);
+    expect(diag.events.some((e: any) => e.event === "feedback_timer_fired")).toBe(false);
+    expect(diag.events.find((e: any) => e.event === "feedback_timer_cleared").detail.elapsed).toBe(
+      600,
+    );
+    await p.advance(1000);
+    expect(p.mr).toHaveLength(1);
+    expect(p.dr).toHaveLength(1);
+  });
+  test("plugin diagnostics remain bounded and are absent by default", async () => {
+    const p = await paired({ coordination_diagnostics: true });
+    p.startDirector();
+    await p.drain();
+    for (let i = 0; i < 150; i++) document.dispatchEvent(new Event("visibilitychange"));
+    clickCell(p.me, "b");
+    await p.drain();
+    expect(p.mr[0].coordination_diagnostics.events).toHaveLength(128);
+    expect(p.mr[0].coordination_diagnostics.droppedEvents).toBeGreaterThan(0);
+    const q = await paired();
+    q.startDirector();
+    await q.drain();
+    clickCell(q.me, "b");
+    await q.drain();
+    expect(q.mr[0]).not.toHaveProperty("coordination_diagnostics");
   });
 });
 

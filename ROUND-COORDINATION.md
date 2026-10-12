@@ -129,3 +129,70 @@ offline/reconnect, reload, experiment cancellation and actual missing feedback
 acknowledgments still require deployment checks before adopting the public API.
 Repeat the frozen Hawkins comparison checks using a new experiment branch/archive
 after integrating these hooks; never overwrite the tested comparison assets.
+
+## Diagnostic follow-up
+
+The operator ran the public LocalAdapter example. The first paired datasets agree
+on three selections (correct, incorrect, correct), including two retained gated
+clicks. The idle-timeout pair (files 2/3) agrees on a preceding incorrect selection
+and a 60000ms timeout, but both stop with `feedback_ack_timeout` before the final
+round; that round's local timeline interval is about 124.7s. The frozen-matcher
+pair (4/5) retains a partial round with no behavioral result or score; the director
+reports `result_delivery_timeout` after about 75s and the matcher reports
+`authority_stalled` on resume. Failure-reason and transcript differences are allowed.
+The passive retry (6/7) agrees on an incorrect selection followed by two ordinary
+timeouts, no coordination failures, and normal progression through all three
+rounds; timeout timeline intervals are approximately 64.5s and 65s.
+
+The operator reported simply ignoring tabs in 2/3. Visibility, timer execution and
+acknowledgment timestamps were absent, so those files cannot establish whether
+browser scheduling/suspension or a protocol/plugin defect caused the failure.
+The successful retry does not explain away the earlier failure. Raw datasets stay
+untracked at the original checkout root; no participant identifiers or transcripts
+are copied into this record.
+
+The authorized follow-up adds opt-in bounded local diagnostics to utils and the
+plugin, enabled in the example. It adds no timers/shared writes, changes no budget
+and makes no behavior fix. The coordinator samples its existing interval callbacks,
+records gaps of at least 1000ms and maximum monotonic/wall gaps, phase transitions,
+write confirmations, acknowledgments and failure-time acknowledgment state.
+Plugin diagnostics record visibility/page lifecycle, result acceptance, feedback
+timer due/fire/lateness, ack requests and cleanup. Each list retains the last 128
+events and reports dropped events. Logs are copied into each trial row before
+cleanup. Capture ends with that row; a closed page still cannot save its own log.
+
+Run these two controlled checks, using separate new sessions and exactly two
+participants per run. Assets are served by the existing local server on port 8017.
+The page title must say "Matcher-owned rounds: timing diagnostics"; generated data
+must include `coordination_review.instrumentation: "timing-diagnostics-1"` and
+`coordination_diagnostics` on every game row. Script query versions avoid old cached
+bundles. Download both files using the terminal button; filename is now
+`coordinated-review-diagnostics.json`. Label each pair by its review condition.
+
+1. **Visible:** open the full same URL in two separate browser windows, tiled so
+   both stay visible; do not minimize, switch away, click/select, pause in devtools
+   or lock/sleep the computer. Leave all three rounds to expire.
+   `http://127.0.0.1:8017/examples/reference-game-coordinated.html?mp_session=round-diag-visible-001&review=visible`
+2. **Hidden:** use two fresh tabs with this full same URL. Wait until both show
+   active interaction, then hide/minimize both windows or switch to unrelated tabs.
+   Keep the computer awake and do not pause in devtools. Leave them hidden for
+   five minutes, then return and download both datasets. Returning may allow
+   delayed callbacks or a bounded failure to run; retain whichever outcome occurs.
+   `http://127.0.0.1:8017/examples/reference-game-coordinated.html?mp_session=round-diag-hidden-001&review=hidden`
+
+Hidden visibility with large watchdog gaps and late/unfired feedback timers would
+support delayed browser execution. A fired timer followed by a missing accepted
+ack or unconfirmed write points to another boundary. Gaps also occur under load
+or suspension and do not identify browser policy by themselves. Compare each
+client's local timeline separately; no cross-browser clock agreement is assumed.
+
+Follow-up verification: **860 tests in 27 suites passed** (146 in the focused
+utils/reference-game suites), including six added diagnostic tests. They verify
+normal timeout timer firing and acknowledgment requests, delayed feedback callback
+failure with accepted timeout preserved, watchdog gaps with missing-ack state,
+bounded/frozen logs, no diagnostic transport fields and default-off behavior.
+`npm run build` passed. The unchanged Firebase README again required worktree-only
+LF normalization for its existing test, and its original CRLF checkout was restored.
+The example's inline script parses; local HTTP checks confirm the diagnostic page
+and rebuilt diagnostic bundles are served. The operator drives the next browser
+runs; no browser automation, merge, deployment or deadline adjustment was performed.

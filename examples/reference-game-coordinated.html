@@ -2,21 +2,22 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>Matcher-owned rounds: local review</title>
+    <title>Matcher-owned rounds: timing diagnostics</title>
     <script src="../vendor/jspsych/dist/index.browser.js"></script>
-    <script src="../packages/utils/dist/index.browser.js"></script>
+    <script src="../packages/utils/dist/index.browser.js?v=timing-diagnostics-1"></script>
     <script src="../packages/adapter-multiplayer-local/dist/index.browser.js"></script>
     <script src="../packages/plugin-multiplayer-sync/dist/index.browser.js"></script>
     <script src="../packages/plugin-multiplayer-role/dist/index.browser.js"></script>
-    <script src="../packages/plugin-multiplayer-reference-game/dist/index.browser.js"></script>
+    <script src="../packages/plugin-multiplayer-reference-game/dist/index.browser.js?v=timing-diagnostics-1"></script>
     <link rel="stylesheet" href="../vendor/jspsych/css/jspsych.css" />
   </head>
   <body>
-    <p id="phase" role="status">Open the full same URL in exactly one other tab.</p>
+    <p id="phase" role="status">Timing diagnostics v1. Open the full same URL in exactly one other tab.</p>
     <main id="experiment"></main>
     <script>
       // Local review only: no JATOS, recruitment, DataPipe or server-side saving.
       const phase = document.getElementById("phase");
+      const reviewCondition = new URLSearchParams(location.search).get("review") ?? "unspecified";
       let role,
         partner,
         failed = false;
@@ -26,7 +27,8 @@
           phase.textContent = failed ? "The game could not stay coordinated." : "Review complete.";
           const button = document.createElement("button");
           button.textContent = "Download this tab's data";
-          button.onclick = () => jsPsych.data.get().localSave("json", "coordinated-review.json");
+          button.onclick = () =>
+            jsPsych.data.get().localSave("json", "coordinated-review-diagnostics.json");
           document.getElementById("experiment").replaceChildren(button);
         },
       });
@@ -52,16 +54,25 @@
         save_transcript: true,
         save_interaction_history: true,
         feedback_duration: 3000,
+        coordination_diagnostics: true,
         round_coordinator: (context) =>
           jsPsychMultiplayerUtils.createRoundCoordinator(context.multiplayer, {
             ...context,
             deadlines,
+            diagnostics: true,
           }),
         on_round_state: (state) => {
           window.roundCoordinationSnapshot = state;
           phase.textContent = `${role}: ${state.phase}`;
         },
         on_finish: (data) => {
+          data.coordination_review = {
+            instrumentation: "timing-diagnostics-1",
+            condition: reviewCondition,
+            userAgent: navigator.userAgent,
+            deadlines,
+            feedbackDuration: 3000,
+          };
           failed ||= Boolean(data.coordination_failure);
         },
       };
