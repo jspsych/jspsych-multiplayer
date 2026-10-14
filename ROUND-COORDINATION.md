@@ -84,6 +84,35 @@ row recovery from a closed page or administrative save readback is claimed.
 
 ## Verification and review handoff
 
+### Direct experiment cancellation limitation
+
+Calling the coordinator's `abort()` while the plugin is running lets the plugin
+save its interrupted row and retain an accepted result. Direct
+`jsPsych.abortExperiment()` calls do not provide that guarantee: the core finishes
+the current trial synchronously, before the coordinator's session-wait rejection
+handler runs. An actual-timeline review reproduction that aborted during feedback
+after accepting a selection saved a row without assignment, scoring, coordination
+result or failure fields.
+
+A controlled experiment can route cancellation through the active coordinator's
+`abort()` before calling `jsPsych.abortExperiment()`. That ordering still needs an
+actual-timeline regression test before adoption. Transparent support for direct
+core abort calls needs a synchronous lifecycle hook that lets the plugin finalize
+its data before the core finishes the trial. This prototype does not add that hook
+or intercept the core's methods. Closed-page recovery remains unsupported.
+
+### Review follow-up validation
+
+Submissions now reject `NaN`, `Infinity` and `-Infinity` before JSON cloning can
+turn them into null. Three regression cases cover direct, nested-object and
+nested-array values, peer result state after rejection, and successful delivery
+of unchanged finite/null payloads. The root test run passed 862 of 863 tests; the
+known Firebase README CRLF fence check was the sole failure. Its 72-test suite
+passed after temporary LF normalization, with the original file bytes restored
+afterward. The full root build passed. No Firebase change is included.
+
+### Initial validation
+
 The three passes are complete. `npm test -- --runInBand --silent`: **854 tests,
 27 suites passed**, including 24 new actual-core protocol tests and eight public
 plugin integration tests. The focused utils/reference-game suites pass 140 tests.

@@ -328,6 +328,26 @@ test("invalid selection and non-JSON mutation cannot publish", async () => {
   expect(p.a.state.result).toBeNull();
 });
 
+test.each([NaN, Infinity, -Infinity])(
+  "nonfinite number %s cannot be rewritten into an accepted selection",
+  async (number) => {
+    const p = await pair();
+    await p.ready();
+    for (const extra of [number, { nested: number }, [0, { nested: number }]]) {
+      expect(p.a.submit({ choice: "A", extra } as any)).toBe(false);
+      await drain();
+      expect(p.a.state.result).toBeNull();
+      expect(p.b.state.result).toBeNull();
+      expect(p.a.state.phase).toBe("active");
+    }
+    const value = { choice: "A", extra: [0, { nested: 1.5 }, null] };
+    expect(p.a.submit(value)).toBe(true);
+    await drain();
+    expect(p.a.state.result!.value).toEqual(value);
+    expect(p.b.state.result!.value).toEqual(value);
+  },
+);
+
 test("a suspended authority timer is bounded by the observer without replacement", async () => {
   const p = await pair();
   await p.ready();

@@ -542,7 +542,13 @@ export function createRoundCoordinator<T>(
     submit(value) {
       // Reject non-JSON values instead of silently altering the submitted payload.
       try {
-        const copy = clone(value);
+        const copy = JSON.parse(
+          JSON.stringify(value, (_key, item) => {
+            if (typeof item === "number" && !Number.isFinite(item))
+              throw new TypeError("Round submissions require finite JSON numbers.");
+            return item;
+          }),
+        );
         if (canonical(copy) !== canonical(value)) return false;
         return commit(copy);
       } catch {

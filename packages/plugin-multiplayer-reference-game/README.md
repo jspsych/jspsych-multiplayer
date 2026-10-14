@@ -63,6 +63,13 @@ experiment routing must check `coordination_failure` as well as `multiplayer_out
 A failure before acceptance records `connection_lost`, or `cancelled` for local cancellation,
 with null scoring. Failure details distinguish the actual coordination cause.
 
+These saved-row guarantees apply when the coordinator ends the plugin trial.
+Direct `jsPsych.abortExperiment()` calls finish the trial before the coordinator's
+asynchronous cancellation handler can save its fields, including any accepted
+result. Preserving data for that path needs an experiment cancellation wrapper
+that aborts the active coordinator first (pending regression validation), or a
+synchronous core lifecycle hook. See the [cancellation limitation](../../ROUND-COORDINATION.md#direct-experiment-cancellation-limitation).
+
 The public hooks directly invoke result, feedback and cleanup paths. No authority replacement,
 transparent reload or closed-page row recovery is supported. The prior Hawkins archive remains
 the unchanged comparison packet; this public prototype needs new browser/JATOS validation.
