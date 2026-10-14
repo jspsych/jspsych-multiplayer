@@ -22,6 +22,70 @@ See the runnable two-tab demos in this repo: [`examples/reference-game.html`](..
 
 ## Parameters
 
+### Coordinated rounds (prototype)
+
+Opt in with the `round_coordinator` FUNCTION factory; its default is null. The plugin calls it
+after validating configuration and constructing the trial, passing
+`{ multiplayer, authorityId, members, roundIndex, validate }`. Authority is the assigned
+matcher. Explicit `partner_id` and a unique nonnegative integer `round` are required.
+Return a matching `RoundCoordinator<Submission>` from utils:
+
+```js
+round_coordinator: context => jsPsychMultiplayerUtils.createRoundCoordinator(
+  context.multiplayer,
+  { ...context, deadlines: {
+    response: 60000, preparation: 30000, receipt: 15000,
+    feedback: 30000, write: 15000
+  } }
+),
+on_round_state: state => { /* pause advisory reminders when phase !== "active" */ },
+```
+
+Load the utils browser bundle before using `jsPsychMultiplayerUtils`, or import
+`createRoundCoordinator` from `@jspsych-multiplayer/utils` in bundled experiments.
+`on_round_state` is a separate optional FUNCTION observer. It sees frozen local snapshots;
+physical rendering and countdown remain approximate. Native `selection_timeout` and
+`round_timeout` are disabled in coordinated mode; the handle owns activation and response expiry.
+
+Interaction waits for both construction acknowledgments. One authority result enters the same
+`scoreAssignment` and feedback paths as normal submission. Both acknowledge receipt and local
+feedback completion before finishing; local writes must confirm. The timeout result scores an
+empty assignment through normal plugin semantics. Hawkins-specific timeout null scoring and
+idle attribution belong to the experiment's classification layer.
+
+Rows add `coordination_round_id`, `coordination_result`, `coordination_failure`,
+`coordination_local_submission` (original matcher submission, including construction-relative RT)
+and `coordination_raw_plugin_result` (scoring fields before experiment normalization).
+Coordinated `rt` remains matcher-only and measures activation-relative time; the shared result
+contains that time for both clients. Transcripts and interaction history keep their existing
+local semantics. A failure after acceptance retains scoring and the behavioral outcome, so
+experiment routing must check `coordination_failure` as well as `multiplayer_outcome`.
+A failure before acceptance records `connection_lost`, or `cancelled` for local cancellation,
+with null scoring. Failure details distinguish the actual coordination cause.
+
+These saved-row guarantees apply when the coordinator ends the plugin trial.
+Direct `jsPsych.abortExperiment()` calls finish the trial before the coordinator's
+asynchronous cancellation handler can save its fields, including any accepted
+result. Preserving data for that path needs an experiment cancellation wrapper
+that aborts the active coordinator first (pending regression validation), or a
+synchronous core lifecycle hook. See the [cancellation limitation](../../ROUND-COORDINATION.md#direct-experiment-cancellation-limitation).
+
+The public hooks directly invoke result, feedback and cleanup paths. No authority replacement,
+transparent reload or closed-page row recovery is supported. The prior Hawkins archive remains
+the unchanged comparison packet; this public prototype needs new browser/JATOS validation.
+See [the local review example](../../examples/reference-game-coordinated.html) and
+[design/acceptance record](../../ROUND-COORDINATION.md).
+
+`coordination_diagnostics: true` (BOOL, default false) adds a local diagnostic object to the saved
+row. It records initial visibility, visibility/page lifecycle events, result acceptance, receipt
+and feedback acknowledgment requests, feedback timer scheduling/firing/lateness, timer cleanup
+and trial finish. Set `diagnostics: true` in the factory's utils options too to include watchdog
+gaps, write confirmation and acknowledgment observations. Each event list retains the last 128
+events and an overflow count. Monotonic times share `performance.timeOrigin` within this page;
+wall time is supplementary and can jump. These timestamps are not physical onset measurements.
+The review example enables both flags and downloads `coordinated-review-diagnostics.json`.
+No diagnostics are written into the multiplayer transport, and no extra watchdog is scheduled.
+
 Only `stimuli`, `targets`, and `role` are required; everything else has a sensible default.
 
 ### Stimuli & display

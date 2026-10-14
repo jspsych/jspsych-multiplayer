@@ -1,5 +1,6 @@
 import { startTimeline } from "@jspsych/test-utils";
 import { ConnectOptions, initJsPsych } from "jspsych";
+import { createRoundCoordinator, RoundCoordinator } from "@jspsych-multiplayer/utils";
 
 import { MemoryHub, scopeData } from "../../../test-utils/memory-backend";
 import MultiplayerReferenceGamePlugin from ".";
@@ -136,6 +137,296 @@ const sendChat = (el: HTMLElement, text: string) => {
 };
 const run = (jsPsych: any, el: HTMLElement, params: Record<string, unknown>) =>
   new MultiplayerReferenceGamePlugin(jsPsych).trial(el, params as never);
+
+describe("fixed matcher coordination through public plugin boundaries", () => {
+  const handles: RoundCoordinator<any>[] = [];
+  const clients: Awaited<ReturnType<MemoryHub["join"]>>[] = [];
+  const drain = async () => {
+    for (let i = 0; i < 40; i++) await Promise.resolve();
+  };
+  const deadlines = { response: 1000, preparation: 300, receipt: 200, feedback: 400, write: 200 };
+  afterEach(async () => {
+    handles.splice(0).forEach((h) => h.dispose());
+    await Promise.all(clients.splice(0).map((c) => c.jsPsych.multiplayer.disconnect()));
+    jest.useRealTimers();
+  });
+  async function paired(overrides: Record<string, any> = {}, feedbackTimerDelay = 0) {
+    const hub = new MemoryHub();
+    const m = await hub.join("m"),
+      d = await hub.join("d");
+    clients.push(m, d);
+    jest.useFakeTimers();
+    const me = display(),
+      de = display();
+    const mr: Record<string, any>[] = [],
+      dr: Record<string, any>[] = [];
+    const factory = (context: any) => {
+      const handle = createRoundCoordinator(context.multiplayer, {
+        ...context,
+        deadlines,
+        diagnostics: overrides.coordination_diagnostics === true,
+      });
+      handles.push(handle);
+      return handle;
+    };
+    const start = (
+      client: typeof m,
+      el: HTMLElement,
+      rows: typeof mr,
+      role: string,
+      extra: any = {},
+    ) =>
+      run(
+        {
+          multiplayer: client.jsPsych.multiplayer,
+          finishTrial: (row: any) => rows.push(row),
+          pluginAPI: {
+            setTimeout: (fn: any, ms: number) => setTimeout(fn, ms + feedbackTimerDelay),
+          },
+        },
+        el,
+        {
+          ...base,
+          round_coordinator: factory,
+          role,
+          partner_id: role === "matcher" ? "d" : "m",
+          ...overrides,
+          ...extra,
+        },
+      );
+    start(m, me, mr, "matcher");
+    return {
+      hub,
+      m,
+      d,
+      me,
+      de,
+      mr,
+      dr,
+      startDirector: (extra = {}) => start(d, de, dr, "director", extra),
+      advance: async (ms: number) => {
+        await drain();
+        await jest.advanceTimersByTimeAsync(ms);
+        await drain();
+      },
+      drain,
+    };
+  }
+  test("preparation gates synthetic clicks/chat; native scoring and message gate remain", async () => {
+    const p = await paired({
+      require_message_before_response: true,
+      selection_timeout: 10,
+      round_timeout: 20,
+    });
+    clickCell(p.me, "b");
+    sendChat(p.me, "too early");
+    await p.advance(100);
+    expect(p.mr).toHaveLength(0);
+    expect(p.m.jsPsych.multiplayer.get("m")?.chat).toBeUndefined();
+    p.startDirector();
+    await p.drain();
+    clickCell(p.me, "b");
+    await p.drain();
+    expect(p.mr).toHaveLength(0);
+    sendChat(p.de, "choose b");
+    await p.drain();
+    clickCell(p.me, "b");
+    await p.drain();
+    expect(p.mr).toHaveLength(1);
+    expect(p.dr).toHaveLength(1);
+    expect(p.mr[0]).toMatchObject({
+      correct: true,
+      assignment: "b",
+      multiplayer_outcome: "completed",
+      coordination_failure: null,
+    });
+    expect(p.dr[0].coordination_result).toEqual(p.mr[0].coordination_result);
+    expect(p.mr[0].coordination_local_submission.assignment).toEqual({ 1: "b" });
+    expect(p.m.jsPsych.multiplayer.get("m")?.submission).toBeUndefined();
+  });
+  test.each(["b", "a"])(
+    "scores %s through the normal feedback implementation and holds finishTrial",
+    async (choice) => {
+      const p = await paired({ feedback: true, feedback_duration: 100 });
+      p.startDirector({ feedback_duration: 300 });
+      await p.drain();
+      clickCell(p.me, choice);
+      await p.drain();
+      expect(feedbackText(p.me)).toContain(choice === "b" ? "Correct" : "Incorrect");
+      await p.advance(100);
+      expect(p.mr).toHaveLength(0);
+      expect(p.dr).toHaveLength(0);
+      await p.advance(200);
+      expect(p.mr).toHaveLength(1);
+      expect(p.dr).toHaveLength(1);
+      expect(p.mr[0].correct).toBe(choice === "b");
+      expect(p.dr[0].correct).toBe(choice === "b");
+      expect(p.mr[0].coordination_result).toEqual(p.dr[0].coordination_result);
+    },
+  );
+  test("ordinary timeout enters normal feedback; next index creates a distinct round", async () => {
+    const p = await paired({
+      feedback: true,
+      feedback_duration: 100,
+      selection_timeout: 10,
+      round_timeout: 20,
+    });
+    p.startDirector();
+    await p.drain();
+    await p.advance(1000);
+    expect(feedbackText(p.me)).toContain("time ran out");
+    expect(p.mr).toHaveLength(0);
+    await p.advance(100);
+    expect(p.mr[0].multiplayer_outcome).toBe("timeout");
+    expect(p.mr[0].coordination_result).toEqual(p.dr[0].coordination_result);
+    p.startDirector({ round: 1 });
+    await p.drain();
+    expect(handles.at(-1)!.state.phase).toBe("preparing");
+  });
+  test("missing readiness saves an interrupted row without behavioral timeout", async () => {
+    const p = await paired();
+    await p.advance(300);
+    expect(p.mr[0]).toMatchObject({
+      multiplayer_outcome: "connection_lost",
+      assignment: null,
+      coordination_result: null,
+      coordination_failure: { reason: "readiness_timeout" },
+    });
+    expect(p.me.inert).toBe(false);
+  });
+  test("cancellation retains its cause and runs cleanup immediately", async () => {
+    const p = await paired();
+    p.startDirector();
+    await p.drain();
+    handles[0].abort();
+    await p.drain();
+    expect(p.mr[0]).toMatchObject({
+      multiplayer_outcome: "cancelled",
+      coordination_failure: { reason: "cancelled" },
+    });
+    clickCell(p.me, "b");
+    await p.advance(2000);
+    expect(p.mr).toHaveLength(1);
+  });
+  test("feedback acknowledgment failure preserves the accepted choice and scoring", async () => {
+    const p = await paired({ feedback: true, feedback_duration: 100 });
+    p.startDirector({ feedback_duration: 2000 });
+    await p.drain();
+    clickCell(p.me, "b");
+    await p.drain();
+    await p.advance(600);
+    expect(p.mr[0]).toMatchObject({
+      correct: true,
+      assignment: "b",
+      multiplayer_outcome: "completed",
+      coordination_result: { kind: "selection" },
+      coordination_failure: { reason: "feedback_ack_timeout" },
+    });
+    expect(p.dr[0].coordination_result).toEqual(p.mr[0].coordination_result);
+  });
+  test("real jsPsych parameter pipeline preserves factory and callback functions", async () => {
+    const hub = new MemoryHub();
+    const joined = await hub.join("m");
+    clients.push(joined);
+    const observed = jest.fn();
+    const factory = jest.fn((context: any) => {
+      const handle = createRoundCoordinator(context.multiplayer, { ...context, deadlines });
+      handles.push(handle);
+      return handle;
+    });
+    const timeline = await startTimeline(
+      [
+        {
+          type: MultiplayerReferenceGamePlugin,
+          stimuli: STIMULI4,
+          targets: ["b"],
+          role: "matcher",
+          partner_id: "d",
+          round: 0,
+          round_coordinator: factory,
+          on_round_state: observed,
+          feedback: false,
+        },
+      ],
+      joined.jsPsych,
+    );
+    expect(factory).toHaveBeenCalledTimes(1);
+    expect(observed).toHaveBeenCalled();
+    handles[0].abort();
+    await timeline.expectFinished();
+    expect(timeline.getData().values()[0].multiplayer_outcome).toBe("cancelled");
+  });
+  test("timeout diagnostics capture visibility, timer firing and both local acknowledgment requests", async () => {
+    const p = await paired({
+      feedback: true,
+      feedback_duration: 100,
+      coordination_diagnostics: true,
+    });
+    p.startDirector();
+    await p.drain();
+    const visibility = jest.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    document.dispatchEvent(new Event("visibilitychange"));
+    await p.advance(1100);
+    for (const row of [p.mr[0], p.dr[0]]) {
+      expect(row.coordination_failure).toBeNull();
+      const diag = row.coordination_diagnostics;
+      expect(diag.events.find((e: any) => e.event === "visibilitychange").detail.visibility).toBe(
+        "hidden",
+      );
+      expect(diag.events.find((e: any) => e.event === "feedback_timer_fired").detail).toMatchObject(
+        { elapsed: 100, lateBy: 0 },
+      );
+      expect(diag.events.some((e: any) => e.event === "result_ack_requested")).toBe(true);
+      expect(diag.events.some((e: any) => e.event === "feedback_ack_requested")).toBe(true);
+      expect(diag.feedbackFinished).toBe(true);
+      expect(
+        diag.coordinator.events.some(
+          (e: any) => e.event === "ack_accepted" && e.detail.stage === "feedback",
+        ),
+      ).toBe(true);
+    }
+    visibility.mockRestore();
+  });
+  test("delayed feedback callback leaves a scheduled-but-unfired diagnostic and preserves timeout", async () => {
+    const p = await paired(
+      { feedback: true, feedback_duration: 100, coordination_diagnostics: true },
+      1000,
+    );
+    p.startDirector();
+    await p.drain();
+    await p.advance(1600);
+    const diag = p.mr[0].coordination_diagnostics;
+    expect(p.mr[0].coordination_result.kind).toBe("timeout");
+    expect(p.mr[0].coordination_failure.reason).toBe("feedback_ack_timeout");
+    expect(diag.feedbackScheduledAt).toBe(1000);
+    expect(diag.feedbackFiredAt).toBeNull();
+    expect(diag.feedbackFinished).toBe(false);
+    expect(diag.events.some((e: any) => e.event === "feedback_timer_scheduled")).toBe(true);
+    expect(diag.events.some((e: any) => e.event === "feedback_timer_fired")).toBe(false);
+    expect(diag.events.find((e: any) => e.event === "feedback_timer_cleared").detail.elapsed).toBe(
+      600,
+    );
+    await p.advance(1000);
+    expect(p.mr).toHaveLength(1);
+    expect(p.dr).toHaveLength(1);
+  });
+  test("plugin diagnostics remain bounded and are absent by default", async () => {
+    const p = await paired({ coordination_diagnostics: true });
+    p.startDirector();
+    await p.drain();
+    for (let i = 0; i < 150; i++) document.dispatchEvent(new Event("visibilitychange"));
+    clickCell(p.me, "b");
+    await p.drain();
+    expect(p.mr[0].coordination_diagnostics.events).toHaveLength(128);
+    expect(p.mr[0].coordination_diagnostics.droppedEvents).toBeGreaterThan(0);
+    const q = await paired();
+    q.startDirector();
+    await q.drain();
+    clickCell(q.me, "b");
+    await q.drain();
+    expect(q.mr[0]).not.toHaveProperty("coordination_diagnostics");
+  });
+});
 
 describe("multiplayer-reference-game: single-target (sequential) click task", () => {
   it("trial() is synchronous (returns undefined) so jsPsych waits for finishTrial", async () => {
