@@ -164,6 +164,11 @@ const info = <const>{
       type: ParameterType.BOOL,
       default: true,
     },
+    /** Focus the chat input once when this round can send. Can be set dynamically by role. */
+    chat_autofocus: {
+      type: ParameterType.BOOL,
+      default: false,
+    },
     /** Who may SEND messages: `"director"`, `"matcher"`, or `"both"` (everyone always reads). */
     chat_role: {
       type: ParameterType.STRING,
@@ -1097,6 +1102,8 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
       trial.max_messages > 0 &&
       readOwnMessages().length >= trial.max_messages;
 
+    // Arm only after the initial subscriptions have checked for feedback or a departed partner.
+    let chatAutofocusPending = false;
     const updateChatAvailability = () => {
       if (!chatInput || !chatForm) return;
       const send = chatForm.querySelector(`.${P}-chat-send`) as HTMLButtonElement;
@@ -1105,6 +1112,10 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
       send.disabled = blocked;
       if (!canSend) chatInput.placeholder = "You can only read messages.";
       else if (atMessageCap()) chatInput.placeholder = "Message limit reached.";
+      if (chatAutofocusPending && !blocked && !ended) {
+        chatAutofocusPending = false;
+        chatInput.focus({ preventScroll: true });
+      }
     };
 
     const onChatSubmit = (e: Event) => {
@@ -1582,6 +1593,9 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
         // A bad render frame must not tear down the subscription or the trial.
       }
     }
+
+    chatAutofocusPending = Boolean(trial.chat_autofocus);
+    updateChatAvailability();
 
     if (
       !ended &&

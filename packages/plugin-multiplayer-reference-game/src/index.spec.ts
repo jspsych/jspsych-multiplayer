@@ -81,6 +81,7 @@ const base = {
   director_can_select: false,
   reveal_target_to: "director",
   chat_enabled: true,
+  chat_autofocus: false,
   chat_role: "both",
   max_messages: null,
   max_length: null,
@@ -136,6 +137,86 @@ const sendChat = (el: HTMLElement, text: string) => {
 };
 const run = (jsPsych: any, el: HTMLElement, params: Record<string, unknown>) =>
   new MultiplayerReferenceGamePlugin(jsPsych).trial(el, params as never);
+
+describe("multiplayer-reference-game: chat autofocus", () => {
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  it("focuses the enabled input each round, without reclaiming focus on messages", async () => {
+    for (let round = 0; round < 3; round++) {
+      const api = await makeApi("director");
+      api.pushAs("matcher", {});
+      const { jsPsych } = makeJsPsych(api);
+      const el = display();
+      document.body.append(el);
+      run(jsPsych, el, { ...base, role: "director", round, chat_autofocus: true });
+      const input = el.querySelector(`.${P}-chat-input`) as HTMLInputElement;
+      expect(input.disabled).toBe(false);
+      expect(document.activeElement).toBe(input);
+      const other = document.createElement("button");
+      document.body.append(other);
+      other.focus();
+      sendChat(el, "description");
+      api.pushAs("matcher", { chat: [] });
+      expect(document.activeElement).toBe(other);
+      await api.multiplayer.disconnect();
+      el.remove();
+      other.remove();
+    }
+  });
+
+  it.each([{ chat_autofocus: false }, { chat_enabled: false }, { chat_role: "matcher" }])(
+    "does not focus absent, read-only or opted-out chat: %j",
+    async (params) => {
+      const api = await makeApi("director");
+      const { jsPsych } = makeJsPsych(api);
+      const el = display();
+      const other = document.createElement("button");
+      document.body.append(other, el);
+      other.focus();
+      run(jsPsych, el, { ...base, role: "director", chat_autofocus: true, ...params });
+      expect(document.activeElement).toBe(other);
+      await api.multiplayer.disconnect();
+    },
+  );
+
+  it("does not focus when the initial subscription enters feedback", async () => {
+    const api = await makeApi("director");
+    api.pushAs("matcher", { submission: { assignment: { 1: "b" } } });
+    const { jsPsych } = makeJsPsych(api);
+    const el = display();
+    const other = document.createElement("button");
+    document.body.append(other, el);
+    other.focus();
+    run(jsPsych, el, {
+      ...base,
+      role: "director",
+      chat_autofocus: true,
+      feedback: true,
+      feedback_duration: null,
+    });
+    expect(document.activeElement).toBe(other);
+    expect((el.querySelector(`.${P}-chat-input`) as HTMLInputElement).disabled).toBe(true);
+    await api.multiplayer.disconnect();
+  });
+
+  it("does not focus when the participant has already reached the message cap", async () => {
+    const api = await makeApi("director");
+    await api.multiplayer.update({
+      chat: [{ id: "director:0", senderId: "director", seq: 0, text: "already sent", ts: 1 }],
+    });
+    const { jsPsych } = makeJsPsych(api);
+    const el = display();
+    const other = document.createElement("button");
+    document.body.append(other, el);
+    other.focus();
+    run(jsPsych, el, { ...base, role: "director", chat_autofocus: true, max_messages: 1 });
+    expect(document.activeElement).toBe(other);
+    expect((el.querySelector(`.${P}-chat-input`) as HTMLInputElement).disabled).toBe(true);
+    await api.multiplayer.disconnect();
+  });
+});
 
 describe("multiplayer-reference-game: single-target (sequential) click task", () => {
   it("trial() is synchronous (returns undefined) so jsPsych waits for finishTrial", async () => {
@@ -600,12 +681,14 @@ describe("multiplayer-reference-game: chat, timeout, and the real pipeline", () 
           targets: ["c"],
           role: "matcher",
           round: 0,
+          chat_autofocus: () => true,
           feedback: false,
         },
       ],
       jsPsych,
     );
 
+    expect(document.activeElement).toBe(displayElement.querySelector(`.${P}-chat-input`));
     clickCell(displayElement, "c");
     await expectFinished();
 

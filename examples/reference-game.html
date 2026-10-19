@@ -173,6 +173,7 @@
       stimuli: SHAPES,
       columns: 6,
       role: () => jsPsychMultiplayerRole.getMyRole(),
+        chat_autofocus: () => jsPsychMultiplayerRole.getMyRole() === "director",
       partner_id: () => partnerId,
       round: jsPsych.timelineVariable("round"),
       targets: jsPsych.timelineVariable("targets"),

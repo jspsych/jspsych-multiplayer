@@ -55,6 +55,19 @@ Only `stimuli`, `targets`, and `role` are required; everything else has a sensib
 
 ### Communication (chat)
 
+Set `chat_autofocus: true` to focus the enabled chat input once per round, after initial
+state checks, without scrolling the page. It defaults to `false` and has no effect when
+chat is absent, read-only, capped, or already showing feedback. Sending or receiving
+messages does not reclaim focus. To enable it only for the Director, use a dynamic
+parameter alongside your role assignment:
+
+```js
+chat_autofocus: () => jsPsychMultiplayerRole.getMyRole() === "director",
+```
+
+This belongs in the plugin rather than a study's `on_start`: the plugin owns the input's
+enabled state and feedback lifecycle. It does not capture typing outside the input.
+
 | Parameter                         | Type    | Default             | Description                                                                                                                                                                                                                                                        |
 | --------------------------------- | ------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `chat_enabled`                    | boolean | `true`              | Show the integrated free-text chat panel.                                                                                                                                                                                                                          |
