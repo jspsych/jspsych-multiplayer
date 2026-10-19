@@ -150,7 +150,14 @@ describe("multiplayer-reference-game: chat autofocus", () => {
       const { jsPsych } = makeJsPsych(api);
       const el = display();
       document.body.append(el);
-      run(jsPsych, el, { ...base, role: "director", round, chat_autofocus: true });
+      const focus = jest.spyOn(HTMLInputElement.prototype, "focus");
+      try {
+        run(jsPsych, el, { ...base, role: "director", round, chat_autofocus: true });
+        expect(focus).toHaveBeenCalledTimes(1);
+        expect(focus).toHaveBeenCalledWith({ preventScroll: true });
+      } finally {
+        focus.mockRestore();
+      }
       const input = el.querySelector(`.${P}-chat-input`) as HTMLInputElement;
       expect(input.disabled).toBe(false);
       expect(document.activeElement).toBe(input);
@@ -199,6 +206,69 @@ describe("multiplayer-reference-game: chat autofocus", () => {
     expect(document.activeElement).toBe(other);
     expect((el.querySelector(`.${P}-chat-input`) as HTMLInputElement).disabled).toBe(true);
     await api.multiplayer.disconnect();
+  });
+
+  it("does not focus when the initial subscription ends for a departed partner", async () => {
+    const api = await makeApi("director", { dropoutTimeout: 1 });
+    const matcher = await api.hub.join("matcher");
+    await matcher.jsPsych.multiplayer.disconnect();
+    await sleep(5);
+    expect(api.multiplayer.presence().matcher).toBe("left");
+    const { jsPsych, finished } = makeJsPsych(api);
+    const el = display();
+    const other = document.createElement("button");
+    document.body.append(other, el);
+    other.focus();
+    run(jsPsych, el, {
+      ...base,
+      role: "director",
+      partner_id: "matcher",
+      chat_autofocus: true,
+    });
+    expect(finished).toHaveLength(1);
+    expect(finished[0].multiplayer_outcome).toBe("participant_left");
+    expect(document.activeElement).toBe(other);
+    await api.multiplayer.disconnect();
+  });
+
+  it("reevaluates dynamic autofocus on successive real timeline trials", async () => {
+    const hub = new MemoryHub();
+    const { jsPsych } = await hub.join("me");
+    const enabled = [true, false, true];
+    const autofocus = jest.fn(() => jsPsych.evaluateTimelineVariable("autofocus"));
+    const { displayElement, expectFinished, getData } = await startTimeline(
+      [
+        {
+          timeline: [
+            {
+              type: MultiplayerReferenceGamePlugin,
+              stimuli: STIMULI4,
+              targets: ["c"],
+              role: "matcher",
+              round: jsPsych.timelineVariable("round"),
+              chat_autofocus: autofocus,
+              feedback: false,
+            },
+          ],
+          timeline_variables: enabled.map((autofocus, round) => ({ autofocus, round })),
+        },
+      ],
+      jsPsych,
+    );
+    for (const autofocusEnabled of enabled) {
+      const input = displayElement.querySelector(`.${P}-chat-input`);
+      expect(input).not.toBeNull();
+      expect(document.activeElement === input).toBe(autofocusEnabled);
+      clickCell(displayElement, "c");
+      await flush();
+    }
+    await expectFinished();
+    expect(autofocus).toHaveBeenCalledTimes(enabled.length);
+    expect(
+      getData()
+        .values()
+        .map((data: any) => data.round),
+    ).toEqual([0, 1, 2]);
   });
 
   it("does not focus when the participant has already reached the message cap", async () => {

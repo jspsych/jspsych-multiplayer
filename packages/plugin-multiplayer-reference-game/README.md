@@ -55,11 +55,14 @@ Only `stimuli`, `targets`, and `role` are required; everything else has a sensib
 
 ### Communication (chat)
 
-Set `chat_autofocus: true` to focus the enabled chat input once per round, after initial
-state checks, without scrolling the page. It defaults to `false` and has no effect when
-chat is absent, read-only, capped, or already showing feedback. Sending or receiving
-messages does not reclaim focus. To enable it only for the Director, use a dynamic
-parameter alongside your role assignment:
+Set `chat_autofocus: true` to focus the enabled chat input once during round initialization,
+after initial state checks, without scrolling the page. It defaults to `false` and has no
+effect when chat is absent, read-only, capped, or the round has already ended or entered feedback.
+Sending or receiving
+messages does not reclaim focus, and the option does not wait for sending to become available
+later in the round. jsPsych evaluates dynamic values separately for each trial, so the choice
+can follow changing roles, rounds, or experimental conditions. To enable it only for the
+Director, use a dynamic parameter alongside your role assignment:
 
 ```js
 chat_autofocus: () => jsPsychMultiplayerRole.getMyRole() === "director",
@@ -72,6 +75,7 @@ enabled state and feedback lifecycle. It does not capture typing outside the inp
 | --------------------------------- | ------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `chat_enabled`                    | boolean | `true`              | Show the integrated free-text chat panel.                                                                                                                                                                                                                          |
 | `chat_role`                       | string  | `"both"`            | Who may SEND: `"director"`, `"matcher"`, or `"both"` (everyone always reads).                                                                                                                                                                                      |
+| `chat_autofocus` | boolean | `false` | Focus the enabled chat input once during round initialization, after initial state checks, without scrolling. Later updates do not reclaim focus. Supports dynamic values per trial. |
 | `max_messages`                    | integer | `null`              | Cap on messages this participant may send this round. `null` = no cap.                                                                                                                                                                                             |
 | `max_length`                      | integer | `null`              | Max characters per message. `null` = no limit.                                                                                                                                                                                                                     |
 | `require_message_before_response` | boolean | `false`             | Matcher can't commit a selection until the director has sent a message this round (a referring expression per trial, à la Hawkins et al. 2020 Exp. 2). Gated clicks are ignored (logged as `gated_click`) with a hint; inert (warns) when `chat_enabled` is false. |

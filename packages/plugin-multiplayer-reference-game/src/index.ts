@@ -164,7 +164,7 @@ const info = <const>{
       type: ParameterType.BOOL,
       default: true,
     },
-    /** Focus the chat input once when this round can send. Can be set dynamically by role. */
+    /** Focus chat once during round initialization if sending is available. Dynamic per trial. */
     chat_autofocus: {
       type: ParameterType.BOOL,
       default: false,
