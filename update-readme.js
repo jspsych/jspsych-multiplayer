@@ -44,10 +44,15 @@ Plugin | Contributor | Description
 Adapter | Contributor | Description
 ----------- | ----------- | -----------\n`;
 
+  const extensionListHead = `\n### Extensions\n
+Extension | Contributor | Description
+----------- | ----------- | -----------\n`;
+
   const guidelinesHead = "\n## Guidelines for contributions";
 
   let pluginList = "";
   let adapterList = "";
+  let extensionList = "";
 
   packageInfos.map((info) => {
     const packageName = info.name.replace(/^\@jspsych-multiplayer\//g, "");
@@ -68,11 +73,19 @@ Adapter | Contributor | Description
           info.description ? info.description : `_Description for ${pluginName}._`
         } \n`,
       );
+    } else if (info.name.match(/^\@jspsych-multiplayer\/extension-/g)) {
+      const extensionName = packageName.replace(/^extension-/g, "");
+      extensionList = extensionList.concat(
+        `[${extensionName}](${packageReadmeLink}) | ${authorRender} | ${
+          info.description ? info.description : `_Description for ${extensionName}._`
+        } \n`,
+      );
     }
   });
 
   const pluginTable = [pluginListHead, pluginList, adapterListHead];
-  const adapterTable = [adapterListHead, adapterList, guidelinesHead];
+  const adapterTable = [adapterListHead, adapterList, extensionListHead];
+  const extensionTable = [extensionListHead, extensionList, guidelinesHead];
 
   function generatePluginTable() {
     return src(`${__dirname}/README.md`)
@@ -82,10 +95,18 @@ Adapter | Contributor | Description
 
   function generateAdapterTable() {
     return src(`${__dirname}/README.md`)
-      .pipe(replace(/### Adapters[\s\S]*?## Guidelines for contributions/g, adapterTable.join("")))
+      .pipe(replace(/### Adapters[\s\S]*?### Extensions/g, adapterTable.join("")))
       .pipe(dest(__dirname));
   }
-  series(generatePluginTable, generateAdapterTable)();
+
+  function generateExtensionTable() {
+    return src(`${__dirname}/README.md`)
+      .pipe(
+        replace(/### Extensions[\s\S]*?## Guidelines for contributions/g, extensionTable.join("")),
+      )
+      .pipe(dest(__dirname));
+  }
+  series(generatePluginTable, generateAdapterTable, generateExtensionTable)();
 }
 
 export default updateRootReadme;
