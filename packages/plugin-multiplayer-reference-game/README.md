@@ -55,10 +55,46 @@ Only `stimuli`, `targets`, and `role` are required; everything else has a sensib
 
 ### Communication (chat)
 
+Set `chat_autofocus: true` to focus the enabled chat input once during round initialization,
+after initial state checks, without scrolling the page. It defaults to `false` and has no
+effect when chat is absent, read-only, capped, or the round has already ended or entered feedback.
+Sending or receiving
+messages does not reclaim focus, and the option does not wait for sending to become available
+later in the round. jsPsych evaluates dynamic values separately for each trial, so the choice
+can follow changing roles, rounds, or experimental conditions. To enable it only for the
+Director, use a dynamic parameter alongside your role assignment:
+
+```js
+chat_autofocus: () => jsPsychMultiplayerRole.getMyRole() === "director",
+```
+
+This belongs in the plugin rather than a study's `on_start`: the plugin owns the input's
+enabled state and feedback lifecycle. On its own it does not capture typing outside the input.
+
+Set `chat_type_to_focus: true` to cover the rest of the round: when the participant types a
+printable character while focus is anywhere other than a text field (after clicking a tangram,
+say, or after a dialog closed), the plugin moves focus to the chat input and the browser delivers
+that same keystroke to it, so nothing is lost or doubled. It defaults to `false`, accepts a dynamic
+value like `chat_autofocus`, and only redirects while the input is accepting messages. It ignores
+Enter, Tab, Escape, arrows and other named keys, Ctrl/Alt/Meta shortcuts (AltGr characters, and
+Option characters on a Mac, still count), IME composition, script-dispatched events, keys another
+handler has already prevented, and keys typed while an `input`, `textarea`, `select`,
+`contenteditable` element or dialog has focus or while a modal dialog is open. Space only
+redirects when focus is on the page itself or on a Director's tangram that does nothing when
+pressed (`director_can_select` off); anywhere else it still presses the focused control. The
+listener is removed when the trial ends or the experiment is aborted.
+
+```js
+chat_autofocus: () => jsPsychMultiplayerRole.getMyRole() === "director",
+chat_type_to_focus: () => jsPsychMultiplayerRole.getMyRole() === "director",
+```
+
 | Parameter                         | Type    | Default             | Description                                                                                                                                                                                                                                                        |
 | --------------------------------- | ------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `chat_enabled`                    | boolean | `true`              | Show the integrated free-text chat panel.                                                                                                                                                                                                                          |
 | `chat_role`                       | string  | `"both"`            | Who may SEND: `"director"`, `"matcher"`, or `"both"` (everyone always reads).                                                                                                                                                                                      |
+| `chat_autofocus` | boolean | `false` | Focus the enabled chat input once during round initialization, after initial state checks, without scrolling. Later updates do not reclaim focus. Supports dynamic values per trial. |
+| `chat_type_to_focus` | boolean | `false` | When a printable key is typed while no text field or dialog has focus, move focus to the enabled chat input so the keystroke lands there. Shortcuts, named keys, and Space on a control are left alone. Supports dynamic values per trial. |
 | `max_messages`                    | integer | `null`              | Cap on messages this participant may send this round. `null` = no cap.                                                                                                                                                                                             |
 | `max_length`                      | integer | `null`              | Max characters per message. `null` = no limit.                                                                                                                                                                                                                     |
 | `require_message_before_response` | boolean | `false`             | Matcher can't commit a selection until the director has sent a message this round (a referring expression per trial, à la Hawkins et al. 2020 Exp. 2). Gated clicks are ignored (logged as `gated_click`) with a hint; inert (warns) when `chat_enabled` is false. |
