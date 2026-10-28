@@ -1,7 +1,7 @@
 import { startTimeline } from "@jspsych/test-utils";
 import { ConnectOptions, initJsPsych } from "jspsych";
 
-import { MemoryHub, scopeData } from "../../../test-utils/memory-backend";
+import { deferred, MemoryHub, scopeData } from "../../../test-utils/memory-backend";
 import MultiplayerReferenceGamePlugin from ".";
 
 // ---------------------------------------------------------------------------------------------------
@@ -506,7 +506,9 @@ describe("multiplayer-reference-game: chat type-to-focus", () => {
   it("reevaluates a Director-only dynamic value on successive real timeline trials", async () => {
     const hub = new MemoryHub();
     const { jsPsych } = await hub.join("me");
+    hub.addPeer("partner");
     const roles = ["director", "matcher", "director"];
+    const loaded = roles.map(() => deferred());
     const { displayElement, expectFinished } = await startTimeline(
       [
         {
@@ -518,7 +520,9 @@ describe("multiplayer-reference-game: chat type-to-focus", () => {
               role: jsPsych.timelineVariable("role"),
               round: jsPsych.timelineVariable("round"),
               chat_type_to_focus: () => jsPsych.evaluateTimelineVariable("role") === "director",
-              round_timeout: 20,
+              partner_id: "partner",
+              multiplayer_scope: () => `focus-${jsPsych.evaluateTimelineVariable("round")}`,
+              on_load: () => loaded[jsPsych.evaluateTimelineVariable("round")].resolve(),
               feedback: false,
             },
           ],
@@ -527,12 +531,21 @@ describe("multiplayer-reference-game: chat type-to-focus", () => {
       ],
       jsPsych,
     );
-    for (const role of roles) {
+    for (const [round, role] of roles.entries()) {
+      await loaded[round].promise;
       const input = displayElement.querySelector(`.${P}-chat-input`) as HTMLInputElement;
       (document.activeElement as HTMLElement | null)?.blur?.();
       press("z");
       expect(document.activeElement === input).toBe(role === "director");
-      await sleep(40);
+      // Complete through the plugin so its listener is removed before the next round loads.
+      if (role === "matcher") clickCell(displayElement, "c");
+      else {
+        hub.seed(
+          "partner",
+          { submission: { assignment: { 1: "c" } } },
+          { scope: `focus-${round}` },
+        );
+      }
     }
     await expectFinished();
   });
