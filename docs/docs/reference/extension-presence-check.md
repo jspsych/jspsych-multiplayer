@@ -47,17 +47,27 @@ timeline.push({
 | --- | --- | --- |
 | Dismissed | A counted input from `dismiss_inputs`, or the button, closes it. | Back to 0; the idle clock restarts. |
 | Missed | Nobody responds within `respond_within`. | Up by 1; the idle clock restarts, so the next warning can come `prompt_after` later. |
-| Expired | A miss brings the count to `max_consecutive_misses`. | `on_expire(summary)` is called once and no more warnings show this trial. |
+| Expired | A miss brings the count to `max_consecutive_misses`. | `on_expire(summary)` is called once and no more warnings show this trial. The count starts over at 0. |
 | Interrupted | `paused()` returns `true`, or the trial ends, while it is open. | Unchanged. |
 
 Activity between warnings also resets the count. With the defaults (30 s, 30 s, 2 misses) the check
 expires after about 120 s of no activity.
 
 The count carries over to the next trial by default, so a miss in one round and a miss in the next
-reach a limit of 2 even with a paused feedback screen between them. Expiry does not reset it
-(counted activity afterwards does, as at any other time); call
-`jsPsych.extensions["presence-check"].reset()` if the experiment carries on and the participant
-should start over.
+reach a limit of 2 even with a paused feedback screen between them. Expiry resets it: the expiry
+has been reported once, so if the experiment carries on, a later trial needs the full number of
+misses again (about 120 s with the defaults, not 60 s). The expiring trial's
+`presence_consecutive_misses` and the `on_expire` summary keep the count at expiry.
+`jsPsych.extensions["presence-check"].reset()` clears the count at any other time.
+
+## Hidden tabs
+
+The warning is drawn on the page, so a participant in another tab (for example while waiting for a
+partner) never sees it, and the clock keeps running while they are away. The data records this for
+each warning (`hidden_at_show`, `hidden_ms`) and for the trial (`presence_hidden_ms`), from
+`visibilitychange` events. Coming back to the tab is not activity and does not dismiss a warning;
+the participant still has to move or type. Set `title_alert` to change the tab title while a
+warning is open, which is the one thing a participant in another tab can see.
 
 ## Parameters
 
@@ -79,6 +89,7 @@ key.
 | `body` | HTML string | `"Please click the button to let us know you're still here."` | Warning text. |
 | `button_label` | HTML string | `"I'm still here"` | Button label. |
 | `countdown_text` | HTML string | `"This message closes in {seconds}s."` | `{seconds}` is replaced with the seconds left. |
+| `title_alert` | `string \| null` | `null` | Tab title while a warning is open; the previous title comes back when it closes, unless the page changed it meanwhile. `null` leaves the title alone. |
 
 Inputs map to events as follows: `mouse_move` is `mousemove`; `pointer_down` is a mouse or pen
 `pointerdown`; `keyboard` is `keydown` and `input`; `wheel` is `wheel`; `touch` is `touchstart`,
@@ -108,6 +119,7 @@ participant was typing in, and a click lands on what was clicked.
 | `presence_missed` | `number` | Warnings not answered in time, including the one that expired. |
 | `presence_interrupted` | `number` | Warnings closed by `paused()` or the trial ending. |
 | `presence_backdrop_clicks` | `number` | Clicks on the blocking backdrop (keyboard-only and button-only modes). |
-| `presence_consecutive_misses` | `number` | The miss count when the trial ended. |
+| `presence_consecutive_misses` | `number` | The miss count when the trial ended, or at expiry. |
 | `presence_expired` | `boolean` | Whether the check expired this trial. |
-| `presence_events` | `array` | Per warning: `shown_at` (ms from trial start), `outcome` (`responded`, `missed`, `interrupted`, `expired`), `rt` (ms, or `null`), `dismissed_by` (`button`, an input name, or `null`), `backdrop_clicks`. |
+| `presence_hidden_ms` | `number` | ms the page was hidden during the trial, until it ended or the check expired. |
+| `presence_events` | `array` | Per warning: `shown_at` (ms from trial start), `outcome` (`responded`, `missed`, `interrupted`, `expired`), `rt` (ms, or `null`), `dismissed_by` (`button`, an input name, or `null`), `backdrop_clicks`, `hidden_at_show` (hidden when it appeared), `hidden_ms` (ms hidden while it was open). |

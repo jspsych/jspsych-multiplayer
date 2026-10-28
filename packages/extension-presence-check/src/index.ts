@@ -29,6 +29,7 @@ export interface PresenceCheckParams {
   body: string;
   button_label: string;
   countdown_text: string;
+  title_alert: string | null;
 }
 
 const ALL_INPUTS: PresenceInputs = {
@@ -52,6 +53,7 @@ const DEFAULTS: PresenceCheckParams = {
   body: "Please click the button to let us know you're still here.",
   button_label: "I'm still here",
   countdown_text: "This message closes in {seconds}s.",
+  title_alert: null,
 };
 
 // User input only. There is no plain `scroll` listener: a `scroll` event also fires when the page
@@ -155,6 +157,9 @@ function mergeParams(...layers: Array<Partial<PresenceCheckParams> | undefined>)
       "presence-check: `max_consecutive_misses` must be a non-negative integer or null.",
     );
   }
+  if (!(merged.title_alert === null || typeof merged.title_alert === "string")) {
+    throw new Error("presence-check: `title_alert` must be a string or null.");
+  }
   return merged;
 }
 
@@ -176,9 +181,11 @@ const info = <const>{
     presence_consecutive_misses: { type: ParameterType.INT },
     /** Whether the check expired during this trial. */
     presence_expired: { type: ParameterType.BOOL },
+    /** ms the document was hidden (another tab, minimized) during the trial, until any expiry. */
+    presence_hidden_ms: { type: ParameterType.FLOAT },
     /**
      * One entry per warning: `shown_at` (ms from on_load), `outcome`, `rt`, `dismissed_by`,
-     * `backdrop_clicks`.
+     * `backdrop_clicks`, `hidden_at_show`, `hidden_ms`.
      */
     presence_events: { type: ParameterType.COMPLEX, array: true },
   },
@@ -275,6 +282,16 @@ class PresenceCheckExtension implements JsPsychExtension {
     let shownAt: number | null = null;
     let previousFocus: Element | null = null;
     let shownSeconds: number | null = null;
+    let previousTitle: string | null = null;
+
+    // A participant in another tab never sees the overlay, but can see the tab title. It is put
+    // back only if the page has not changed the title in the meantime.
+    const restoreTitle = () => {
+      if (previousTitle != null && document.title === options.title_alert) {
+        document.title = previousTitle;
+      }
+      previousTitle = null;
+    };
 
     // Rewritten only when the whole seconds change, so the DOM is not replaced on every tick.
     const updateRemaining = () => {
@@ -324,12 +341,17 @@ class PresenceCheckExtension implements JsPsychExtension {
         previousFocus = document.activeElement;
         button!.focus({ preventScroll: true });
       }
+      if (options.title_alert != null) {
+        previousTitle = document.title;
+        document.title = options.title_alert;
+      }
     };
 
     const hide = (outcome: PresenceOutcome) => {
       overlay?.remove();
       overlay = button = remaining = null;
       shownAt = null;
+      restoreTitle();
       // Pausing (e.g. feedback) and the trial ending must not refocus controls from before.
       const target = previousFocus as HTMLElement | null;
       previousFocus = null;
@@ -350,6 +372,7 @@ class PresenceCheckExtension implements JsPsychExtension {
       respondWithin: options.respond_within,
       maxConsecutiveMisses: options.max_consecutive_misses,
       consecutiveMisses: options.count_across_trials ? this.misses : 0,
+      hidden: document.visibilityState === "hidden",
       now: () => performance.now(),
       onShow: show,
       onHide: hide,
@@ -397,6 +420,8 @@ class PresenceCheckExtension implements JsPsychExtension {
         button?.focus({ preventScroll: true });
       }
     };
+    // Recorded only. Coming back to the tab is not activity: nobody has shown they are there yet.
+    const onVisibility = () => monitor.visibility(document.visibilityState === "hidden");
     const onFocusIn = (event: FocusEvent) => {
       if (modal && monitor.isOpen && !overlay?.contains(event.target as Node)) {
         button?.focus({ preventScroll: true });
@@ -409,6 +434,7 @@ class PresenceCheckExtension implements JsPsychExtension {
     document.addEventListener("keydown", onKey, true);
     document.addEventListener("keyup", onKey, true);
     document.addEventListener("focusin", onFocusIn, true);
+    document.addEventListener("visibilitychange", onVisibility);
     const interval = setInterval(() => {
       monitor.tick(paused());
       updateRemaining();
@@ -421,7 +447,9 @@ class PresenceCheckExtension implements JsPsychExtension {
       document.removeEventListener("keydown", onKey, true);
       document.removeEventListener("keyup", onKey, true);
       document.removeEventListener("focusin", onFocusIn, true);
+      document.removeEventListener("visibilitychange", onVisibility);
       overlay?.remove();
+      restoreTitle();
     };
     this.state = { monitor, interval, teardown, carries: options.count_across_trials };
   }

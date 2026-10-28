@@ -29,11 +29,17 @@
     // clicking a button underneath also dismisses it, and the click still reaches the button.
     // The second trial is button-only (the original modal): only "I'm still here" dismisses it.
     // Expiry ends the experiment through `on_expire`, as a study's removal would.
+    //
+    // Hidden tabs: switch to another tab and the clock keeps running, so you can expire without
+    // seeing a warning. Each warning's data records `hidden_at_show` and `hidden_ms`, and each trial
+    // `presence_hidden_ms`. Open the page with `?title_alert` to also change the tab title while a
+    // warning is open (the `title_alert` parameter, off by default).
     // ===============================================================================================
 
     const PROMPT_MS = 5000;
     const RESPOND_MS = 5000;
     const MAX_MISSES = 2;
+    const TITLE_ALERT_ON = new URLSearchParams(location.search).has("title_alert");
 
     const jsPsych = initJsPsych({
       extensions: [
@@ -43,6 +49,7 @@
             prompt_after: PROMPT_MS,
             respond_within: RESPOND_MS,
             max_consecutive_misses: MAX_MISSES,
+            title_alert: TITLE_ALERT_ON ? "(!) Are you still with us?" : null,
             on_expire: (summary) =>
               jsPsych.abortExperiment(
                 `<p>Removed for inactivity after ${summary.presence_missed} missed warnings.</p>`,
@@ -59,6 +66,11 @@
         preamble: `<p><b>Any input dismisses the warning.</b> Type a few words, then stop for
           ${PROMPT_MS / 1000}s. When the warning appears, keep typing (or move the mouse, or click
           "Count a click"). Leave it alone ${MAX_MISSES} times in a row to see expiry.</p>
+          <p><b>Hidden tab:</b> switching to another tab does not stop the clock, and coming back
+          does not dismiss the warning. The data at the end shows <code>hidden_at_show</code> and
+          <code>hidden_ms</code> for each warning. Tab-title alert is
+          <b>${TITLE_ALERT_ON ? "on" : "off"}</b>
+          (<a href="?${TITLE_ALERT_ON ? "" : "title_alert"}">turn ${TITLE_ALERT_ON ? "off" : "on"}</a>).</p>
           <p><button type="button" id="count-click">Count a click</button>
           Clicks: <span id="click-count">0</span></p>`,
         questions: [{ prompt: "Describe your morning:", rows: 3, columns: 50, name: "text" }],

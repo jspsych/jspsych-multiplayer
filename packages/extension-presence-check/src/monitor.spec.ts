@@ -7,6 +7,7 @@ function setup(
     maxConsecutiveMisses?: number | null;
     consecutiveMisses?: number;
     start?: number;
+    hidden?: boolean;
   } = {},
 ) {
   let t = options.start ?? 0;
@@ -19,6 +20,7 @@ function setup(
     maxConsecutiveMisses:
       options.maxConsecutiveMisses === undefined ? 2 : options.maxConsecutiveMisses,
     consecutiveMisses: options.consecutiveMisses,
+    hidden: options.hidden,
     now: () => t,
     onShow: () => shown.push(t),
     onHide: (outcome) => hidden.push([t, outcome]),
@@ -88,6 +90,8 @@ describe("presence monitor", () => {
       rt: 5000,
       dismissed_by: "keyboard",
       backdrop_clicks: 0,
+      hidden_at_show: false,
+      hidden_ms: 0,
     });
   });
 
@@ -149,14 +153,113 @@ describe("presence monitor", () => {
     expect(monitor.consecutiveMisses).toBe(10);
   });
 
-  it("stops prompting after expiry, while later activity still clears the count", () => {
-    const { run, shown, monitor } = setup();
+  it("stops prompting after expiry and starts the count over, keeping it at expiry in the data", () => {
+    const { run, shown, monitor, expiries } = setup();
     run(0, 120000);
+    expect(expiries[0][1].presence_consecutive_misses).toBe(2);
     run(120250, 400000);
     expect(shown).toEqual([30000, 90000]);
-    expect(monitor.consecutiveMisses).toBe(2);
-    monitor.activity();
     expect(monitor.consecutiveMisses).toBe(0);
+    monitor.stop();
+    expect(monitor.summary().presence_consecutive_misses).toBe(2);
+  });
+
+  it("a trial after an expiry needs the full number of misses to expire again", () => {
+    const first = setup();
+    first.run(0, 120000);
+    first.monitor.stop();
+    const second = setup({ consecutiveMisses: first.monitor.consecutiveMisses });
+    second.run(0, 200000);
+    expect(second.hidden).toEqual([
+      [60000, "missed"],
+      [120000, "expired"],
+    ]);
+  });
+
+  it("clears the count before on_expire, so a callback that ends the trial carries 0", () => {
+    let seen: number | null = null;
+    let t = 0;
+    const monitor = createPresenceMonitor({
+      promptAfter: 1000,
+      respondWithin: 1000,
+      maxConsecutiveMisses: 1,
+      now: () => t,
+      onShow: () => {},
+      onHide: () => {},
+      onExpire: () => {
+        seen = monitor.consecutiveMisses;
+      },
+    });
+    t = 1000;
+    monitor.tick();
+    t = 2000;
+    monitor.tick();
+    expect(seen).toBe(0);
+  });
+
+  describe("hidden document", () => {
+    it("records hidden_at_show and the hidden ms of each warning", () => {
+      const { monitor, at, set } = setup({ maxConsecutiveMisses: 0 });
+      set(10000);
+      monitor.visibility(true); // hidden before the first warning
+      at(30000); // shown while hidden
+      set(40000);
+      monitor.visibility(false);
+      set(45000);
+      monitor.visibility(true);
+      at(60000); // missed: hidden 30000-40000 and 45000-60000
+      at(90000); // next warning, still hidden
+      set(100000);
+      monitor.visibility(false);
+      monitor.respond("mouse_move");
+      at(130000); // visible the whole time
+      set(131000);
+      monitor.stop();
+      const summary = monitor.summary();
+      expect(
+        summary.presence_events.map((e) => [e.outcome, e.hidden_at_show, e.hidden_ms]),
+      ).toEqual([
+        ["missed", true, 25000],
+        ["responded", true, 10000],
+        ["interrupted", false, 0],
+      ]);
+      expect(summary.presence_hidden_ms).toBe(85000);
+    });
+
+    it("starts hidden when the document is hidden at creation, and stops counting at stop()", () => {
+      const { monitor, set } = setup({ hidden: true });
+      set(5000);
+      monitor.stop();
+      set(9000);
+      monitor.visibility(false);
+      expect(monitor.summary().presence_hidden_ms).toBe(5000);
+    });
+
+    it("visibility changes are neither activity nor a response", () => {
+      const { monitor, at, set, shown } = setup({ maxConsecutiveMisses: 0 });
+      at(20000);
+      monitor.visibility(true);
+      set(25000);
+      monitor.visibility(false);
+      at(30000);
+      expect(shown).toEqual([30000]); // the idle clock was not restarted
+      monitor.visibility(true);
+      monitor.visibility(false);
+      expect(monitor.isOpen).toBe(true);
+      at(60000);
+      expect(monitor.summary().presence_events[0].outcome).toBe("missed");
+      expect(monitor.consecutiveMisses).toBe(1);
+    });
+
+    it("stops counting at expiry", () => {
+      const { monitor, run, set, expiries } = setup({ hidden: true });
+      run(0, 120000);
+      expect(expiries[0][1].presence_hidden_ms).toBe(120000);
+      expect(expiries[0][1].presence_events.map((e) => e.hidden_ms)).toEqual([30000, 30000]);
+      set(500000);
+      monitor.stop();
+      expect(monitor.summary().presence_hidden_ms).toBe(120000);
+    });
   });
 
   it("stopping with a warning open records it as interrupted without changing the count", () => {

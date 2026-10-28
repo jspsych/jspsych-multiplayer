@@ -153,7 +153,15 @@ describe("presence-check extension (DOM)", () => {
     expect(document.activeElement).toBe(field);
     const data = ext.on_finish();
     expect(data.presence_events).toEqual([
-      { shown_at: 30000, outcome: "responded", rt: 0, dismissed_by: "button", backdrop_clicks: 2 },
+      {
+        shown_at: 30000,
+        outcome: "responded",
+        rt: 0,
+        dismissed_by: "button",
+        backdrop_clicks: 2,
+        hidden_at_show: false,
+        hidden_ms: 0,
+      },
     ]);
     expect(data.presence_backdrop_clicks).toBe(2);
   });
@@ -442,6 +450,137 @@ describe("presence-check extension (DOM)", () => {
     expect(warn.mock.calls[0][0]).toMatch(/on_finish/);
     ext.on_finish();
     warn.mockRestore();
+  });
+
+  describe("hidden tab", () => {
+    let visibility: DocumentVisibilityState = "visible";
+    const setVisibility = (state: DocumentVisibilityState) => {
+      visibility = state;
+      document.dispatchEvent(new Event("visibilitychange"));
+    };
+    beforeEach(() => {
+      visibility = "visible";
+      Object.defineProperty(document, "visibilityState", {
+        configurable: true,
+        get: () => visibility,
+      });
+    });
+    afterEach(() => {
+      delete (document as any).visibilityState; // back to jsdom's own getter
+    });
+
+    it("records hidden_at_show, hidden_ms and presence_hidden_ms", async () => {
+      const ext = await start({ max_consecutive_misses: 0 });
+      jest.advanceTimersByTime(10000);
+      setVisibility("hidden");
+      jest.advanceTimersByTime(20000); // shown while hidden
+      expect(overlay()).not.toBeNull();
+      jest.advanceTimersByTime(12000);
+      setVisibility("visible"); // 12 s of the warning hidden
+      expect(overlay()).not.toBeNull(); // returning to the tab does not dismiss
+      fire("keyboard");
+      jest.advanceTimersByTime(30000); // a second warning, while visible
+      setVisibility("hidden");
+      jest.advanceTimersByTime(4000);
+      const data = ext.on_finish();
+      expect(data.presence_events!.map((e) => [e.outcome, e.hidden_at_show, e.hidden_ms])).toEqual([
+        ["responded", true, 12000],
+        ["interrupted", false, 4000],
+      ]);
+      expect(data.presence_hidden_ms).toBe(36000);
+    });
+
+    it("counts a trial that starts hidden, and a visibility change is not activity", async () => {
+      visibility = "hidden";
+      const ext = await start();
+      jest.advanceTimersByTime(20000);
+      setVisibility("visible");
+      jest.advanceTimersByTime(10000);
+      expect(overlay()).not.toBeNull(); // the idle clock was not restarted at 20 s
+      const data = ext.on_finish();
+      expect(data.presence_hidden_ms).toBe(20000);
+      expect(data.presence_events![0].hidden_at_show).toBe(false);
+    });
+  });
+
+  describe("title_alert", () => {
+    beforeEach(() => {
+      document.title = "Study";
+    });
+
+    it("leaves the title alone by default", async () => {
+      const ext = await start();
+      jest.advanceTimersByTime(30000);
+      expect(overlay()).not.toBeNull();
+      expect(document.title).toBe("Study");
+      ext.on_finish();
+      expect(document.title).toBe("Study");
+    });
+
+    const closes: Array<[string, (ext: PresenceCheckExtension, pause: () => void) => unknown]> = [
+      ["dismissed", () => fire("keyboard")],
+      ["dismissed by the button", () => button()!.click()],
+      ["missed", () => jest.advanceTimersByTime(30000)],
+      ["interrupted by a pause", (_ext, pause) => (pause(), jest.advanceTimersByTime(250))],
+      ["closed by on_finish", (ext) => ext.on_finish()],
+      ["torn down after a missed on_finish", (ext) => start({}, ext)],
+    ];
+    it.each(closes)("is shown, and restored when the warning is %s", async (_name, close) => {
+      const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+      let paused = false;
+      const ext = await start({ title_alert: "(!) Still there?", paused: () => paused });
+      jest.advanceTimersByTime(30000);
+      expect(document.title).toBe("(!) Still there?");
+      await close(ext, () => (paused = true));
+      expect(overlay()).toBeNull();
+      expect(document.title).toBe("Study");
+      ext.on_finish();
+      warn.mockRestore();
+    });
+
+    it("is restored when the warning expires", async () => {
+      const titles: string[] = [];
+      const ext = await start({
+        title_alert: "(!) Still there?",
+        on_expire: () => titles.push(document.title),
+      });
+      jest.advanceTimersByTime(90000);
+      expect(document.title).toBe("(!) Still there?");
+      jest.advanceTimersByTime(30000);
+      expect(titles).toEqual(["Study"]);
+      expect(document.title).toBe("Study");
+      ext.on_finish();
+    });
+
+    it("keeps a title the page set while the warning was open", async () => {
+      const ext = await start({ title_alert: "(!) Still there?" });
+      jest.advanceTimersByTime(30000);
+      document.title = "New message";
+      fire("keyboard");
+      expect(document.title).toBe("New message");
+      ext.on_finish();
+    });
+
+    it("must be a string or null", () => {
+      expect(() =>
+        new PresenceCheckExtension({} as never).initialize({ title_alert: 1 as never }),
+      ).toThrow(/title_alert/);
+    });
+  });
+
+  it("starts the carried count over after an expiry", async () => {
+    const on_expire = jest.fn();
+    const ext = await start({ on_expire });
+    jest.advanceTimersByTime(120000);
+    expect(on_expire).toHaveBeenCalledTimes(1);
+    expect(ext.on_finish().presence_consecutive_misses).toBe(2);
+    expect(ext.consecutiveMisses).toBe(0);
+    await start({ on_expire }, ext);
+    jest.advanceTimersByTime(60000); // a single miss no longer expires
+    expect(on_expire).toHaveBeenCalledTimes(1);
+    jest.advanceTimersByTime(60000);
+    expect(on_expire).toHaveBeenCalledTimes(2);
+    ext.on_finish();
   });
 
   it("uses initialize params as experiment-wide defaults and validates them", async () => {

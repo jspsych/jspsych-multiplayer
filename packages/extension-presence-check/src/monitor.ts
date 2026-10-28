@@ -19,6 +19,10 @@ export interface PresenceEvent {
   dismissed_by: DismissedBy | null;
   /** Clicks on the blocking backdrop while this warning was open (button-only mode). */
   backdrop_clicks: number;
+  /** Whether the document was hidden (another tab, minimized) when the warning appeared. */
+  hidden_at_show: boolean;
+  /** ms the document was hidden while this warning was open. */
+  hidden_ms: number;
 }
 
 export interface PresenceSummary {
@@ -30,6 +34,8 @@ export interface PresenceSummary {
   presence_backdrop_clicks: number;
   presence_consecutive_misses: number;
   presence_expired: boolean;
+  /** ms the document was hidden during the trial, until it ended or the check expired. */
+  presence_hidden_ms: number;
   presence_events: PresenceEvent[];
 }
 
@@ -42,10 +48,15 @@ export interface PresenceMonitorOptions {
   maxConsecutiveMisses: number | null;
   /** Consecutive misses carried over from earlier trials. */
   consecutiveMisses?: number;
+  /** Whether the document is hidden when the monitor is created. */
+  hidden?: boolean;
   now: () => number;
   onShow: () => void;
   onHide: (outcome: PresenceOutcome) => void;
-  /** Called once, after the expiring warning has closed. */
+  /**
+   * Called once, after the expiring warning has closed. The consecutive-miss count is already back
+   * to 0; `summary` keeps the count at expiry.
+   */
   onExpire?: (summary: PresenceSummary) => void;
 }
 
@@ -55,6 +66,8 @@ export interface PresenceMonitor {
   /** Dismisses an open warning. */
   respond(by: DismissedBy): void;
   backdropClick(): void;
+  /** Records the document becoming hidden or visible. Data only: neither activity nor a response. */
+  visibility(hidden: boolean): void;
   /** Advances the clock. While `paused`, no warning shows and an open one is interrupted. */
   tick(paused?: boolean): void;
   /** Ends monitoring for the trial; an open warning is interrupted. */
@@ -77,10 +90,26 @@ export function createPresenceMonitor(options: PresenceMonitorOptions): Presence
   const startedAt = now();
   let lastActivity = startedAt;
   let misses = options.consecutiveMisses ?? 0;
+  let missesAtExpiry = 0;
   let expired = false;
   let stopped = false;
-  let open: { shownAt: number; backdropClicks: number } | null = null;
+  let open: {
+    shownAt: number;
+    backdropClicks: number;
+    hiddenAtShow: boolean;
+    /** `hiddenTotal()` when the warning appeared. */
+    hiddenBefore: number;
+  } | null = null;
   const events: PresenceEvent[] = [];
+
+  // Hidden time is counted until the trial stops or the check expires, then frozen.
+  let hiddenSince: number | null = options.hidden ? startedAt : null;
+  let hiddenMs = 0;
+  const hiddenTotal = () => hiddenMs + (hiddenSince == null ? 0 : now() - hiddenSince);
+  const freezeHidden = () => {
+    hiddenMs = hiddenTotal();
+    hiddenSince = null;
+  };
 
   function close(outcome: PresenceOutcome, dismissedBy: DismissedBy | null = null) {
     const t = now();
@@ -90,6 +119,8 @@ export function createPresenceMonitor(options: PresenceMonitorOptions): Presence
       rt: outcome === "responded" ? t - open!.shownAt : null,
       dismissed_by: dismissedBy,
       backdrop_clicks: open!.backdropClicks,
+      hidden_at_show: open!.hiddenAtShow,
+      hidden_ms: hiddenTotal() - open!.hiddenBefore,
     });
     open = null;
     lastActivity = t;
@@ -110,6 +141,11 @@ export function createPresenceMonitor(options: PresenceMonitorOptions): Presence
     backdropClick() {
       if (open) open.backdropClicks += 1;
     },
+    visibility(hidden) {
+      if (expired || stopped) return;
+      if (hidden && hiddenSince == null) hiddenSince = now();
+      else if (!hidden && hiddenSince != null) freezeHidden();
+    },
     tick(paused = false) {
       if (expired || stopped) return;
       const t = now();
@@ -123,18 +159,30 @@ export function createPresenceMonitor(options: PresenceMonitorOptions): Presence
         if (limit != null && misses >= limit) {
           expired = true;
           close("expired");
-          onExpire?.(monitor.summary());
+          freezeHidden();
+          // The expiry is reported once, so the count starts over for any later trial. It is
+          // cleared before the callback, which may end the trial and read it synchronously.
+          missesAtExpiry = misses;
+          const summary = monitor.summary();
+          misses = 0;
+          onExpire?.(summary);
         } else {
           close("missed");
         }
       } else if (t - lastActivity >= promptAfter) {
-        open = { shownAt: t, backdropClicks: 0 };
+        open = {
+          shownAt: t,
+          backdropClicks: 0,
+          hiddenAtShow: hiddenSince != null,
+          hiddenBefore: hiddenTotal(),
+        };
         onShow();
       }
     },
     stop() {
       if (stopped) return;
       if (open) close("interrupted");
+      freezeHidden();
       stopped = true;
     },
     resetMisses() {
@@ -159,8 +207,9 @@ export function createPresenceMonitor(options: PresenceMonitorOptions): Presence
         presence_interrupted: count("interrupted"),
         presence_backdrop_clicks:
           events.reduce((n, e) => n + e.backdrop_clicks, 0) + (open?.backdropClicks ?? 0),
-        presence_consecutive_misses: misses,
+        presence_consecutive_misses: expired ? missesAtExpiry : misses,
         presence_expired: expired,
+        presence_hidden_ms: hiddenTotal(),
         presence_events: events.map((e) => ({ ...e })),
       };
     },

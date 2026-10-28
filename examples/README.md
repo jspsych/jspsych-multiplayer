@@ -696,4 +696,6 @@ needs no multiplayer session or second tab: build the repo and open the page fro
 The first trial uses the defaults, where typing, mouse movement, clicks, wheel and touch all dismiss
 the warning and the input still reaches the page (keep typing in the text box, or click "Count a
 click"). The second trial is button-only, the original focus-trapping modal. Two misses in a row,
-counted across both trials, end the experiment through `on_expire`.
+counted across both trials, end the experiment through `on_expire`. Switching to another tab does not stop
+the clock; each warning's data records `hidden_at_show` and `hidden_ms`. Add `?title_alert` to the
+URL (or use the link on the first trial) to turn on the tab-title alert.
