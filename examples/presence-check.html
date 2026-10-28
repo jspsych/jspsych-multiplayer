@@ -1,0 +1,110 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Presence check — jsPsych multiplayer</title>
+    <!-- The extension needs no multiplayer session, so any jsPsych 8 works. This page uses the same
+         pinned #3694 preview build as the other examples (see examples/README.md "Running it"). -->
+    <script src="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@1e77da41966f22832ee0d133d137d81b3e50639a/packages/jspsych/dist/index.browser.min.js"></script>
+    <script src="https://unpkg.com/@jspsych/plugin-html-button-response"></script>
+    <script src="https://unpkg.com/@jspsych/plugin-survey-text"></script>
+    <!-- Resolves once this repo is built; once published, load it from a CDN instead, e.g.
+           <script src="https://unpkg.com/@jspsych-multiplayer/extension-presence-check"></script> -->
+    <script src="../packages/extension-presence-check/dist/index.browser.min.js"></script>
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/gh/jspsych/jsPsych@1e77da41966f22832ee0d133d137d81b3e50639a/packages/jspsych/css/jspsych.css"
+    />
+  </head>
+
+  <body></body>
+  <script>
+    // ===============================================================================================
+    // Presence check — a demo for @jspsych-multiplayer/extension-presence-check.
+    //
+    // The timings are shortened so you can watch every outcome in under a minute: a warning after
+    // PROMPT_MS with no activity, closed as missed after RESPOND_MS, and expiry after MAX_MISSES
+    // misses in a row. The first trial has a text box: type in it, stop, and when the warning
+    // appears, keep typing — the keystroke dismisses it AND lands in the box. Moving the mouse or
+    // clicking a button underneath also dismisses it, and the click still reaches the button.
+    // The second trial is button-only (the original modal): only "I'm still here" dismisses it.
+    // Expiry ends the experiment through `on_expire`, as a study's removal would.
+    //
+    // Hidden tabs: switch to another tab and the clock keeps running, so you can expire without
+    // seeing a warning. Each warning's data records `hidden_at_show` and `hidden_ms`, and each trial
+    // `presence_hidden_ms`. Open the page with `?title_alert` to also change the tab title while a
+    // warning is open (the `title_alert` parameter, off by default).
+    // ===============================================================================================
+
+    const PROMPT_MS = 5000;
+    const RESPOND_MS = 5000;
+    const MAX_MISSES = 2;
+    const TITLE_ALERT_ON = new URLSearchParams(location.search).has("title_alert");
+
+    const jsPsych = initJsPsych({
+      extensions: [
+        {
+          type: jsPsychExtensionPresenceCheck,
+          params: {
+            prompt_after: PROMPT_MS,
+            respond_within: RESPOND_MS,
+            max_consecutive_misses: MAX_MISSES,
+            title_alert: TITLE_ALERT_ON ? "(!) Are you still with us?" : null,
+            on_expire: (summary) =>
+              jsPsych.abortExperiment(
+                `<p>Removed for inactivity after ${summary.presence_missed} missed warnings.</p>`,
+              ),
+          },
+        },
+      ],
+      on_finish: () => jsPsych.data.displayData(),
+    });
+
+    const timeline = [
+      {
+        type: jsPsychSurveyText,
+        preamble: `<p><b>Any input dismisses the warning.</b> Type a few words, then stop for
+          ${PROMPT_MS / 1000}s. When the warning appears, keep typing (or move the mouse, or click
+          "Count a click"). Leave it alone ${MAX_MISSES} times in a row to see expiry.</p>
+          <p><b>Hidden tab:</b> switching to another tab does not stop the clock, and coming back
+          does not dismiss the warning. The data at the end shows <code>hidden_at_show</code> and
+          <code>hidden_ms</code> for each warning. Tab-title alert is
+          <b>${TITLE_ALERT_ON ? "on" : "off"}</b>
+          (<a href="?${TITLE_ALERT_ON ? "" : "title_alert"}">turn ${TITLE_ALERT_ON ? "off" : "on"}</a>).</p>
+          <p><button type="button" id="count-click">Count a click</button>
+          Clicks: <span id="click-count">0</span></p>`,
+        questions: [{ prompt: "Describe your morning:", rows: 3, columns: 50, name: "text" }],
+        on_load: () => {
+          let clicks = 0;
+          document.getElementById("count-click").addEventListener("click", () => {
+            document.getElementById("click-count").textContent = String(++clicks);
+          });
+        },
+        extensions: [{ type: jsPsychExtensionPresenceCheck }],
+      },
+      {
+        type: jsPsychHtmlButtonResponse,
+        stimulus: `<p><b>Button only.</b> Stop for ${PROMPT_MS / 1000}s. Moving the mouse or typing
+          does not dismiss this warning, clicks outside it are blocked (and counted), and Tab stays
+          on its button. The miss count carried over from the first trial.</p>`,
+        choices: ["Finish"],
+        extensions: [
+          {
+            type: jsPsychExtensionPresenceCheck,
+            params: {
+              dismiss_inputs: {
+                mouse_move: false,
+                pointer_down: false,
+                keyboard: false,
+                wheel: false,
+                touch: false,
+              },
+            },
+          },
+        ],
+      },
+    ];
+
+    jsPsych.run(timeline);
+  </script>
+</html>

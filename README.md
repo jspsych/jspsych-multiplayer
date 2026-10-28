@@ -42,7 +42,8 @@ be added to the main `jsPsych` repository, with the contributor's permission.
 ## List of available plugins and adapters
 
 The contributed packages can be found in the `/packages` directory. Plugins are published under the
-`@jspsych-multiplayer/plugin-*` names and adapters under the `@jspsych-multiplayer/adapter-*` names.
+`@jspsych-multiplayer/plugin-*` names, adapters under the `@jspsych-multiplayer/adapter-*` names,
+and jsPsych extensions under the `@jspsych-multiplayer/extension-*` names.
 
 ### Plugins
 
@@ -62,6 +63,13 @@ Adapter | Contributor | Description
 ----------- | ----------- | -----------
 [multiplayer-jatos](https://github.com/jspsych/jspsych-multiplayer/blob/main/packages/adapter-multiplayer-jatos/README.md) | [Hannah Tsukamoto](https://github.com/htsukamoto5) | JATOS group study adapter for the jsPsych multiplayer API 
 [multiplayer-local](https://github.com/jspsych/jspsych-multiplayer/blob/main/packages/adapter-multiplayer-local/README.md) | [Hannah Tsukamoto](https://github.com/htsukamoto5) | Zero-infrastructure localStorage adapter for the jsPsych multiplayer API (local dev/demo only) 
+
+
+### Extensions
+
+Extension | Contributor | Description
+----------- | ----------- | -----------
+[presence-check](https://github.com/jspsych/jspsych-multiplayer/blob/main/packages/extension-presence-check/README.md) | [Hannah Tsukamoto](https://github.com/htsukamoto5) | jsPsych extension: an "Are you still with us?" inactivity check with configurable dismissal and expiry 
 
 ## Guidelines for contributions
 ### Contribution requirements

@@ -57,6 +57,12 @@ const sidebars: SidebarsConfig = {
         "reference/plugin-multiplayer-reference-game",
       ],
     },
+    {
+      type: "category",
+      label: "Extensions",
+      collapsed: false,
+      items: ["reference/extension-presence-check"],
+    },
   ],
 };
 

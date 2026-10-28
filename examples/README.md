@@ -688,3 +688,14 @@ and the matcher reproduces that order by assigning each shape to a slot, then su
 out of N. Shows that "sequential" and "unconstrained" are one plugin with `targets` turned from
 length-1 to length-N. Run it the same two-tab way.
 
+## `presence-check.html`
+
+The **"Are you still with us?" inactivity check** (`@jspsych-multiplayer/extension-presence-check`)
+on two ordinary trials, with timings shortened to 5 s so every outcome shows within a minute. It
+needs no multiplayer session or second tab: build the repo and open the page from a local server.
+The first trial uses the defaults, where typing, mouse movement, clicks, wheel and touch all dismiss
+the warning and the input still reaches the page (keep typing in the text box, or click "Count a
+click"). The second trial is button-only, the original focus-trapping modal. Two misses in a row,
+counted across both trials, end the experiment through `on_expire`. Switching to another tab does not stop
+the clock; each warning's data records `hidden_at_show` and `hidden_ms`. Add `?title_alert` to the
+URL (or use the link on the first trial) to turn on the tab-title alert.
