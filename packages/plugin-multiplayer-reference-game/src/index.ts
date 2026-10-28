@@ -169,6 +169,11 @@ const info = <const>{
       type: ParameterType.BOOL,
       default: false,
     },
+    /** Move focus to chat when the participant types while no text field has focus. Dynamic per trial. */
+    chat_type_to_focus: {
+      type: ParameterType.BOOL,
+      default: false,
+    },
     /** Who may SEND messages: `"director"`, `"matcher"`, or `"both"` (everyone always reads). */
     chat_role: {
       type: ParameterType.STRING,
@@ -1118,6 +1123,33 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
       }
     };
 
+    // Focusing during keydown, without preventDefault, lets the browser deliver the same keystroke
+    // to the chat input, so the first character is neither lost nor doubled.
+    const onTypeToFocus = (e: KeyboardEvent) => {
+      // end() removes this; an aborted experiment clears the display without calling end().
+      if (ended || !chatInput?.isConnected) {
+        document.removeEventListener("keydown", onTypeToFocus, true);
+        return;
+      }
+      if (chatInput.disabled) return;
+      if (!e.isTrusted || e.isComposing || e.defaultPrevented) return;
+      // Space activates a focused button (and only scrolls otherwise), so it never redirects.
+      if (e.key.length !== 1 || e.key === " ") return;
+      // AltGr reports Ctrl+Alt on Windows but types a character.
+      const altGraph = e.getModifierState?.("AltGraph") ?? false;
+      if (e.metaKey || (!altGraph && (e.ctrlKey || e.altKey))) return;
+      const active = document.activeElement as HTMLElement | null;
+      if (
+        active?.closest(
+          'input, textarea, select, [contenteditable]:not([contenteditable="false"]), ' +
+            'dialog[open], [role="dialog"], [role="alertdialog"], [aria-modal="true"]',
+        )
+      ) {
+        return;
+      }
+      chatInput.focus({ preventScroll: true });
+    };
+
     const onChatSubmit = (e: Event) => {
       e.preventDefault();
       if (ended || !canSend || !chatInput || atMessageCap()) return;
@@ -1461,6 +1493,7 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
       submitButton.removeEventListener("click", onSubmitClick);
       chatForm?.removeEventListener("submit", onChatSubmit);
       chatInput?.removeEventListener("input", onTypingInput);
+      document.removeEventListener("keydown", onTypeToFocus, true);
 
       // Reads keep returning the last state after the session closes
       const transcript = mergeMessages(chatGroup(), chatKey);
@@ -1596,6 +1629,9 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
 
     chatAutofocusPending = Boolean(trial.chat_autofocus);
     updateChatAvailability();
+    if (trial.chat_type_to_focus && chatInput && !ended) {
+      document.addEventListener("keydown", onTypeToFocus, true);
+    }
 
     if (
       !ended &&

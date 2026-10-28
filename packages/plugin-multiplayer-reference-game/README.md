@@ -69,13 +69,29 @@ chat_autofocus: () => jsPsychMultiplayerRole.getMyRole() === "director",
 ```
 
 This belongs in the plugin rather than a study's `on_start`: the plugin owns the input's
-enabled state and feedback lifecycle. It does not capture typing outside the input.
+enabled state and feedback lifecycle. On its own it does not capture typing outside the input.
+
+Set `chat_type_to_focus: true` to cover the rest of the round: when the participant types a
+printable character while focus is anywhere other than a text field (after clicking a tangram,
+say, or after a dialog closed), the plugin moves focus to the chat input and the browser delivers
+that same keystroke to it, so nothing is lost or doubled. It defaults to `false`, accepts a dynamic
+value like `chat_autofocus`, and only redirects while the input is accepting messages. It ignores
+Enter, Tab, Escape, Space, arrows and other named keys, Ctrl/Alt/Meta shortcuts (AltGr characters
+still count), IME composition, script-dispatched events, and keys typed while an `input`,
+`textarea`, `select`, `contenteditable` element or open dialog has focus. The listener is removed
+when the trial ends.
+
+```js
+chat_autofocus: () => jsPsychMultiplayerRole.getMyRole() === "director",
+chat_type_to_focus: () => jsPsychMultiplayerRole.getMyRole() === "director",
+```
 
 | Parameter                         | Type    | Default             | Description                                                                                                                                                                                                                                                        |
 | --------------------------------- | ------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `chat_enabled`                    | boolean | `true`              | Show the integrated free-text chat panel.                                                                                                                                                                                                                          |
 | `chat_role`                       | string  | `"both"`            | Who may SEND: `"director"`, `"matcher"`, or `"both"` (everyone always reads).                                                                                                                                                                                      |
 | `chat_autofocus` | boolean | `false` | Focus the enabled chat input once during round initialization, after initial state checks, without scrolling. Later updates do not reclaim focus. Supports dynamic values per trial. |
+| `chat_type_to_focus` | boolean | `false` | When a printable key is typed while no text field or dialog has focus, move focus to the enabled chat input so the keystroke lands there. Shortcuts, named keys and Space are left alone. Supports dynamic values per trial. |
 | `max_messages`                    | integer | `null`              | Cap on messages this participant may send this round. `null` = no cap.                                                                                                                                                                                             |
 | `max_length`                      | integer | `null`              | Max characters per message. `null` = no limit.                                                                                                                                                                                                                     |
 | `require_message_before_response` | boolean | `false`             | Matcher can't commit a selection until the director has sent a message this round (a referring expression per trial, à la Hawkins et al. 2020 Exp. 2). Gated clicks are ignored (logged as `gated_click`) with a hint; inert (warns) when `chat_enabled` is false. |

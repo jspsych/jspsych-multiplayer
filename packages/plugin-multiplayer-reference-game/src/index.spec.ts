@@ -82,6 +82,7 @@ const base = {
   reveal_target_to: "director",
   chat_enabled: true,
   chat_autofocus: false,
+  chat_type_to_focus: false,
   chat_role: "both",
   max_messages: null,
   max_length: null,
@@ -285,6 +286,255 @@ describe("multiplayer-reference-game: chat autofocus", () => {
     expect(document.activeElement).toBe(other);
     expect((el.querySelector(`.${P}-chat-input`) as HTMLInputElement).disabled).toBe(true);
     await api.multiplayer.disconnect();
+  });
+});
+
+/**
+ * A keydown the browser would mark trusted. jsdom's dispatchEvent() resets the flag on its internal
+ * event object, so pin it there.
+ */
+const trustedKeydown = (init: KeyboardEventInit) => {
+  const event = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init });
+  const impl = Object.getOwnPropertySymbols(event).find((s) => s.description === "impl")!;
+  Object.defineProperty((event as any)[impl], "isTrusted", { get: () => true, set() {} });
+  return event;
+};
+/**
+ * Press a key at the focused element. jsdom has no default actions, so this stands in for the
+ * browser's: unless keydown was prevented, the character goes to whatever has focus afterwards.
+ */
+const press = (key: string, init: KeyboardEventInit = {}, trusted = true) => {
+  const event = trusted
+    ? trustedKeydown({ key, ...init })
+    : new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key, ...init });
+  (document.activeElement ?? document.body).dispatchEvent(event);
+  const focused = document.activeElement;
+  const modified = init.ctrlKey || init.metaKey || init.altKey;
+  if (!event.defaultPrevented && key.length === 1 && !modified) {
+    if (focused instanceof HTMLInputElement || focused instanceof HTMLTextAreaElement) {
+      focused.value += key;
+    }
+  }
+  return event;
+};
+
+describe("multiplayer-reference-game: chat type-to-focus", () => {
+  afterEach(() => {
+    (document.activeElement as HTMLElement | null)?.blur?.();
+    document.body.innerHTML = "";
+  });
+
+  const start = async (params: Record<string, unknown> = {}, role = "director") => {
+    const api = await makeApi(role);
+    const { jsPsych, finished } = makeJsPsych(api);
+    const el = display();
+    document.body.append(el);
+    run(jsPsych, el, { ...base, role, chat_type_to_focus: true, ...params });
+    const input = el.querySelector(`.${P}-chat-input`) as HTMLInputElement | null;
+    return { api, el, input, finished };
+  };
+
+  it("does nothing by default", async () => {
+    const { api, input } = await start({ chat_type_to_focus: false });
+    const event = press("h");
+    expect(document.activeElement).toBe(document.body);
+    expect(input!.value).toBe("");
+    expect(event.defaultPrevented).toBe(false);
+    await api.multiplayer.disconnect();
+  });
+
+  it("moves a printable key from the page body into chat without preventing it", async () => {
+    const { api, input } = await start();
+    expect(document.activeElement).toBe(document.body);
+    const focus = jest.spyOn(HTMLInputElement.prototype, "focus");
+    try {
+      const event = press("H", { shiftKey: true });
+      expect(event.defaultPrevented).toBe(false);
+      expect(focus).toHaveBeenCalledTimes(1);
+      expect(focus).toHaveBeenCalledWith({ preventScroll: true });
+    } finally {
+      focus.mockRestore();
+    }
+    expect(document.activeElement).toBe(input);
+    press("i");
+    expect(input!.value).toBe("Hi");
+    await api.multiplayer.disconnect();
+  });
+
+  it("moves a printable key from a focused tangram or button into chat", async () => {
+    const { api, el, input } = await start({}, "matcher");
+    cell(el, "a").focus();
+    press("x");
+    expect(document.activeElement).toBe(input);
+    submitBtn(el).disabled = false;
+    submitBtn(el).focus();
+    expect(document.activeElement).toBe(submitBtn(el));
+    press("y");
+    expect(document.activeElement).toBe(input);
+    expect(input!.value).toBe("xy");
+    await api.multiplayer.disconnect();
+  });
+
+  it("redirects AltGr characters, which report Ctrl+Alt on Windows", async () => {
+    const { api, input } = await start();
+    press("@", { ctrlKey: true, altKey: true, modifierAltGraph: true } as KeyboardEventInit);
+    expect(document.activeElement).toBe(input);
+    await api.multiplayer.disconnect();
+  });
+
+  it.each<[string, KeyboardEventInit]>([
+    ["c", { ctrlKey: true }],
+    ["v", { metaKey: true }],
+    ["f", { altKey: true }],
+    ["Enter", {}],
+    ["Tab", {}],
+    ["Escape", {}],
+    ["ArrowDown", {}],
+    ["Shift", { shiftKey: true }],
+    [" ", {}],
+    ["a", { isComposing: true }],
+  ])("does not redirect %j %j", async (key, init) => {
+    const { api, el, input } = await start({}, "matcher");
+    submitBtn(el).disabled = false;
+    submitBtn(el).focus();
+    const event = press(key, init);
+    expect(document.activeElement).toBe(submitBtn(el));
+    expect(input!.value).toBe("");
+    expect(event.defaultPrevented).toBe(false);
+    await api.multiplayer.disconnect();
+  });
+
+  it.each([
+    ["input", () => document.createElement("input")],
+    ["textarea", () => document.createElement("textarea")],
+    ["select", () => document.createElement("select")],
+    [
+      "contenteditable",
+      () => {
+        const div = document.createElement("div");
+        div.setAttribute("contenteditable", "true");
+        div.tabIndex = 0;
+        return div;
+      },
+    ],
+    [
+      "dialog control",
+      () => {
+        const dialog = document.createElement("div");
+        dialog.setAttribute("role", "alertdialog");
+        dialog.append(document.createElement("button"));
+        return dialog;
+      },
+    ],
+  ])("leaves keys alone while a %s is focused", async (_label, make) => {
+    const { api, input } = await start();
+    const other = make();
+    document.body.append(other);
+    const target = (other.querySelector("button") as HTMLElement | null) ?? other;
+    target.focus();
+    expect(document.activeElement).toBe(target);
+    press("q");
+    expect(document.activeElement).toBe(target);
+    expect(input!.value).toBe("");
+    await api.multiplayer.disconnect();
+  });
+
+  it("ignores untrusted (script-dispatched) keys", async () => {
+    const { api, input } = await start();
+    press("h", {}, false);
+    expect(document.activeElement).toBe(document.body);
+    expect(input!.value).toBe("");
+    await api.multiplayer.disconnect();
+  });
+
+  it.each([{ chat_enabled: false }, { chat_role: "matcher" }])(
+    "does not redirect to absent or read-only chat: %j",
+    async (params) => {
+      const { api } = await start(params);
+      press("h");
+      expect(document.activeElement).toBe(document.body);
+      await api.multiplayer.disconnect();
+    },
+  );
+
+  it("does not redirect once this participant is at the message cap", async () => {
+    const { api, el, input } = await start({ max_messages: 1 });
+    press("h");
+    expect(document.activeElement).toBe(input);
+    sendChat(el, "the one message");
+    expect(input!.disabled).toBe(true);
+    const other = document.createElement("button");
+    document.body.append(other);
+    other.focus();
+    press("x");
+    expect(document.activeElement).toBe(other);
+    await api.multiplayer.disconnect();
+  });
+
+  it("does not redirect while chat is disabled for feedback", async () => {
+    const { api, input } = await start({ feedback: true, feedback_duration: null });
+    api.pushAs("matcher", { submission: { assignment: { 1: "b" } } });
+    expect(input!.disabled).toBe(true);
+    press("h");
+    expect(document.activeElement).toBe(document.body);
+    await api.multiplayer.disconnect();
+  });
+
+  it("removes the listener when each round ends, so rounds do not stack listeners", async () => {
+    const focus = jest.spyOn(HTMLInputElement.prototype, "focus");
+    try {
+      for (let round = 0; round < 3; round++) {
+        const { api, input, finished } = await start({ round });
+        focus.mockClear();
+        press("a");
+        expect(focus).toHaveBeenCalledTimes(1);
+        expect(document.activeElement).toBe(input);
+        input!.blur();
+        api.pushAs("matcher", { submission: { assignment: { 1: "b" } } });
+        expect(finished).toHaveLength(1);
+        focus.mockClear();
+        press("b");
+        expect(focus).not.toHaveBeenCalled();
+        await api.multiplayer.disconnect();
+        document.body.innerHTML = "";
+      }
+    } finally {
+      focus.mockRestore();
+    }
+  });
+
+  it("reevaluates a Director-only dynamic value on successive real timeline trials", async () => {
+    const hub = new MemoryHub();
+    const { jsPsych } = await hub.join("me");
+    const roles = ["director", "matcher", "director"];
+    const { displayElement, expectFinished } = await startTimeline(
+      [
+        {
+          timeline: [
+            {
+              type: MultiplayerReferenceGamePlugin,
+              stimuli: STIMULI4,
+              targets: ["c"],
+              role: jsPsych.timelineVariable("role"),
+              round: jsPsych.timelineVariable("round"),
+              chat_type_to_focus: () => jsPsych.evaluateTimelineVariable("role") === "director",
+              round_timeout: 20,
+              feedback: false,
+            },
+          ],
+          timeline_variables: roles.map((role, round) => ({ role, round })),
+        },
+      ],
+      jsPsych,
+    );
+    for (const role of roles) {
+      const input = displayElement.querySelector(`.${P}-chat-input`) as HTMLInputElement;
+      (document.activeElement as HTMLElement | null)?.blur?.();
+      press("z");
+      expect(document.activeElement === input).toBe(role === "director");
+      await sleep(40);
+    }
+    await expectFinished();
   });
 });
 

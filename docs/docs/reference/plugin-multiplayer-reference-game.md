@@ -91,12 +91,20 @@ chat_autofocus: () => jsPsychMultiplayerRole.getMyRole() === "director",
 ```
 
 Autofocus only runs during initialization; it does not wait for sending to become available
-later in the round or capture typing outside the input.
+later in the round or capture typing outside the input. `chat_type_to_focus` covers the rest of
+the round: typing a printable character while focus is outside any text field (after clicking a
+target, or after a dialog closed) moves focus to the chat input, and the browser delivers that
+same keystroke to it. It takes the same kind of dynamic value:
+
+```js
+chat_type_to_focus: () => jsPsychMultiplayerRole.getMyRole() === "director",
+```
 
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `chat_enabled` | `boolean` | `true` | Show the chat panel. |
 | `chat_autofocus` | `boolean` | `false` | Focus the enabled chat input once during round initialization, after initial state checks, without scrolling. No effect if chat is absent, read-only, capped, or the round has already ended or entered feedback. Later updates do not reclaim focus. |
+| `chat_type_to_focus` | `boolean` | `false` | While sending is available, a printable key typed when no `input`, `textarea`, `select`, `contenteditable` element or open dialog has focus moves focus to the chat input, and the keystroke lands there. Ignores Enter, Tab, Escape, Space, arrows, Ctrl/Alt/Meta shortcuts (AltGr characters still count), IME composition and script-dispatched events. Removed when the trial ends. |
 | `chat_role` | `string` | `"both"` | Who can send messages: `"director"`, `"matcher"`, or `"both"`. Both can always read. |
 | `max_messages` | `number \| null` | `null` | The most messages this participant can send in the round. `null` means no limit. |
 | `max_length` | `number \| null` | `null` | The longest a message can be, in characters. Longer messages are cut when sent. `null` means no limit. |
