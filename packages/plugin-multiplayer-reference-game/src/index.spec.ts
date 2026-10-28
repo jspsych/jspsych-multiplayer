@@ -291,12 +291,14 @@ describe("multiplayer-reference-game: chat autofocus", () => {
 
 /**
  * A keydown the browser would mark trusted. jsdom's dispatchEvent() resets the flag on its internal
- * event object, so pin it there.
+ * event object, so pin it there. That object is a jsdom internal, so fail loudly if it moves rather
+ * than let every redirect test fail for an unclear reason.
  */
 const trustedKeydown = (init: KeyboardEventInit) => {
   const event = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init });
-  const impl = Object.getOwnPropertySymbols(event).find((s) => s.description === "impl")!;
-  Object.defineProperty((event as any)[impl], "isTrusted", { get: () => true, set() {} });
+  const impl = Object.getOwnPropertySymbols(event).find((s) => s.description === "impl");
+  if (impl) Object.defineProperty((event as any)[impl], "isTrusted", { get: () => true, set() {} });
+  if (!event.isTrusted) throw new Error("trustedKeydown: jsdom's internal event object changed");
   return event;
 };
 /**
@@ -310,7 +312,7 @@ const press = (key: string, init: KeyboardEventInit = {}, trusted = true) => {
   (document.activeElement ?? document.body).dispatchEvent(event);
   const focused = document.activeElement;
   const modified = init.ctrlKey || init.metaKey || init.altKey;
-  if (!event.defaultPrevented && key.length === 1 && !modified) {
+  if (!event.defaultPrevented && [...key].length === 1 && !modified) {
     if (focused instanceof HTMLInputElement || focused instanceof HTMLTextAreaElement) {
       focused.value += key;
     }
@@ -379,6 +381,83 @@ describe("multiplayer-reference-game: chat type-to-focus", () => {
     const { api, input } = await start();
     press("@", { ctrlKey: true, altKey: true, modifierAltGraph: true } as KeyboardEventInit);
     expect(document.activeElement).toBe(input);
+    await api.multiplayer.disconnect();
+  });
+
+  it("redirects Option characters on a Mac, where Alt+key types", async () => {
+    const platform = jest.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
+    try {
+      const { api, input } = await start();
+      press("@", { altKey: true });
+      expect(document.activeElement).toBe(input);
+      await api.multiplayer.disconnect();
+    } finally {
+      platform.mockRestore();
+    }
+  });
+
+  it("redirects a character outside the Basic Multilingual Plane", async () => {
+    const { api, input } = await start();
+    press("😀");
+    expect(document.activeElement).toBe(input);
+    expect(input!.value).toBe("😀");
+    await api.multiplayer.disconnect();
+  });
+
+  it("redirects Space from the page body and from a Director's tangram", async () => {
+    const { api, el, input } = await start();
+    press("a");
+    cell(el, "a").focus();
+    const space = press(" ");
+    expect(space.defaultPrevented).toBe(false);
+    expect(document.activeElement).toBe(input);
+    input!.blur();
+    expect(document.activeElement).toBe(document.body);
+    press(" ");
+    press("b");
+    expect(input!.value).toBe("a  b");
+    await api.multiplayer.disconnect();
+  });
+
+  it("leaves Space to a Director's tangram when it selects, and to a Matcher's", async () => {
+    for (const [role, params] of [
+      ["director", { director_can_select: true }],
+      ["matcher", {}],
+    ] as const) {
+      const { api, el, input } = await start(params, role);
+      cell(el, "a").focus();
+      const space = press(" ");
+      expect(space.defaultPrevented).toBe(true);
+      expect(document.activeElement).toBe(cell(el, "a"));
+      expect(input!.value).toBe("");
+      await api.multiplayer.disconnect();
+      document.body.innerHTML = "";
+    }
+  });
+
+  it("leaves keys alone while a modal is open, even with focus on the body behind it", async () => {
+    const { api, input } = await start();
+    const modal = document.createElement("div");
+    modal.setAttribute("role", "dialog");
+    modal.setAttribute("aria-modal", "true");
+    document.body.append(modal);
+    expect(document.activeElement).toBe(document.body);
+    press("q");
+    expect(document.activeElement).toBe(document.body);
+    modal.hidden = true;
+    press("q");
+    expect(document.activeElement).toBe(input);
+    await api.multiplayer.disconnect();
+  });
+
+  it("leaves a key that another handler prevented", async () => {
+    const { api, el } = await start();
+    el.addEventListener("keydown", (e) => {
+      if (e.key === "n") e.preventDefault();
+    });
+    cell(el, "a").focus();
+    press("n");
+    expect(document.activeElement).toBe(cell(el, "a"));
     await api.multiplayer.disconnect();
   });
 
