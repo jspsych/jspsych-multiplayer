@@ -324,19 +324,31 @@ class PresenceCheckExtension implements JsPsychExtension {
 
     // Never preventDefault or stopPropagation here: the input that dismisses the warning must still
     // reach the page (the keystroke goes into the focused field, the click lands where it was aimed).
+    const interruptIfPaused = () => {
+      if (!paused()) return false;
+      monitor.tick(true);
+      return true;
+    };
     const onInput = (event: Event) => {
       if (!event.isTrusted) return;
+      if (interruptIfPaused()) return;
       const input = inputOf(event);
       if (!input) return;
       if (monitor.isOpen) {
         // A press on the button is left to its click, which records "button".
-        if (input === "pointer_down" && button?.contains(event.target as Node)) return;
+        if (
+          (input === "pointer_down" || input === "touch") &&
+          button?.contains(event.target as Node)
+        )
+          return;
         if (dismiss[input]) monitor.respond(input);
       } else if (activity[input]) {
         monitor.activity();
       }
     };
-    const onButtonClick = () => monitor.respond("button");
+    const onButtonClick = () => {
+      if (!interruptIfPaused()) monitor.respond("button");
+    };
     const onBackdropClick = (event: Event) => {
       if (event.isTrusted && event.target === overlay) monitor.backdropClick();
     };

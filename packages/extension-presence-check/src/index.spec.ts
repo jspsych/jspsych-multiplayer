@@ -148,6 +148,55 @@ describe("presence-check extension (DOM)", () => {
     expect(data.presence_backdrop_clicks).toBe(2);
   });
 
+  it.each(["pointerdown", "touchstart"])(
+    "leaves a button %s to its click handler",
+    async (type) => {
+      const ext = await start();
+      jest.advanceTimersByTime(30000);
+      const target = button()!;
+      const event = new Event(type, { bubbles: true });
+      if (type === "pointerdown") {
+        Object.defineProperty(event, "pointerType", { value: "touch" });
+      }
+      target.dispatchEvent(trusted(event));
+      expect(button()).toBe(target);
+      target.click();
+      expect(overlay()).toBeNull();
+      expect(ext.on_finish().presence_events![0].dismissed_by).toBe("button");
+    },
+  );
+
+  it.each(["keyboard", "button", "touch"])(
+    "interrupts a newly paused warning before handling %s",
+    async (input) => {
+      let paused = false;
+      const ext = await start({ paused: () => paused });
+      jest.advanceTimersByTime(90000); // one miss, then another warning
+      paused = true; // no timer poll has observed the pause yet
+      if (input === "button") button()!.click();
+      else fire(input as PresenceInput);
+      expect(overlay()).toBeNull();
+      expect(ext.on_finish()).toMatchObject({
+        presence_consecutive_misses: 1,
+        presence_interrupted: 1,
+        presence_responded: 0,
+      });
+    },
+  );
+
+  it("preserves misses when input arrives between warnings during a pause", async () => {
+    let paused = false;
+    const ext = await start({ paused: () => paused });
+    jest.advanceTimersByTime(60000);
+    paused = true;
+    fire("keyboard");
+    expect(ext.consecutiveMisses).toBe(1);
+    paused = false;
+    fire("keyboard");
+    expect(ext.consecutiveMisses).toBe(0);
+    ext.on_finish();
+  });
+
   it("the button always dismisses", async () => {
     const ext = await start();
     jest.advanceTimersByTime(30000);
