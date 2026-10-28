@@ -56,7 +56,9 @@ const DEFAULTS: PresenceCheckParams = {
 
 // User input only. There is no plain `scroll` listener: a `scroll` event also fires when the page
 // scrolls itself (a chat plugin pinning its log to new messages), which shows nobody is there.
-// `wheel` and `touchmove` stand in for scrolling. `pointerdown` covers mouse, pen and touch.
+// `wheel` and `touchmove` stand in for scrolling. `pointerdown` covers mouse, pen and touch. For the
+// same reason a `mousemove` without movement is ignored: Chromium fires a trusted one when the page
+// scrolls or reflows under a resting cursor.
 const DOM_EVENTS = [
   "mousemove",
   "pointerdown",
@@ -69,8 +71,10 @@ const DOM_EVENTS = [
 
 function inputOf(event: Event): PresenceInput | null {
   switch (event.type) {
-    case "mousemove":
-      return "mouse_move";
+    case "mousemove": {
+      const { movementX, movementY } = event as MouseEvent;
+      return movementX === 0 && movementY === 0 ? null : "mouse_move";
+    }
     case "pointerdown":
       return (event as PointerEvent).pointerType === "touch" ? "touch" : "pointer_down";
     case "keydown":
@@ -145,6 +149,12 @@ function mergeParams(...layers: Array<Partial<PresenceCheckParams> | undefined>)
       throw new Error(`presence-check: \`${key}\` must be a positive number of ms.`);
     }
   }
+  const limit = merged.max_consecutive_misses;
+  if (!(limit === null || (Number.isInteger(limit) && limit >= 0))) {
+    throw new Error(
+      "presence-check: `max_consecutive_misses` must be a non-negative integer or null.",
+    );
+  }
   return merged;
 }
 
@@ -166,7 +176,10 @@ const info = <const>{
     presence_consecutive_misses: { type: ParameterType.INT },
     /** Whether the check expired during this trial. */
     presence_expired: { type: ParameterType.BOOL },
-    /** One entry per warning: `shown_at`, `outcome`, `rt`, `dismissed_by`, `backdrop_clicks`. */
+    /**
+     * One entry per warning: `shown_at` (ms from on_load), `outcome`, `rt`, `dismissed_by`,
+     * `backdrop_clicks`.
+     */
     presence_events: { type: ParameterType.COMPLEX, array: true },
   },
 };
@@ -175,6 +188,8 @@ interface TrialState {
   monitor: PresenceMonitor;
   interval: ReturnType<typeof setInterval>;
   teardown: () => void;
+  /** `count_across_trials`: whether the trial's count is carried forward when it ends. */
+  carries: boolean;
 }
 
 /**
@@ -219,14 +234,25 @@ class PresenceCheckExtension implements JsPsychExtension {
   on_start() {}
 
   on_load(params: Partial<PresenceCheckParams> = {}) {
-    if (this.state) this.finishTrial();
+    if (this.state) {
+      console.warn(
+        "presence-check: on_finish did not run for the previous trial, so its presence data is lost.",
+      );
+      this.finishTrial();
+    }
     const options = mergeParams(this.defaults, params);
     const { dismiss_inputs: dismiss, activity_inputs: activity } = options;
+    // A broken callback counts as paused: a bug in the study must not remove someone who is there.
+    let pausedThrew = false;
     const paused = () => {
       try {
         return Boolean(options.paused());
-      } catch {
-        return false;
+      } catch (error) {
+        if (!pausedThrew) {
+          pausedThrew = true;
+          console.error("presence-check: `paused()` threw; treating the trial as paused.", error);
+        }
+        return true;
       }
     };
     // Pointer dismissal needs the page to take the click as well, so the overlay lets it through.
@@ -248,13 +274,17 @@ class PresenceCheckExtension implements JsPsychExtension {
     let remaining: HTMLElement | null = null;
     let shownAt: number | null = null;
     let previousFocus: Element | null = null;
+    let shownSeconds: number | null = null;
 
+    // Rewritten only when the whole seconds change, so the DOM is not replaced on every tick.
     const updateRemaining = () => {
       if (shownAt == null || !remaining) return;
       const left = Math.max(
         0,
         Math.ceil((options.respond_within - (performance.now() - shownAt)) / 1000),
       );
+      if (left === shownSeconds) return;
+      shownSeconds = left;
       remaining.innerHTML = options.countdown_text.replace("{seconds}", String(left));
     };
 
@@ -264,24 +294,28 @@ class PresenceCheckExtension implements JsPsychExtension {
       overlay.className = passThrough ? `${P} is-passthrough` : P;
       const card = document.createElement("div");
       card.className = `${P}-card`;
-      // A modal takes focus, so it is an alertdialog. The others leave focus alone, so they are
-      // announced as an alert instead, which fires on insertion.
+      card.innerHTML = `
+        <div class="${P}-message">
+          <p id="${P}-title" class="${P}-title"><strong>${options.title}</strong></p>
+          <p id="${P}-body" class="${P}-body">${options.body}</p>
+        </div>
+        <button type="button" class="${P}-button">${options.button_label}</button>
+        <p class="${P}-remaining"></p>`;
+      // A modal takes focus, so it is an alertdialog. The others leave focus alone, so their
+      // message is announced as an alert instead, which fires on insertion. The countdown stays
+      // outside that live region, or it would be announced again every second.
       if (modal) {
         card.setAttribute("role", "alertdialog");
         card.setAttribute("aria-modal", "true");
         card.setAttribute("aria-labelledby", `${P}-title`);
         card.setAttribute("aria-describedby", `${P}-body`);
       } else {
-        card.setAttribute("role", "alert");
+        card.querySelector(`.${P}-message`)!.setAttribute("role", "alert");
       }
-      card.innerHTML = `
-        <p id="${P}-title" class="${P}-title"><strong>${options.title}</strong></p>
-        <p id="${P}-body" class="${P}-body">${options.body}</p>
-        <button type="button" class="${P}-button">${options.button_label}</button>
-        <p class="${P}-remaining"></p>`;
       overlay.appendChild(card);
       button = card.querySelector(`.${P}-button`);
       remaining = card.querySelector(`.${P}-remaining`);
+      shownSeconds = null;
       button!.addEventListener("click", onButtonClick);
       if (!passThrough) overlay.addEventListener("click", onBackdropClick);
       updateRemaining();
@@ -353,11 +387,13 @@ class PresenceCheckExtension implements JsPsychExtension {
       if (event.isTrusted && event.target === overlay) monitor.backdropClick();
     };
     // The modal has one control. Both Tab directions stay on it, and focus cannot move into the
-    // page underneath while it is open.
-    const onKeydown = (event: KeyboardEvent) => {
-      if (modal && monitor.isOpen && event.key === "Tab") {
+    // page underneath while it is open. No key reaches the page either, so the Enter or Space that
+    // presses the button is not also a jsPsych response; the button still gets its default action.
+    const onKey = (event: KeyboardEvent) => {
+      if (!modal || !monitor.isOpen) return;
+      event.stopPropagation();
+      if (event.type === "keydown" && event.key === "Tab") {
         event.preventDefault();
-        event.stopPropagation();
         button?.focus({ preventScroll: true });
       }
     };
@@ -370,7 +406,8 @@ class PresenceCheckExtension implements JsPsychExtension {
     for (const type of DOM_EVENTS) {
       document.addEventListener(type, onInput, { capture: true, passive: true });
     }
-    document.addEventListener("keydown", onKeydown, true);
+    document.addEventListener("keydown", onKey, true);
+    document.addEventListener("keyup", onKey, true);
     document.addEventListener("focusin", onFocusIn, true);
     const interval = setInterval(() => {
       monitor.tick(paused());
@@ -381,11 +418,12 @@ class PresenceCheckExtension implements JsPsychExtension {
       for (const type of DOM_EVENTS) {
         document.removeEventListener(type, onInput, { capture: true });
       }
-      document.removeEventListener("keydown", onKeydown, true);
+      document.removeEventListener("keydown", onKey, true);
+      document.removeEventListener("keyup", onKey, true);
       document.removeEventListener("focusin", onFocusIn, true);
       overlay?.remove();
     };
-    this.state = { monitor, interval, teardown };
+    this.state = { monitor, interval, teardown, carries: options.count_across_trials };
   }
 
   on_finish() {
@@ -399,7 +437,8 @@ class PresenceCheckExtension implements JsPsychExtension {
     clearInterval(state.interval);
     state.monitor.stop();
     state.teardown();
-    this.misses = state.monitor.consecutiveMisses;
+    // A trial that does not count across trials leaves the carried count as it found it.
+    if (state.carries) this.misses = state.monitor.consecutiveMisses;
     return state.monitor.summary();
   }
 }

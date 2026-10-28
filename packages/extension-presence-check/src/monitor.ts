@@ -11,7 +11,7 @@ export type DismissedBy = "button" | "mouse_move" | "pointer_down" | "keyboard" 
 export type PresenceOutcome = "responded" | "missed" | "interrupted" | "expired";
 
 export interface PresenceEvent {
-  /** When the warning appeared, in ms from the start of the trial. */
+  /** When the warning appeared, in ms from the monitor's creation (the trial's on_load). */
   shown_at: number;
   outcome: PresenceOutcome;
   /** ms from the warning appearing to its dismissal; null unless `outcome` is `responded`. */

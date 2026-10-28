@@ -133,6 +133,16 @@ describe("presence-check extension (DOM)", () => {
     outside.focus();
     expect(document.activeElement).toBe(button());
 
+    // The key that presses the button does not also reach the page (jsPsych listens on the body).
+    const pageKeys: KeyboardEvent[] = [];
+    document.body.addEventListener("keydown", (e) => pageKeys.push(e));
+    const space = trusted(
+      new KeyboardEvent("keydown", { key: " ", bubbles: true, cancelable: true }),
+    );
+    button()!.dispatchEvent(space);
+    expect(pageKeys).toEqual([]);
+    expect(space.defaultPrevented).toBe(false);
+
     for (const input of INPUTS) fire(input);
     expect(overlay()).not.toBeNull();
     overlay()!.dispatchEvent(trusted(new MouseEvent("click", { bubbles: true })));
@@ -214,7 +224,11 @@ describe("presence-check extension (DOM)", () => {
     const ext = await start();
     jest.advanceTimersByTime(30000);
     const card = overlay()!.firstElementChild as HTMLElement;
-    expect(card.getAttribute("role")).toBe("alert");
+    expect(card.getAttribute("role")).toBeNull();
+    // The countdown is outside the live region, so its updates are not announced.
+    const alert = card.querySelector('[role="alert"]')!;
+    expect(alert.textContent).toContain("Are you still with us?");
+    expect(alert.contains(card.querySelector(`.${P}-remaining`))).toBe(false);
     expect(overlay()!.classList.contains("is-passthrough")).toBe(true);
     expect(document.activeElement).toBe(field);
     const event = fire("keyboard", field);
@@ -350,6 +364,86 @@ describe("presence-check extension (DOM)", () => {
     ext.on_finish();
   });
 
+  it("leaves the carried count as it was across a count_across_trials: false trial", async () => {
+    const on_expire = jest.fn();
+    const ext = await start({ on_expire });
+    jest.advanceTimersByTime(60000); // one carried miss
+    ext.on_finish();
+
+    // Its own miss is not carried forward...
+    await start({ on_expire, count_across_trials: false }, ext);
+    jest.advanceTimersByTime(60000);
+    expect(ext.on_finish().presence_consecutive_misses).toBe(1);
+    expect(ext.consecutiveMisses).toBe(1);
+    // ...and its activity does not clear the carried miss.
+    await start({ on_expire, count_across_trials: false }, ext);
+    fire("keyboard");
+    ext.on_finish();
+    expect(ext.consecutiveMisses).toBe(1);
+
+    await start({ on_expire }, ext);
+    jest.advanceTimersByTime(60000);
+    expect(on_expire).toHaveBeenCalledTimes(1);
+    ext.on_finish();
+  });
+
+  it("ignores a mousemove without movement", async () => {
+    const ext = await start();
+    jest.advanceTimersByTime(29000);
+    const still = new MouseEvent("mousemove", { bubbles: true });
+    Object.defineProperties(still, { movementX: { value: 0 }, movementY: { value: 0 } });
+    document.body.dispatchEvent(trusted(still));
+    jest.advanceTimersByTime(1000);
+    expect(overlay()).not.toBeNull();
+    const moved = new MouseEvent("mousemove", { bubbles: true });
+    Object.defineProperties(moved, { movementX: { value: 1 }, movementY: { value: 0 } });
+    document.body.dispatchEvent(trusted(moved));
+    expect(overlay()).toBeNull();
+    expect(ext.on_finish().presence_events![0].dismissed_by).toBe("mouse_move");
+  });
+
+  it("rewrites the countdown only when its seconds change", async () => {
+    const ext = await start();
+    jest.advanceTimersByTime(30000);
+    const remaining = document.querySelector(`.${P}-remaining`)!;
+    const text = remaining.firstChild;
+    expect(remaining.textContent).toBe("This message closes in 30s.");
+    jest.advanceTimersByTime(750);
+    expect(remaining.firstChild).toBe(text);
+    jest.advanceTimersByTime(250);
+    expect(remaining.textContent).toBe("This message closes in 29s.");
+    ext.on_finish();
+  });
+
+  it("logs a throwing paused() once and treats the trial as paused", async () => {
+    const error = jest.spyOn(console, "error").mockImplementation(() => {});
+    const on_expire = jest.fn();
+    const ext = await start({
+      on_expire,
+      paused: () => {
+        throw new Error("typo");
+      },
+    });
+    jest.advanceTimersByTime(300000);
+    fire("keyboard");
+    expect(overlay()).toBeNull();
+    expect(on_expire).not.toHaveBeenCalled();
+    expect(error).toHaveBeenCalledTimes(1);
+    expect(error.mock.calls[0][0]).toMatch(/paused\(\)/);
+    ext.on_finish();
+    error.mockRestore();
+  });
+
+  it("warns when a trial starts before the previous one finished", async () => {
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => {});
+    const ext = await start();
+    await start({}, ext);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toMatch(/on_finish/);
+    ext.on_finish();
+    warn.mockRestore();
+  });
+
   it("uses initialize params as experiment-wide defaults and validates them", async () => {
     const ext = new PresenceCheckExtension({} as never);
     await ext.initialize({ prompt_after: 1000, title: "Still there?" });
@@ -362,6 +456,18 @@ describe("presence-check extension (DOM)", () => {
     expect(() => new PresenceCheckExtension({} as never).initialize({ prompt_after: 0 })).toThrow(
       /prompt_after/,
     );
+    for (const value of ["2", -1, 1.5]) {
+      expect(() =>
+        new PresenceCheckExtension({} as never).initialize({
+          max_consecutive_misses: value as never,
+        }),
+      ).toThrow(/max_consecutive_misses/);
+    }
+    for (const value of [null, 0, 3]) {
+      expect(() =>
+        new PresenceCheckExtension({} as never).initialize({ max_consecutive_misses: value }),
+      ).not.toThrow();
+    }
   });
 });
 
