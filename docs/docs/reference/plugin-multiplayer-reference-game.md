@@ -83,9 +83,28 @@ In the tables below, _k_ is the number of targets.
 
 ### Chat
 
+jsPsych evaluates dynamic parameter values for each trial, so autofocus can follow changing
+roles, rounds, or experimental conditions. For example:
+
+```js
+chat_autofocus: () => jsPsychMultiplayerRole.getMyRole() === "director",
+```
+
+Autofocus runs once during initialization. During the round, `chat_type_to_focus` listens for
+`keydown` on the document in the bubble phase and respects keys that earlier handlers already
+prevented. When it moves focus to chat, the browser delivers the same keystroke to the input.
+Space redirects only when focus is on the page itself or on a Director's tangram with
+`director_can_select` disabled. Enable type-to-focus dynamically the same way as autofocus:
+
+```js
+chat_type_to_focus: () => jsPsychMultiplayerRole.getMyRole() === "director",
+```
+
 | Parameter | Type | Default | Description |
 | --- | --- | --- | --- |
 | `chat_enabled` | `boolean` | `true` | Show the chat panel. |
+| `chat_autofocus` | `boolean` | `false` | Focus the enabled chat input once during round initialization, after initial state checks, without scrolling. No effect if chat is absent, read-only, capped, or the round has already ended or entered feedback. Later updates do not reclaim focus. |
+| `chat_type_to_focus` | `boolean` | `false` | While sending is available, a printable key typed when no `input`, `textarea`, `select`, `contenteditable` element or dialog has focus, and no modal dialog is open, moves focus to the chat input, and the keystroke lands there. Ignores Enter, Tab, Escape, arrows, Ctrl/Alt/Meta shortcuts (AltGr characters, and Option characters on a Mac, still count), IME composition, script-dispatched events and keys another handler prevented. Space only redirects from the page itself or a Director's tangram that does nothing when pressed. Removed when the trial ends. |
 | `chat_role` | `string` | `"both"` | Who can send messages: `"director"`, `"matcher"`, or `"both"`. Both can always read. |
 | `max_messages` | `number \| null` | `null` | The most messages this participant can send in the round. `null` means no limit. |
 | `max_length` | `number \| null` | `null` | The longest a message can be, in characters. Longer messages are cut when sent. `null` means no limit. |

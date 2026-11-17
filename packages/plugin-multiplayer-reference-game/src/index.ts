@@ -164,6 +164,16 @@ const info = <const>{
       type: ParameterType.BOOL,
       default: true,
     },
+    /** Focus chat once during round initialization if sending is available. Dynamic per trial. */
+    chat_autofocus: {
+      type: ParameterType.BOOL,
+      default: false,
+    },
+    /** Move focus to chat when the participant types while no text field has focus. Dynamic per trial. */
+    chat_type_to_focus: {
+      type: ParameterType.BOOL,
+      default: false,
+    },
     /** Who may SEND messages: `"director"`, `"matcher"`, or `"both"` (everyone always reads). */
     chat_role: {
       type: ParameterType.STRING,
@@ -1107,6 +1117,63 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
       else if (atMessageCap()) chatInput.placeholder = "Message limit reached.";
     };
 
+    // A Director's tangram does nothing when activated unless `director_can_select` is on.
+    const directorCellsInert = !isMatcher && !trial.director_can_select;
+    // Option types characters on a Mac, where Alt+key is not a shortcut.
+    const platform: string =
+      (navigator as { userAgentData?: { platform?: string } }).userAgentData?.platform ??
+      navigator.platform ??
+      "";
+    const optionTypes = /^(mac|iphone|ipad)/i.test(platform);
+    // A modal open anywhere, even when focus has fallen back to the body behind it.
+    const modalOpen = () =>
+      Array.from(document.querySelectorAll<HTMLElement>('dialog[open], [aria-modal="true"]')).some(
+        (el) => el.checkVisibility?.() ?? !el.closest("[hidden]"),
+      );
+
+    // Focusing during keydown, without preventDefault, lets the browser deliver the same keystroke
+    // to the chat input, so the first character is neither lost nor doubled. It listens in the
+    // bubble phase so a handler that claimed the key (and prevented it) has already run.
+    const onTypeToFocus = (e: KeyboardEvent) => {
+      // end() removes this; an aborted experiment clears the display without calling end().
+      if (ended || !chatInput?.isConnected) {
+        document.removeEventListener("keydown", onTypeToFocus);
+        return;
+      }
+      if (chatInput.disabled) return;
+      if (!e.isTrusted || e.isComposing || e.defaultPrevented) return;
+      // One character, counted in code points so an emoji (a surrogate pair) counts.
+      if ([...e.key].length !== 1) return;
+      // AltGr reports Ctrl+Alt on Windows but types a character.
+      const altGraph = e.getModifierState?.("AltGraph") ?? false;
+      const option = optionTypes && e.altKey && !e.ctrlKey;
+      if (e.metaKey || (!altGraph && !option && (e.ctrlKey || e.altKey))) return;
+      const active = document.activeElement as HTMLElement | null;
+      // Space presses a focused control, so it only redirects from the page itself or from a
+      // tangram that would do nothing with it.
+      if (
+        e.key === " " &&
+        !(
+          active == null ||
+          active === document.body ||
+          active === document.documentElement ||
+          (directorCellsInert && active.closest(`.${P}-cell`))
+        )
+      ) {
+        return;
+      }
+      if (
+        active?.closest(
+          'input, textarea, select, [contenteditable]:not([contenteditable="false"]), ' +
+            'dialog[open], [role="dialog"], [role="alertdialog"], [aria-modal="true"]',
+        ) ||
+        modalOpen()
+      ) {
+        return;
+      }
+      chatInput.focus({ preventScroll: true });
+    };
+
     const onChatSubmit = (e: Event) => {
       e.preventDefault();
       if (ended || !canSend || !chatInput || atMessageCap()) return;
@@ -1323,6 +1390,10 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
     const onGridKeydown = (e: Event) => {
       const key = (e as KeyboardEvent).key;
       if (key !== "Enter" && key !== " ") return;
+      // Left unprevented while type-to-focus can take it: a Director's Space between words.
+      if (directorCellsInert && trial.chat_type_to_focus && chatInput && !chatInput.disabled) {
+        return;
+      }
       const cell = (e.target as HTMLElement).closest?.(`.${P}-cell`);
       if (!cell) return;
       e.preventDefault();
@@ -1581,6 +1652,16 @@ class MultiplayerReferenceGamePlugin implements JsPsychPlugin<Info> {
       } catch {
         // A bad render frame must not tear down the subscription or the trial.
       }
+    }
+
+    // Only now: the initial subscriptions have checked for feedback or a departed partner, and
+    // the input's disabled state reflects them.
+    if (trial.chat_autofocus && chatInput && !chatInput.disabled && !ended) {
+      chatInput.focus({ preventScroll: true });
+    }
+    // The trial's controller removes it when the trial ends or the experiment is aborted.
+    if (trial.chat_type_to_focus && chatInput && !ended) {
+      document.addEventListener("keydown", onTypeToFocus, { signal: controller.signal });
     }
 
     if (

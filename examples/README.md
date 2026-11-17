@@ -680,6 +680,11 @@ Same as `chat-room.html`: build the packages, serve the repo over http(s), open 
 then copy the full URL (including `?mp_session=…`) into a second tab so a second player joins. The
 role trial makes one tab the director and the other the matcher, at random.
 
+In the Director tab, type to verify that chat has focus at the start of a round. Then click a
+tangram and press Space as the first keystroke. The chat input should take focus and receive the
+space. Repeat from the page background. Then type a message, Tab to the send button, and press
+Space to send it.
+
 ## `reference-game-match.html`
 
 The **same plugin** as `reference-game.html`, configured for the **full-board match** ("unconstrained")
