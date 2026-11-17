@@ -173,8 +173,11 @@
       stimuli: SHAPES,
       columns: 6,
       role: () => jsPsychMultiplayerRole.getMyRole(),
+      // The Director can start typing at round start (autofocus) or after clicking a tangram.
+      // Space reaches chat from the page or from a Director tangram with selection disabled.
       chat_autofocus: () => jsPsychMultiplayerRole.getMyRole() === "director",
       chat_type_to_focus: () => jsPsychMultiplayerRole.getMyRole() === "director",
+      director_can_select: false,
       partner_id: () => partnerId,
       round: jsPsych.timelineVariable("round"),
       targets: jsPsych.timelineVariable("targets"),

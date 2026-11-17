@@ -90,11 +90,11 @@ roles, rounds, or experimental conditions. For example:
 chat_autofocus: () => jsPsychMultiplayerRole.getMyRole() === "director",
 ```
 
-Autofocus only runs during initialization; it does not wait for sending to become available
-later in the round or capture typing outside the input. `chat_type_to_focus` covers the rest of
-the round: typing a printable character while focus is outside any text field (after clicking a
-target, or after a dialog closed) moves focus to the chat input, and the browser delivers that
-same keystroke to it. It takes the same kind of dynamic value:
+Autofocus runs once during initialization. During the round, `chat_type_to_focus` listens for
+`keydown` on the document in the bubble phase and respects keys that earlier handlers already
+prevented. When it moves focus to chat, the browser delivers the same keystroke to the input.
+Space redirects only when focus is on the page itself or on a Director's tangram with
+`director_can_select` disabled. Enable type-to-focus dynamically the same way as autofocus:
 
 ```js
 chat_type_to_focus: () => jsPsychMultiplayerRole.getMyRole() === "director",
