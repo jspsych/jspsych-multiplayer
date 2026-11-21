@@ -149,8 +149,8 @@ earlier version aren't read, so start a new lobby after upgrading.
 
 ## Your data files
 
-- Every row now has `multiplayer_participant_id` and `multiplayer_session_id` columns (turn
-  them off with `recordIds: false`).
+- Every row recorded while connected now has `multiplayer_participant_id` and
+  `multiplayer_session_id` columns (turn them off with `recordIds: false`).
 - The multiplayer plugins record `multiplayer_outcome` and `left_participant` in place of the
   old `timed_out`, `partner_left`, `connection_lost`, and `wait_error` fields.
 - `data_key` is gone from the ready, choice, and scoreboard data.
